@@ -60,6 +60,17 @@ class RebuildResult:
 
 
 @dataclass(frozen=True)
+class RefreshResult:
+    document_count: int
+    chunk_count: int
+    error_count: int
+    new_count: int
+    modified_count: int
+    unchanged_count: int
+    deleted_count: int
+
+
+@dataclass(frozen=True)
 class SearchResult:
     chunk_id: int
     relative_path: str
@@ -138,7 +149,42 @@ def rebuild_sidecar_index(
     sidecar = registry.get(sidecar_id)
     with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
         init_schema(connection)
-        return rebuild_index(connection, sidecar)
+        result = rebuild_index(connection, sidecar)
+    registry.update_indexing_status(
+        sidecar.id,
+        indexing_status=indexing_status_for_error_count(result.error_count),
+        indexed_file_count=result.document_count,
+        chunk_count=result.chunk_count,
+        error_count=result.error_count,
+    )
+    return result
+
+
+def refresh_sidecar_index(
+    registry: SidecarRegistry,
+    sidecar_id: str,
+) -> RefreshResult:
+    sidecar = registry.get(sidecar_id)
+    with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
+        init_schema(connection)
+        result = refresh_index(connection, sidecar)
+    registry.update_indexing_status(
+        sidecar.id,
+        indexing_status=indexing_status_for_error_count(result.error_count),
+        indexed_file_count=result.document_count,
+        chunk_count=result.chunk_count,
+        error_count=result.error_count,
+    )
+    return result
+
+
+def list_sidecar_indexing_errors(
+    registry: SidecarRegistry,
+    sidecar_id: str,
+) -> list[IndexingErrorRecord]:
+    sidecar = registry.get(sidecar_id)
+    with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
+        return list_indexing_errors(connection)
 
 
 def rebuild_index(connection: sqlite3.Connection, sidecar: Sidecar) -> RebuildResult:
@@ -184,6 +230,69 @@ def rebuild_index(connection: sqlite3.Connection, sidecar: Sidecar) -> RebuildRe
     )
 
 
+def refresh_index(connection: sqlite3.Connection, sidecar: Sidecar) -> RefreshResult:
+    init_schema(connection)
+    existing_documents = existing_documents_by_path(connection)
+    seen_paths: set[str] = set()
+    new_count = 0
+    modified_count = 0
+    unchanged_count = 0
+
+    for candidate in scan_files(
+        sidecar.root_path,
+        max_file_size_bytes=sidecar.config.max_file_size_bytes,
+    ):
+        relative_path = path_to_index_string(candidate.relative_path)
+        seen_paths.add(relative_path)
+        existing = existing_documents.get(relative_path)
+
+        try:
+            if existing and document_candidate_is_unchanged(existing, candidate):
+                unchanged_count += 1
+                continue
+
+            content = read_text_content(candidate.path)
+            content_hash = hash_text(content)
+            if existing and existing.content_hash == content_hash:
+                clear_indexing_errors(connection, relative_path)
+                update_document_metadata(connection, existing.id, candidate, content_hash)
+                unchanged_count += 1
+                continue
+
+            replace_document(connection, candidate, content_hash, content)
+            if existing:
+                modified_count += 1
+            else:
+                new_count += 1
+        except Exception as exc:  # noqa: BLE001 - errors should be captured per file.
+            clear_indexing_errors(connection, relative_path)
+            insert_indexing_error(
+                connection,
+                IndexingErrorRecord(
+                    relative_path=relative_path,
+                    stage="refresh",
+                    message=str(exc),
+                ),
+            )
+
+    deleted_paths = set(existing_documents) - seen_paths
+    for relative_path in sorted(deleted_paths):
+        delete_document_by_path(connection, relative_path)
+        clear_indexing_errors(connection, relative_path)
+
+    connection.commit()
+    document_count, chunk_count, error_count = index_counts(connection)
+    return RefreshResult(
+        document_count=document_count,
+        chunk_count=chunk_count,
+        error_count=error_count,
+        new_count=new_count,
+        modified_count=modified_count,
+        unchanged_count=unchanged_count,
+        deleted_count=len(deleted_paths),
+    )
+
+
 def insert_document(
     connection: sqlite3.Connection,
     candidate: FileCandidate,
@@ -211,6 +320,64 @@ def insert_document(
         ),
     )
     return int(cursor.lastrowid)
+
+
+def update_document_metadata(
+    connection: sqlite3.Connection,
+    document_id: int,
+    candidate: FileCandidate,
+    content_hash: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE documents
+        SET extension = ?,
+            size_bytes = ?,
+            modified_at = ?,
+            content_hash = ?,
+            status = ?
+        WHERE id = ?
+        """,
+        (
+            candidate.extension,
+            candidate.size_bytes,
+            candidate.path.stat().st_mtime,
+            content_hash,
+            "indexed",
+            document_id,
+        ),
+    )
+
+
+def replace_document(
+    connection: sqlite3.Connection,
+    candidate: FileCandidate,
+    content_hash: str,
+    content: str,
+) -> int:
+    relative_path = path_to_index_string(candidate.relative_path)
+    clear_indexing_errors(connection, relative_path)
+    delete_document_by_path(connection, relative_path)
+    document_id = insert_document(connection, candidate, content_hash)
+    for chunk in chunk_content(candidate.relative_path, candidate.extension, content):
+        insert_chunk(connection, document_id, chunk)
+    return document_id
+
+
+def delete_document_by_path(connection: sqlite3.Connection, relative_path: str) -> None:
+    connection.execute(
+        """
+        DELETE FROM chunks_fts
+        WHERE rowid IN (
+            SELECT chunks.id
+            FROM chunks
+            JOIN documents ON documents.id = chunks.document_id
+            WHERE documents.relative_path = ?
+        )
+        """,
+        (relative_path,),
+    )
+    connection.execute("DELETE FROM documents WHERE relative_path = ?", (relative_path,))
 
 
 def insert_chunk(
@@ -261,6 +428,68 @@ def insert_indexing_error(
         """,
         (error.relative_path, error.stage, error.message),
     )
+
+
+def clear_indexing_errors(connection: sqlite3.Connection, relative_path: str) -> None:
+    connection.execute("DELETE FROM indexing_errors WHERE relative_path = ?", (relative_path,))
+
+
+def list_indexing_errors(connection: sqlite3.Connection) -> list[IndexingErrorRecord]:
+    init_schema(connection)
+    rows = connection.execute(
+        """
+        SELECT relative_path, stage, message
+        FROM indexing_errors
+        ORDER BY relative_path, id
+        """
+    ).fetchall()
+    return [
+        IndexingErrorRecord(
+            relative_path=str(row["relative_path"]),
+            stage=str(row["stage"]),
+            message=str(row["message"]),
+        )
+        for row in rows
+    ]
+
+
+def existing_documents_by_path(connection: sqlite3.Connection) -> dict[str, DocumentRecord]:
+    rows = connection.execute(
+        """
+        SELECT id, relative_path, extension, size_bytes, modified_at, content_hash, status
+        FROM documents
+        """
+    ).fetchall()
+    return {
+        str(row["relative_path"]): DocumentRecord(
+            id=int(row["id"]),
+            relative_path=str(row["relative_path"]),
+            extension=str(row["extension"]),
+            size_bytes=int(row["size_bytes"]),
+            modified_at=float(row["modified_at"]),
+            content_hash=str(row["content_hash"]),
+            status=str(row["status"]),
+        )
+        for row in rows
+    }
+
+
+def document_candidate_is_unchanged(document: DocumentRecord, candidate: FileCandidate) -> bool:
+    return (
+        document.size_bytes == candidate.size_bytes
+        and document.modified_at == candidate.path.stat().st_mtime
+    )
+
+
+def index_counts(connection: sqlite3.Connection) -> tuple[int, int, int]:
+    document_count = int(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+    chunk_count = int(connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+    error_count = int(connection.execute("SELECT COUNT(*) FROM indexing_errors").fetchone()[0])
+    return document_count, chunk_count, error_count
+
+
+def indexing_status_for_error_count(error_count: int) -> str:
+    return "indexed_with_errors" if error_count else "indexed"
 
 
 def read_text_content(path: Path) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,10 @@ class Sidecar:
     created_at: datetime
     updated_at: datetime
     indexing_status: str = DEFAULT_INDEXING_STATUS
+    last_refresh_at: datetime | None = None
+    indexed_file_count: int = 0
+    chunk_count: int = 0
+    error_count: int = 0
     config: SidecarConfig = field(default_factory=SidecarConfig)
 
     @classmethod
@@ -77,6 +81,10 @@ class Sidecar:
             created_at=datetime.fromisoformat(payload["created_at"]),
             updated_at=datetime.fromisoformat(payload["updated_at"]),
             indexing_status=payload.get("indexing_status", DEFAULT_INDEXING_STATUS),
+            last_refresh_at=parse_optional_datetime(payload.get("last_refresh_at")),
+            indexed_file_count=int(payload.get("indexed_file_count", 0)),
+            chunk_count=int(payload.get("chunk_count", 0)),
+            error_count=int(payload.get("error_count", 0)),
             config=SidecarConfig(**payload.get("config", {})),
         )
 
@@ -85,6 +93,9 @@ class Sidecar:
         payload["root_path"] = str(self.root_path)
         payload["created_at"] = self.created_at.isoformat()
         payload["updated_at"] = self.updated_at.isoformat()
+        payload["last_refresh_at"] = (
+            self.last_refresh_at.isoformat() if self.last_refresh_at else None
+        )
         return payload
 
 
@@ -144,6 +155,30 @@ class SidecarRegistry:
             raise SidecarNotFoundError(f"sidecar not found: {sidecar_id}")
         shutil.rmtree(sidecar_dir)
 
+    def update_indexing_status(
+        self,
+        sidecar_id: str,
+        *,
+        indexing_status: str,
+        indexed_file_count: int,
+        chunk_count: int,
+        error_count: int,
+        last_refresh_at: datetime | None = None,
+    ) -> Sidecar:
+        sidecar = self.get(sidecar_id)
+        now = utc_now()
+        updated = replace(
+            sidecar,
+            updated_at=now,
+            indexing_status=indexing_status,
+            last_refresh_at=last_refresh_at or now,
+            indexed_file_count=indexed_file_count,
+            chunk_count=chunk_count,
+            error_count=error_count,
+        )
+        self._write_metadata(updated)
+        return updated
+
     def storage_dir(self, sidecar_id: str) -> Path:
         return self.sidecars_root / sidecar_id
 
@@ -163,3 +198,9 @@ class SidecarRegistry:
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def parse_optional_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value)

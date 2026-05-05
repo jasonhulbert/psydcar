@@ -115,9 +115,10 @@ def test_rebuild_invokes_vector_sync_for_current_sqlite_chunks(monkeypatch, tmp_
     registry.create(source_root, sidecar_id="fixture")
     captured = {}
 
-    def fake_sync_vector_index(chunks, *, storage_dir):
+    def fake_sync_vector_index(chunks, *, storage_dir, embedding_model):
         captured["chunks"] = chunks
         captured["storage_dir"] = storage_dir
+        captured["embedding_model"] = embedding_model
 
     monkeypatch.setattr(vector_module, "vector_runtime_available", lambda: True)
     monkeypatch.setattr(vector_module, "sync_vector_index", fake_sync_vector_index)
@@ -126,6 +127,7 @@ def test_rebuild_invokes_vector_sync_for_current_sqlite_chunks(monkeypatch, tmp_
 
     assert result.error_count == 0
     assert captured["storage_dir"] == tmp_path / "storage" / "sidecars" / "fixture"
+    assert captured["embedding_model"] == "BAAI/bge-small-en-v1.5"
     assert [(chunk.relative_path, chunk.text) for chunk in captured["chunks"]] == [
         ("README.md", "# Alpha\nsemantic content")
     ]
@@ -138,7 +140,7 @@ def test_vector_model_failure_is_recorded_without_corrupting_sqlite(monkeypatch,
     registry = SidecarRegistry(tmp_path / "storage")
     registry.create(source_root, sidecar_id="fixture")
 
-    def fail_sync_vector_index(chunks, *, storage_dir):
+    def fail_sync_vector_index(chunks, *, storage_dir, embedding_model):
         raise VectorIndexError("could not load local embedding model")
 
     monkeypatch.setattr(vector_module, "vector_runtime_available", lambda: True)

@@ -9,6 +9,7 @@ from ksidecar.index import (
 )
 from ksidecar.search import SearchError, merge_search_results, search_index
 from ksidecar.sidecars import SidecarRegistry
+from ksidecar.vectors import VectorIndexError
 
 
 def test_hybrid_search_includes_keyword_and_semantic_matches(monkeypatch, tmp_path):
@@ -20,7 +21,7 @@ def test_hybrid_search_includes_keyword_and_semantic_matches(monkeypatch, tmp_pa
     registry.create(source_root, sidecar_id="fixture")
     rebuild_sidecar_index(registry, "fixture")
 
-    def fake_semantic_search(connection, query, *, storage_dir, limit):
+    def fake_semantic_search(connection, query, *, storage_dir, embedding_model, limit):
         return [
             SearchResult(
                 chunk_id=chunk_id_for_path(connection, "concept.md"),
@@ -82,6 +83,17 @@ def test_search_index_rejects_invalid_mode_and_limit(tmp_path):
 
         with pytest.raises(SearchError, match="search limit must be positive"):
             search_index(connection, "needle", storage_dir=tmp_path, limit=0)
+
+
+def test_semantic_search_reports_vector_runtime_failures(monkeypatch, tmp_path):
+    def fail_semantic_search(connection, query, *, storage_dir, embedding_model, limit):
+        raise VectorIndexError("semantic dependencies are missing")
+
+    monkeypatch.setattr(search_module, "semantic_search", fail_semantic_search)
+
+    with connect_index(tmp_path / "index.sqlite") as connection:
+        with pytest.raises(SearchError, match="semantic dependencies are missing"):
+            search_index(connection, "needle", storage_dir=tmp_path, mode="semantic")
 
 
 def chunk_id_for_path(connection, relative_path):

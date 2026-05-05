@@ -96,3 +96,36 @@ def test_rebuild_search_refresh_and_status_from_cli(monkeypatch, tmp_path, capsy
     assert status["sidecar"]["id"] == "docs"
     assert status["sidecar"]["indexing_status"] == "indexed"
     assert status["errors"] == []
+
+
+def test_cli_config_and_create_use_runtime_defaults(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
+    monkeypatch.setenv("KSIDECAR_MAX_FILE_SIZE_BYTES", "123")
+    monkeypatch.setenv("KSIDECAR_IGNORED_DIRS", ".git,custom")
+    monkeypatch.setenv("KSIDECAR_EMBEDDING_MODEL", "local/model")
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+
+    assert main(["config", "--json"]) == 0
+    config = json.loads(capsys.readouterr().out)
+    assert config["max_file_size_bytes"] == 123
+    assert config["ignored_directories"] == [".git", "custom"]
+    assert config["embedding_model"] == "local/model"
+
+    assert main(["sidecar", "create", str(source_root), "--id", "docs", "--json"]) == 0
+    created = json.loads(capsys.readouterr().out)
+    assert created["config"]["max_file_size_bytes"] == 123
+    assert created["config"]["ignored_directories"] == [".git", "custom"]
+    assert created["config"]["embedding_model"] == "local/model"
+
+
+def test_cli_smoke_indexes_generated_fixture_dataset(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
+
+    assert main(["smoke", "--file-count", "25", "--json"]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["file_count"] == 25
+    assert result["document_count"] == 25
+    assert result["result_count"] > 0
+    assert result["search_within_target"] is True

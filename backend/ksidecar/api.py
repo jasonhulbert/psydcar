@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ksidecar import __version__
 from ksidecar.config import AppConfig
 from ksidecar.index import (
+    IndexError,
     IndexingErrorRecord,
     SearchResult,
     list_sidecar_indexing_errors,
@@ -36,6 +37,8 @@ from ksidecar.watcher import SidecarWatchService, WatcherError, WatchStatus
 
 class SidecarConfigResponse(BaseModel):
     max_file_size_bytes: int
+    ignored_directories: list[str]
+    embedding_model: str
 
 
 class SidecarResponse(BaseModel):
@@ -58,9 +61,11 @@ class CreateSidecarRequest(BaseModel):
     source_root: Path
     name: str | None = None
     sidecar_id: str | None = Field(default=None, alias="id")
-    max_file_size_bytes: int = Field(default=1_000_000, gt=0)
+    max_file_size_bytes: int | None = Field(default=None, gt=0)
+    ignored_directories: list[str] | None = None
+    embedding_model: str | None = None
 
-    @field_validator("name", "sidecar_id")
+    @field_validator("name", "sidecar_id", "embedding_model")
     @classmethod
     def validate_optional_non_empty(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
@@ -191,6 +196,13 @@ def create_app(config: AppConfig | None = None, *, start_watchers: bool = False)
             content={"detail": str(exc)},
         )
 
+    @app.exception_handler(IndexError)
+    async def index_error_handler(_: Any, exc: IndexError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
     @app.exception_handler(OSError)
     async def os_error_handler(_: Any, exc: OSError) -> JSONResponse:
         return JSONResponse(
@@ -248,13 +260,19 @@ def list_sidecars(registry: RegistryDependency) -> list[SidecarResponse]:
 )
 def create_sidecar(
     request: CreateSidecarRequest,
+    request_context: Request,
     registry: RegistryDependency,
 ) -> SidecarResponse:
+    config: AppConfig = request_context.app.state.config
     sidecar = registry.create(
         request.source_root,
         name=request.name,
         sidecar_id=request.sidecar_id,
-        config=SidecarConfig(max_file_size_bytes=request.max_file_size_bytes),
+        config=SidecarConfig(
+            max_file_size_bytes=request.max_file_size_bytes or config.max_file_size_bytes,
+            ignored_directories=tuple(request.ignored_directories or config.ignored_directories),
+            embedding_model=request.embedding_model or config.embedding_model,
+        ),
     )
     return sidecar_to_response(sidecar)
 
@@ -328,6 +346,7 @@ def list_files(sidecar_id: str, registry: RegistryDependency) -> FilesResponse:
         for candidate in scan_files(
             sidecar.root_path,
             max_file_size_bytes=sidecar.config.max_file_size_bytes,
+            ignored_directories=frozenset(sidecar.config.ignored_directories),
         )
     ]
     return FilesResponse(sidecar_id=sidecar.id, files=files)

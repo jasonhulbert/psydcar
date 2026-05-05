@@ -7,11 +7,14 @@ import shutil
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
+from ksidecar.defaults import DEFAULT_EMBEDDING_MODEL
 from ksidecar.filesystem import resolve_source_root
 from ksidecar.paths import ensure_app_storage_root, sidecars_root
+from ksidecar.scanner import DEFAULT_MAX_FILE_SIZE_BYTES, IGNORED_DIRECTORY_NAMES
 
 SIDECAR_METADATA_FILENAME = "sidecar.json"
 DEFAULT_INDEXING_STATUS = "not_indexed"
@@ -33,7 +36,22 @@ class SidecarNotFoundError(SidecarError):
 class SidecarConfig:
     """Per-sidecar indexing configuration."""
 
-    max_file_size_bytes: int = 1_000_000
+    max_file_size_bytes: int = DEFAULT_MAX_FILE_SIZE_BYTES
+    ignored_directories: tuple[str, ...] = field(
+        default_factory=lambda: tuple(sorted(IGNORED_DIRECTORY_NAMES))
+    )
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+
+    def __post_init__(self) -> None:
+        if self.max_file_size_bytes <= 0:
+            raise SidecarError("max_file_size_bytes must be positive")
+        object.__setattr__(
+            self,
+            "ignored_directories",
+            tuple(str(name) for name in self.ignored_directories if str(name).strip()),
+        )
+        if not self.embedding_model.strip():
+            raise SidecarError("embedding_model must not be empty")
 
 
 @dataclass(frozen=True)
@@ -193,7 +211,13 @@ class SidecarRegistry:
         )
 
     def _read_metadata(self, metadata_path: Path) -> Sidecar:
-        return Sidecar.from_json_dict(json.loads(metadata_path.read_text(encoding="utf-8")))
+        try:
+            return Sidecar.from_json_dict(json.loads(metadata_path.read_text(encoding="utf-8")))
+        except (JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise SidecarError(
+                f"corrupt sidecar metadata at {metadata_path}: {exc}. "
+                "Delete or recreate this sidecar's app-managed storage."
+            ) from exc
 
 
 def utc_now() -> datetime:

@@ -6,6 +6,7 @@ from ksidecar.sidecars import (
     DEFAULT_INDEXING_STATUS,
     SIDECAR_METADATA_FILENAME,
     SidecarAlreadyExistsError,
+    SidecarError,
     SidecarNotFoundError,
     SidecarRegistry,
 )
@@ -34,6 +35,8 @@ def test_create_sidecar_writes_expected_storage_layout(tmp_path):
     assert payload["root_path"] == str(source_root.resolve())
     assert payload["indexing_status"] == DEFAULT_INDEXING_STATUS
     assert payload["config"]["max_file_size_bytes"] == 1_000_000
+    assert "node_modules" in payload["config"]["ignored_directories"]
+    assert payload["config"]["embedding_model"] == "BAAI/bge-small-en-v1.5"
     assert "created_at" in payload
     assert "updated_at" in payload
 
@@ -95,3 +98,15 @@ def test_delete_sidecar_removes_app_managed_storage_only(tmp_path):
 def test_delete_unknown_sidecar_raises(tmp_path):
     with pytest.raises(SidecarNotFoundError):
         SidecarRegistry(tmp_path / "storage").delete("missing")
+
+
+def test_corrupt_sidecar_metadata_reports_storage_path(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    registry = SidecarRegistry(tmp_path / "storage")
+    registry.create(source_root, sidecar_id="source")
+    metadata_path = tmp_path / "storage" / "sidecars" / "source" / SIDECAR_METADATA_FILENAME
+    metadata_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(SidecarError, match="corrupt sidecar metadata"):
+        registry.get("source")

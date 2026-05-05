@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Local-first knowledge sidecar proof of concept"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [{ name = "Knowledge Sidecar contributors" }]
+license = "MIT"
+keywords = ["local-first", "search", "mcp", "knowledge-management"]
 dependencies = [
     "fastapi>=0.136.1",
     "uvicorn[standard]>=0.46.0",
@@ -36,6 +39,7 @@ package-dir = {"" = "backend"}
 
 [tool.setuptools.packages.find]
 where = ["backend"]
+include = ["ksidecar*"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

@@ -10,6 +10,7 @@ from typing import Literal
 
 from ksidecar.index import SearchResult, init_schema, keyword_search, semantic_search
 from ksidecar.sidecars import SidecarRegistry
+from ksidecar.vectors import DEFAULT_EMBEDDING_MODEL, VectorIndexError
 
 SearchMode = Literal["keyword", "semantic", "hybrid"]
 DEFAULT_SEARCH_LIMIT = 10
@@ -37,6 +38,7 @@ def search_sidecar(
             connection,
             query,
             storage_dir=registry.storage_dir(sidecar.id),
+            embedding_model=sidecar.config.embedding_model,
             mode=mode,
             limit=limit,
         )
@@ -47,6 +49,7 @@ def search_index(
     query: str,
     *,
     storage_dir: Path,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     mode: str = "hybrid",
     limit: int = DEFAULT_SEARCH_LIMIT,
 ) -> list[SearchResult]:
@@ -60,16 +63,29 @@ def search_index(
     if mode == "keyword":
         return keyword_search(connection, query, limit=normalized_limit)
     if mode == "semantic":
-        return semantic_search(connection, query, storage_dir=storage_dir, limit=normalized_limit)
+        try:
+            return semantic_search(
+                connection,
+                query,
+                storage_dir=storage_dir,
+                embedding_model=embedding_model,
+                limit=normalized_limit,
+            )
+        except VectorIndexError as exc:
+            raise SearchError(str(exc)) from exc
     if mode == "hybrid":
         candidate_limit = max(normalized_limit * 2, normalized_limit)
         keyword_results = keyword_search(connection, query, limit=candidate_limit)
-        semantic_results = semantic_search(
-            connection,
-            query,
-            storage_dir=storage_dir,
-            limit=candidate_limit,
-        )
+        try:
+            semantic_results = semantic_search(
+                connection,
+                query,
+                storage_dir=storage_dir,
+                embedding_model=embedding_model,
+                limit=candidate_limit,
+            )
+        except VectorIndexError:
+            semantic_results = []
         return merge_search_results(
             keyword_results,
             semantic_results,

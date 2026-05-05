@@ -9,9 +9,9 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Protocol
 
+from ksidecar.defaults import DEFAULT_EMBEDDING_MODEL
 from ksidecar.index import SearchResult, text_preview
 
-DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 VECTOR_TABLE_NAME = "chunks"
 VECTOR_DIRNAME = "vectors.lance"
 
@@ -76,13 +76,15 @@ class LocalEmbeddingService:
         except ImportError as exc:
             raise VectorIndexError(
                 "semantic search requires the local 'sentence-transformers' package "
-                f"and model '{self.model_name}'"
+                f"and model '{self.model_name}'. Install local semantic dependencies with "
+                "`uv sync --extra semantic --group dev`."
             ) from exc
         try:
             self._model = sentence_transformers.SentenceTransformer(self.model_name)
         except Exception as exc:  # noqa: BLE001 - expose model loading failures clearly.
             raise VectorIndexError(
-                f"could not load local embedding model '{self.model_name}': {exc}"
+                f"could not load local embedding model '{self.model_name}': {exc}. "
+                "Confirm the model is available locally or set KSIDECAR_EMBEDDING_MODEL."
             ) from exc
         return self._model
 
@@ -141,12 +143,13 @@ def sync_vector_index(
     chunks: Sequence[VectorChunk],
     *,
     storage_dir: Path,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_service: EmbeddingService | None = None,
     vector_store: VectorStore | None = None,
 ) -> None:
     """Rebuild the LanceDB vector table from the current SQLite chunk set."""
 
-    embeddings = (embedding_service or LocalEmbeddingService()).embed(
+    embeddings = (embedding_service or LocalEmbeddingService(embedding_model)).embed(
         [chunk.text for chunk in chunks]
     )
     rows = [
@@ -170,13 +173,14 @@ def search_vectors(
     chunks: Iterable[VectorChunk],
     storage_dir: Path,
     limit: int = 10,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     embedding_service: EmbeddingService | None = None,
     vector_store: VectorStore | None = None,
 ) -> list[SearchResult]:
     if not query.strip():
         return []
 
-    query_vector = (embedding_service or LocalEmbeddingService()).embed([query])[0]
+    query_vector = (embedding_service or LocalEmbeddingService(embedding_model)).embed([query])[0]
     hits = (vector_store or LanceVectorStore(vector_path_for_sidecar(storage_dir))).search(
         query_vector,
         limit=limit,

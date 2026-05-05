@@ -5,13 +5,21 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from ksidecar import __version__
-from ksidecar.config import AppConfig
+from ksidecar.config import (
+    EMBEDDING_MODEL_ENV,
+    IGNORED_DIRS_ENV,
+    MAX_FILE_SIZE_ENV,
+    AppConfig,
+)
 from ksidecar.index import (
+    IndexError,
     IndexingErrorRecord,
     RebuildResult,
     RefreshResult,
@@ -23,7 +31,7 @@ from ksidecar.index import (
 from ksidecar.mcp import McpError, parse_sidecar_ids, run_mcp_server
 from ksidecar.paths import ensure_app_storage_root, sidecars_root
 from ksidecar.search import DEFAULT_SEARCH_LIMIT, SearchError, search_sidecar
-from ksidecar.sidecars import Sidecar, SidecarError, SidecarRegistry
+from ksidecar.sidecars import Sidecar, SidecarConfig, SidecarError, SidecarRegistry
 from ksidecar.watcher import (
     DEFAULT_WATCH_DEBOUNCE_SECONDS,
     SidecarWatchService,
@@ -54,6 +62,22 @@ def build_parser() -> argparse.ArgumentParser:
     sidecar_create_parser.add_argument("source_root", help="Local directory to index.")
     sidecar_create_parser.add_argument("--name", help="Display name for the sidecar.")
     sidecar_create_parser.add_argument("--id", dest="sidecar_id", help="Stable sidecar id.")
+    sidecar_create_parser.add_argument(
+        "--max-file-size",
+        dest="max_file_size_bytes",
+        type=int,
+        help=f"Maximum indexed file size in bytes. Defaults to {MAX_FILE_SIZE_ENV}.",
+    )
+    sidecar_create_parser.add_argument(
+        "--ignore-dir",
+        dest="ignored_directories",
+        action="append",
+        help=f"Directory name to skip while scanning. Defaults to {IGNORED_DIRS_ENV}.",
+    )
+    sidecar_create_parser.add_argument(
+        "--embedding-model",
+        help=f"Local sentence-transformers model. Defaults to {EMBEDDING_MODEL_ENV}.",
+    )
     add_json_option(sidecar_create_parser)
 
     sidecar_list_parser = sidecar_subparsers.add_parser(
@@ -149,6 +173,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create the app storage directories before printing paths.",
     )
 
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Show resolved runtime configuration.",
+    )
+    add_json_option(config_parser)
+
+    smoke_parser = subparsers.add_parser(
+        "smoke",
+        help="Run a generated local indexing and search smoke workflow.",
+    )
+    smoke_parser.add_argument(
+        "--file-count",
+        type=int,
+        default=200,
+        help="Number of fixture files to generate.",
+    )
+    smoke_parser.add_argument(
+        "--query",
+        default="needle",
+        help="Keyword query expected to match generated fixtures.",
+    )
+    smoke_parser.add_argument(
+        "--max-search-seconds",
+        type=float,
+        default=1.0,
+        help="Search timing target in seconds.",
+    )
+    add_json_option(smoke_parser)
+
     return parser
 
 
@@ -158,7 +211,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         return run_command(args, parser)
-    except (OSError, SidecarError, SearchError, McpError, WatcherError) as exc:
+    except (
+        OSError,
+        SidecarError,
+        SearchError,
+        McpError,
+        WatcherError,
+        IndexError,
+        ValueError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -173,6 +234,14 @@ def run_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
                 Path(args.source_root),
                 name=args.name,
                 sidecar_id=args.sidecar_id,
+                config=SidecarConfig(
+                    max_file_size_bytes=args.max_file_size_bytes
+                    or config.max_file_size_bytes,
+                    ignored_directories=tuple(
+                        args.ignored_directories or config.ignored_directories
+                    ),
+                    embedding_model=args.embedding_model or config.embedding_model,
+                ),
             )
             if args.json:
                 print_json(sidecar)
@@ -266,6 +335,21 @@ def run_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
         print(f"sidecars_root={sidecars_root(storage_root)}")
         return 0
 
+    if args.command == "config":
+        if args.json:
+            print_json(config)
+        else:
+            print(format_config(config))
+        return 0
+
+    if args.command == "smoke":
+        result = run_smoke_workflow(config, args.file_count, args.query, args.max_search_seconds)
+        if args.json:
+            print_json(result)
+        else:
+            print(format_smoke_result(result))
+        return 0
+
     parser.print_help()
     return 0
 
@@ -285,6 +369,8 @@ def print_json(value: Any) -> None:
 def to_jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, AppConfig | SidecarConfig):
+        return {key: to_jsonable(item) for key, item in vars(value).items()}
     if isinstance(value, Sidecar):
         return value.to_json_dict()
     if isinstance(
@@ -377,6 +463,90 @@ def format_status(sidecar: Sidecar, *, error_count: int) -> str:
             f"chunks={sidecar.chunk_count}",
             f"errors={sidecar.error_count}",
             f"stored_errors={error_count}",
+        ]
+    )
+
+
+def format_config(config: AppConfig) -> str:
+    return "\n".join(
+        [
+            f"storage_root={config.storage_root}",
+            f"max_file_size_bytes={config.max_file_size_bytes}",
+            f"ignored_directories={','.join(config.ignored_directories)}",
+            f"embedding_model={config.embedding_model}",
+        ]
+    )
+
+
+def run_smoke_workflow(
+    config: AppConfig,
+    file_count: int,
+    query: str,
+    max_search_seconds: float,
+) -> dict[str, Any]:
+    if file_count < 1:
+        raise ValueError("file-count must be positive")
+    if max_search_seconds <= 0:
+        raise ValueError("max-search-seconds must be positive")
+
+    ensure_app_storage_root(config.storage_root)
+    sidecar_id = f"smoke-{int(time.time() * 1000)}"
+    with tempfile.TemporaryDirectory(prefix="ksidecar-smoke-") as source:
+        source_root = Path(source)
+        for index in range(file_count):
+            token = query if index % 10 == 0 else "ordinary"
+            (source_root / f"doc-{index:04d}.md").write_text(
+                f"# Document {index}\n{token} local fixture content {index}\n",
+                encoding="utf-8",
+            )
+
+        registry = SidecarRegistry(config.storage_root)
+        registry.create(
+            source_root,
+            sidecar_id=sidecar_id,
+            name="Smoke Fixture",
+            config=SidecarConfig(
+                max_file_size_bytes=config.max_file_size_bytes,
+                ignored_directories=config.ignored_directories,
+                embedding_model=config.embedding_model,
+            ),
+        )
+
+        rebuild_started = time.perf_counter()
+        rebuild = rebuild_sidecar_index(registry, sidecar_id)
+        rebuild_seconds = time.perf_counter() - rebuild_started
+
+        search_started = time.perf_counter()
+        results = search_sidecar(registry, sidecar_id, query, mode="keyword", limit=10)
+        search_seconds = time.perf_counter() - search_started
+
+        registry.delete(sidecar_id)
+
+    return {
+        "file_count": file_count,
+        "document_count": rebuild.document_count,
+        "chunk_count": rebuild.chunk_count,
+        "error_count": rebuild.error_count,
+        "result_count": len(results),
+        "rebuild_seconds": rebuild_seconds,
+        "search_seconds": search_seconds,
+        "search_target_seconds": max_search_seconds,
+        "search_within_target": search_seconds <= max_search_seconds,
+    }
+
+
+def format_smoke_result(result: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "Smoke workflow completed",
+            f"files={result['file_count']}",
+            f"documents={result['document_count']}",
+            f"chunks={result['chunk_count']}",
+            f"errors={result['error_count']}",
+            f"results={result['result_count']}",
+            f"rebuild_seconds={result['rebuild_seconds']:.4f}",
+            f"search_seconds={result['search_seconds']:.4f}",
+            f"search_within_target={result['search_within_target']}",
         ]
     )
 

@@ -90,10 +90,16 @@ def index_path_for_sidecar(registry: SidecarRegistry, sidecar_id: str) -> Path:
 
 def connect_index(index_path: Path) -> sqlite3.Connection:
     index_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(index_path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    return connection
+    try:
+        connection = sqlite3.connect(index_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+    except sqlite3.DatabaseError as exc:
+        raise IndexError(
+            f"corrupt sidecar index storage at {index_path}: {exc}. "
+            "Run `ksidecar rebuild <sidecar-id>` or recreate the sidecar."
+        ) from exc
 
 
 def init_schema(connection: sqlite3.Connection) -> None:
@@ -154,7 +160,7 @@ def rebuild_sidecar_index(
     with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
         init_schema(connection)
         result = rebuild_index(connection, sidecar)
-        sync_sidecar_vector_index(connection, registry, sidecar.id)
+        sync_sidecar_vector_index(connection, registry, sidecar)
         document_count, chunk_count, error_count = index_counts(connection)
         result = RebuildResult(
             document_count=document_count,
@@ -179,7 +185,7 @@ def refresh_sidecar_index(
     with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
         init_schema(connection)
         result = refresh_index(connection, sidecar)
-        sync_sidecar_vector_index(connection, registry, sidecar.id)
+        sync_sidecar_vector_index(connection, registry, sidecar)
         document_count, chunk_count, error_count = index_counts(connection)
         result = RefreshResult(
             document_count=document_count,
@@ -244,6 +250,7 @@ def semantic_search_sidecar(
             connection,
             query,
             storage_dir=registry.storage_dir(sidecar.id),
+            embedding_model=sidecar.config.embedding_model,
             limit=limit,
         )
 
@@ -262,6 +269,7 @@ def rebuild_index(connection: sqlite3.Connection, sidecar: Sidecar) -> RebuildRe
     for candidate in scan_files(
         sidecar.root_path,
         max_file_size_bytes=sidecar.config.max_file_size_bytes,
+        ignored_directories=frozenset(sidecar.config.ignored_directories),
     ):
         try:
             content = read_text_content(candidate.path)
@@ -302,6 +310,7 @@ def refresh_index(connection: sqlite3.Connection, sidecar: Sidecar) -> RefreshRe
     for candidate in scan_files(
         sidecar.root_path,
         max_file_size_bytes=sidecar.config.max_file_size_bytes,
+        ignored_directories=frozenset(sidecar.config.ignored_directories),
     ):
         relative_path = path_to_index_string(candidate.relative_path)
         seen_paths.add(relative_path)
@@ -444,7 +453,7 @@ def delete_document_by_path(connection: sqlite3.Connection, relative_path: str) 
 def sync_sidecar_vector_index(
     connection: sqlite3.Connection,
     registry: SidecarRegistry,
-    sidecar_id: str,
+    sidecar: Sidecar,
 ) -> None:
     from ksidecar.vectors import VectorIndexError, sync_vector_index, vector_runtime_available
 
@@ -455,7 +464,8 @@ def sync_sidecar_vector_index(
     try:
         sync_vector_index(
             list_vector_chunks(connection),
-            storage_dir=registry.storage_dir(sidecar_id),
+            storage_dir=registry.storage_dir(sidecar.id),
+            embedding_model=sidecar.config.embedding_model,
         )
     except VectorIndexError as exc:
         insert_indexing_error(
@@ -766,6 +776,7 @@ def semantic_search(
     query: str,
     *,
     storage_dir: Path,
+    embedding_model: str,
     limit: int = 10,
 ) -> list[SearchResult]:
     init_schema(connection)
@@ -775,6 +786,7 @@ def semantic_search(
         query,
         chunks=list_vector_chunks(connection),
         storage_dir=storage_dir,
+        embedding_model=embedding_model,
         limit=limit,
     )
 

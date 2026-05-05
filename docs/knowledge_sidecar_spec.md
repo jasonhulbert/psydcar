@@ -1,8 +1,8 @@
-# Knowledge Sidecar POC — Implementation Spec
+# Psydecar POC — Implementation Spec
 
 ## 1. Overview
 
-Build a local-first knowledge sidecar system that allows an agent to search and read from one or more indexed local directories (sidecars).
+Build a local-first psydecar system that allows an agent to search and read from one or more indexed local directories (sidecars).
 
 - Each sidecar = indexed directory of code/text files
 - Agents connect via MCP (stdio) to query sidecars
@@ -76,7 +76,7 @@ Embeddings:
 
 ## 5. Storage Layout
 
-~/.ksidecar/
+~/.psydecar/
 sidecars/
 <id>/
 sidecar.json
@@ -181,7 +181,7 @@ flowchart TD
 
 Command:
 
-ksidecar mcp --sidecars frontend,backend
+psydecar mcp --sidecars frontend,backend
 
 Tools:
 

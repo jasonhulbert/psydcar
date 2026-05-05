@@ -11,9 +11,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TextIO
 
-from ksidecar import __version__
-from ksidecar.filesystem import resolve_root_relative_path
-from ksidecar.index import (
+from psydecar import __version__
+from psydecar.filesystem import resolve_root_relative_path
+from psydecar.index import (
     IndexingErrorRecord,
     SearchResult,
     build_fts_query,
@@ -22,9 +22,9 @@ from ksidecar.index import (
     read_text_content,
     text_preview,
 )
-from ksidecar.scanner import scan_files
-from ksidecar.search import DEFAULT_SEARCH_LIMIT, merge_search_results, normalize_limit
-from ksidecar.sidecars import Sidecar, SidecarRegistry
+from psydecar.scanner import scan_files
+from psydecar.search import DEFAULT_SEARCH_LIMIT, merge_search_results, normalize_limit
+from psydecar.sidecars import Sidecar, SidecarRegistry
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
@@ -40,7 +40,7 @@ class McpError(ValueError):
     """Raised when an MCP request or tool call is invalid."""
 
 
-class KSidecarMcpServer:
+class PsydecarMcpServer:
     """Small JSON-RPC MCP server exposing read-only sidecar tools."""
 
     def __init__(self, registry: SidecarRegistry, sidecar_ids: Iterable[str]) -> None:
@@ -102,7 +102,7 @@ class KSidecarMcpServer:
         return {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "ksidecar", "version": __version__},
+            "serverInfo": {"name": "psydecar", "version": __version__},
         }
 
     def call_tool(self, params: Any) -> dict[str, Any]:
@@ -262,7 +262,7 @@ class KSidecarMcpServer:
 
 
 def run_mcp_server(registry: SidecarRegistry, sidecar_ids: Iterable[str]) -> None:
-    KSidecarMcpServer(registry, sidecar_ids).serve()
+    PsydecarMcpServer(registry, sidecar_ids).serve()
 
 
 def readonly_search_sidecar(
@@ -375,7 +375,7 @@ def readonly_semantic_search(
     storage_dir: Path,
     limit: int,
 ) -> list[SearchResult]:
-    from ksidecar.vectors import search_vectors, vector_runtime_available
+    from psydecar.vectors import search_vectors, vector_runtime_available
 
     if not vector_runtime_available():
         return []

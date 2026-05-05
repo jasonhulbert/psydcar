@@ -1,15 +1,15 @@
 import pytest
 
-import ksidecar.search as search_module
-from ksidecar.index import (
+import psydecar.search as search_module
+from psydecar.index import (
     SearchResult,
     connect_index,
     index_path_for_sidecar,
     rebuild_sidecar_index,
 )
-from ksidecar.search import SearchError, merge_search_results, search_index
-from ksidecar.sidecars import SidecarRegistry
-from ksidecar.vectors import VectorIndexError
+from psydecar.search import SearchError, merge_search_results, search_index
+from psydecar.sidecars import SidecarRegistry
+from psydecar.vectors import VectorIndexError
 
 
 def test_hybrid_search_includes_keyword_and_semantic_matches(monkeypatch, tmp_path):

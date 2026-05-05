@@ -1,11 +1,11 @@
-# Knowledge Sidecar POC - Phase Implementation Plan
+# Psydecar POC - Phase Implementation Plan
 
 This plan breaks the spec into implementation phases that can be executed incrementally by GPT. Each phase should leave the repository in a runnable or verifiable state and should avoid depending on manual setup beyond ordinary local commands.
 
 ## Guiding Principles
 
 - Build the backend core first, because indexing, storage, and search are the system contract used by the MCP server, API, and dashboard.
-- Keep the first version intentionally local and simple: sidecar source directories may live anywhere on the local filesystem, while app-managed metadata and indexes live under `~/.ksidecar`.
+- Keep the first version intentionally local and simple: sidecar source directories may live anywhere on the local filesystem, while app-managed metadata and indexes live under `~/.psydecar`.
 - Prefer small public interfaces between modules so later phases can add MCP, FastAPI, and Angular without rewriting the indexing core.
 - Treat security constraints as baseline behavior from the first file-access phase: root confinement, path traversal checks, file size limits, and binary-file skipping.
 - Add focused tests around indexing, path safety, refresh behavior, and search merging as those pieces appear.
@@ -18,7 +18,7 @@ Deliverables:
 
 - Python package scaffold for the backend and CLI.
 - Dependency management files for the Python app.
-- Basic CLI entrypoint named `ksidecar`.
+- Basic CLI entrypoint named `psydecar`.
 - Initial test runner setup.
 - Project configuration for formatting and linting.
 - Placeholder Angular workspace decision documented, but the Angular app does not need to exist yet.
@@ -26,9 +26,9 @@ Deliverables:
 Suggested structure:
 
 ```text
-ksidecar/
+psydecar/
   backend/
-    ksidecar/
+    psydecar/
       __init__.py
       cli.py
       config.py
@@ -40,9 +40,9 @@ ksidecar/
 
 Acceptance checks:
 
-- `ksidecar --help` runs locally.
+- `psydecar --help` runs locally.
 - Python tests can run even if they only cover config/path helpers.
-- The app storage root can be resolved, defaulting to `~/.ksidecar`.
+- The app storage root can be resolved, defaulting to `~/.psydecar`.
 
 ## Phase 1 - Sidecar Registry and Filesystem Safety
 
@@ -50,11 +50,11 @@ Goal: implement sidecar creation, discovery, metadata persistence, and safe path
 
 Deliverables:
 
-- Sidecar registry under `~/.ksidecar/sidecars/<id>/` for app-managed metadata and indexes.
+- Sidecar registry under `~/.psydecar/sidecars/<id>/` for app-managed metadata and indexes.
 - Sidecar source root selection from any local directory path supplied by the user.
 - `sidecar.json` model with id, name, root path, created/updated timestamps, indexing status, and config.
 - Sidecar create/list/delete operations in core Python services.
-- Safe root-relative path resolution against the sidecar source root, not against `~/.ksidecar`.
+- Safe root-relative path resolution against the sidecar source root, not against `~/.psydecar`.
 - File filtering utilities:
   - allowed text/code extensions
   - max file size enforcement
@@ -64,7 +64,7 @@ Deliverables:
 Acceptance checks:
 
 - Creating a sidecar writes the expected storage layout.
-- Creating a sidecar can target a fixture directory outside `~/.ksidecar`.
+- Creating a sidecar can target a fixture directory outside `~/.psydecar`.
 - Listing sidecars reads persisted metadata.
 - Attempts to resolve paths outside the sidecar root are rejected.
 - Binary and oversized files are skipped by scanner tests.
@@ -157,13 +157,13 @@ Goal: expose core sidecar operations without requiring the dashboard or MCP.
 Deliverables:
 
 - CLI commands:
-- `ksidecar sidecar create`
-  - `ksidecar sidecar list`
-  - `ksidecar sidecar delete`
-  - `ksidecar rebuild`
-  - `ksidecar refresh`
-  - `ksidecar search`
-  - `ksidecar status`
+- `psydecar sidecar create`
+  - `psydecar sidecar list`
+  - `psydecar sidecar delete`
+  - `psydecar rebuild`
+  - `psydecar refresh`
+  - `psydecar search`
+  - `psydecar status`
 - Human-readable output by default.
 - JSON output option for commands that return structured data.
 
@@ -178,7 +178,7 @@ Goal: allow agent clients to query one or more sidecars through MCP over stdio.
 
 Deliverables:
 
-- `ksidecar mcp --sidecars frontend,backend` command.
+- `psydecar mcp --sidecars frontend,backend` command.
 - MCP tools:
   - `search`
   - `read_chunk`

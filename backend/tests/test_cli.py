@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from ksidecar.cli import main
+from psydecar.cli import main
 
 
 def test_help_runs(capsys):
@@ -12,11 +12,11 @@ def test_help_runs(capsys):
     assert exc_info.value.code == 0
 
     output = capsys.readouterr().out
-    assert "Manage local Knowledge Sidecar indexes." in output
+    assert "Manage local Psydecar indexes." in output
 
 
 def test_paths_command_prints_storage_root(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
+    monkeypatch.setenv("PSYDECAR_HOME", str(tmp_path / "storage"))
 
     assert main(["paths"]) == 0
 
@@ -42,7 +42,7 @@ def test_help_includes_watch_command(capsys):
 
 
 def test_sidecar_create_list_and_delete_json(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
+    monkeypatch.setenv("PSYDECAR_HOME", str(tmp_path / "storage"))
     source_root = tmp_path / "source"
     source_root.mkdir()
 
@@ -68,7 +68,7 @@ def test_sidecar_create_list_and_delete_json(monkeypatch, tmp_path, capsys):
 
 
 def test_rebuild_search_refresh_and_status_from_cli(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
+    monkeypatch.setenv("PSYDECAR_HOME", str(tmp_path / "storage"))
     source_root = tmp_path / "source"
     source_root.mkdir()
     (source_root / "notes.md").write_text("# Notes\nneedle api docs\n", encoding="utf-8")
@@ -99,10 +99,10 @@ def test_rebuild_search_refresh_and_status_from_cli(monkeypatch, tmp_path, capsy
 
 
 def test_cli_config_and_create_use_runtime_defaults(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
-    monkeypatch.setenv("KSIDECAR_MAX_FILE_SIZE_BYTES", "123")
-    monkeypatch.setenv("KSIDECAR_IGNORED_DIRS", ".git,custom")
-    monkeypatch.setenv("KSIDECAR_EMBEDDING_MODEL", "local/model")
+    monkeypatch.setenv("PSYDECAR_HOME", str(tmp_path / "storage"))
+    monkeypatch.setenv("PSYDECAR_MAX_FILE_SIZE_BYTES", "123")
+    monkeypatch.setenv("PSYDECAR_IGNORED_DIRS", ".git,custom")
+    monkeypatch.setenv("PSYDECAR_EMBEDDING_MODEL", "local/model")
     source_root = tmp_path / "source"
     source_root.mkdir()
 
@@ -120,7 +120,7 @@ def test_cli_config_and_create_use_runtime_defaults(monkeypatch, tmp_path, capsy
 
 
 def test_cli_smoke_indexes_generated_fixture_dataset(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
+    monkeypatch.setenv("PSYDECAR_HOME", str(tmp_path / "storage"))
 
     assert main(["smoke", "--file-count", "25", "--json"]) == 0
 

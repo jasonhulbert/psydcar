@@ -11,10 +11,10 @@ from json import JSONDecodeError
 from pathlib import Path
 from typing import Any
 
-from ksidecar.defaults import DEFAULT_EMBEDDING_MODEL
-from ksidecar.filesystem import resolve_source_root
-from ksidecar.paths import ensure_app_storage_root, sidecars_root
-from ksidecar.scanner import DEFAULT_MAX_FILE_SIZE_BYTES, IGNORED_DIRECTORY_NAMES
+from psydecar.defaults import DEFAULT_EMBEDDING_MODEL
+from psydecar.filesystem import resolve_source_root
+from psydecar.paths import ensure_app_storage_root, sidecars_root
+from psydecar.scanner import DEFAULT_MAX_FILE_SIZE_BYTES, IGNORED_DIRECTORY_NAMES
 
 SIDECAR_METADATA_FILENAME = "sidecar.json"
 DEFAULT_INDEXING_STATUS = "not_indexed"

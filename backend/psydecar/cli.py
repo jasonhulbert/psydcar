@@ -1,4 +1,4 @@
-"""Command-line entrypoint for Knowledge Sidecar."""
+"""Command-line entrypoint for Psydecar."""
 
 from __future__ import annotations
 
@@ -11,14 +11,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ksidecar import __version__
-from ksidecar.config import (
+from psydecar import __version__
+from psydecar.config import (
     EMBEDDING_MODEL_ENV,
     IGNORED_DIRS_ENV,
     MAX_FILE_SIZE_ENV,
     AppConfig,
 )
-from ksidecar.index import (
+from psydecar.index import (
     IndexError,
     IndexingErrorRecord,
     RebuildResult,
@@ -28,11 +28,11 @@ from ksidecar.index import (
     rebuild_sidecar_index,
     refresh_sidecar_index,
 )
-from ksidecar.mcp import McpError, parse_sidecar_ids, run_mcp_server
-from ksidecar.paths import ensure_app_storage_root, sidecars_root
-from ksidecar.search import DEFAULT_SEARCH_LIMIT, SearchError, search_sidecar
-from ksidecar.sidecars import Sidecar, SidecarConfig, SidecarError, SidecarRegistry
-from ksidecar.watcher import (
+from psydecar.mcp import McpError, parse_sidecar_ids, run_mcp_server
+from psydecar.paths import ensure_app_storage_root, sidecars_root
+from psydecar.search import DEFAULT_SEARCH_LIMIT, SearchError, search_sidecar
+from psydecar.sidecars import Sidecar, SidecarConfig, SidecarError, SidecarRegistry
+from psydecar.watcher import (
     DEFAULT_WATCH_DEBOUNCE_SECONDS,
     SidecarWatchService,
     WatcherError,
@@ -42,8 +42,8 @@ from ksidecar.watcher import (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="ksidecar",
-        description="Manage local Knowledge Sidecar indexes.",
+        prog="psydecar",
+        description="Manage local Psydecar indexes.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
@@ -491,7 +491,7 @@ def run_smoke_workflow(
 
     ensure_app_storage_root(config.storage_root)
     sidecar_id = f"smoke-{int(time.time() * 1000)}"
-    with tempfile.TemporaryDirectory(prefix="ksidecar-smoke-") as source:
+    with tempfile.TemporaryDirectory(prefix="psydecar-smoke-") as source:
         source_root = Path(source)
         for index in range(file_count):
             token = query if index % 10 == 0 else "ordinary"

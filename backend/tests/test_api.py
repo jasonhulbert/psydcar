@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
-from ksidecar.api import create_app
-from ksidecar.config import AppConfig
+from psydecar.api import create_app
+from psydecar.config import AppConfig
 
 
 def make_client(tmp_path):
@@ -96,9 +96,9 @@ def test_api_rebuild_refresh_files_errors_mcp_config_and_search(tmp_path):
     mcp_response = client.get("/api/sidecars/docs/mcp-config")
     assert mcp_response.status_code == 200
     mcp_payload = mcp_response.json()
-    assert mcp_payload["command"] == "ksidecar"
+    assert mcp_payload["command"] == "psydecar"
     assert mcp_payload["args"] == ["mcp", "--sidecars", "docs"]
-    assert mcp_payload["config"]["mcpServers"]["ksidecar-docs"]["args"] == [
+    assert mcp_payload["config"]["mcpServers"]["psydecar-docs"]["args"] == [
         "mcp",
         "--sidecars",
         "docs",

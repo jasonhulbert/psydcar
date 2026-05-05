@@ -1,18 +1,18 @@
-"""Filesystem paths for app-managed Knowledge Sidecar data."""
+"""Filesystem paths for app-managed Psydecar data."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-APP_HOME_ENV = "KSIDECAR_HOME"
-DEFAULT_APP_DIRNAME = ".ksidecar"
+APP_HOME_ENV = "PSYDECAR_HOME"
+DEFAULT_APP_DIRNAME = ".psydecar"
 
 
 def app_storage_root() -> Path:
     """Return the app-managed storage root.
 
-    The default is ``~/.ksidecar``. Setting ``KSIDECAR_HOME`` is useful for tests and
+    The default is ``~/.psydecar``. Setting ``PSYDECAR_HOME`` is useful for tests and
     isolated local development.
     """
 

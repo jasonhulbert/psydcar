@@ -22,7 +22,7 @@ def resolve_root_relative_path(root: Path | str, relative_path: Path | str) -> P
     """Resolve ``relative_path`` under ``root`` and reject traversal escapes.
 
     The root is the user-selected sidecar source directory, not app-managed
-    storage under ``~/.ksidecar``.
+    storage under ``~/.psydecar``.
     """
 
     source_root = resolve_source_root(root)

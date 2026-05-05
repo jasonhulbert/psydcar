@@ -3,12 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ksidecar"
+name = "psydecar"
 version = "0.1.0"
-description = "Local-first knowledge sidecar proof of concept"
+description = "Local-first psydecar proof of concept"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "Knowledge Sidecar contributors" }]
+authors = [{ name = "Psydecar contributors" }]
 license = "MIT"
 keywords = ["local-first", "search", "mcp", "knowledge-management"]
 dependencies = [
@@ -32,14 +32,14 @@ dev = [
 ]
 
 [project.scripts]
-ksidecar = "ksidecar.cli:main"
+psydecar = "psydecar.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "backend"}
 
 [tool.setuptools.packages.find]
 where = ["backend"]
-include = ["ksidecar*"]
+include = ["psydecar*"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

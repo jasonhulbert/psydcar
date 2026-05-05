@@ -1,13 +1,13 @@
-import ksidecar.vectors as vector_module
-from ksidecar.index import (
+import psydecar.vectors as vector_module
+from psydecar.index import (
     connect_index,
     index_path_for_sidecar,
     list_indexing_errors,
     rebuild_sidecar_index,
     select_count,
 )
-from ksidecar.sidecars import SidecarRegistry
-from ksidecar.vectors import (
+from psydecar.sidecars import SidecarRegistry
+from psydecar.vectors import (
     VectorChunk,
     VectorIndexError,
     VectorSearchHit,

@@ -3,9 +3,9 @@ from io import StringIO
 
 import pytest
 
-from ksidecar.index import connect_index, index_path_for_sidecar, rebuild_sidecar_index
-from ksidecar.mcp import KSidecarMcpServer, McpError, parse_sidecar_ids
-from ksidecar.sidecars import SidecarRegistry
+from psydecar.index import connect_index, index_path_for_sidecar, rebuild_sidecar_index
+from psydecar.mcp import PsydecarMcpServer, McpError, parse_sidecar_ids
+from psydecar.sidecars import SidecarRegistry
 
 
 def test_mcp_initialize_and_tools_list(tmp_path):
@@ -13,13 +13,13 @@ def test_mcp_initialize_and_tools_list(tmp_path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     registry.create(source_root, sidecar_id="docs")
-    server = KSidecarMcpServer(registry, ["docs"])
+    server = PsydecarMcpServer(registry, ["docs"])
 
     initialize = server.handle_message(
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
     )
     assert initialize is not None
-    assert initialize["result"]["serverInfo"]["name"] == "ksidecar"
+    assert initialize["result"]["serverInfo"]["name"] == "psydecar"
     assert initialize["result"]["capabilities"]["tools"]["listChanged"] is False
 
     tools = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
@@ -46,7 +46,7 @@ def test_mcp_search_labels_multi_sidecar_results(tmp_path):
     rebuild_sidecar_index(registry, "frontend")
     rebuild_sidecar_index(registry, "backend")
 
-    server = KSidecarMcpServer(registry, ["frontend", "backend"])
+    server = PsydecarMcpServer(registry, ["frontend", "backend"])
     response = server.handle_message(
         {
             "jsonrpc": "2.0",
@@ -76,7 +76,7 @@ def test_mcp_read_chunk_and_read_file(tmp_path):
     with connect_index(index_path_for_sidecar(registry, "docs")) as connection:
         chunk_id = int(connection.execute("SELECT id FROM chunks").fetchone()["id"])
 
-    server = KSidecarMcpServer(registry, ["docs"])
+    server = PsydecarMcpServer(registry, ["docs"])
     chunk_response = server.call_tool(
         {"name": "read_chunk", "arguments": {"sidecar_id": "docs", "chunk_id": chunk_id}}
     )
@@ -94,7 +94,7 @@ def test_mcp_read_file_rejects_path_traversal(tmp_path):
     source_root.mkdir()
     (tmp_path / "secret.md").write_text("secret\n", encoding="utf-8")
     registry.create(source_root, sidecar_id="docs")
-    server = KSidecarMcpServer(registry, ["docs"])
+    server = PsydecarMcpServer(registry, ["docs"])
 
     response = server.handle_message(
         {
@@ -122,7 +122,7 @@ def test_mcp_list_files_and_get_status(tmp_path):
     (source_root / "ignored.png").write_bytes(b"png")
     registry.create(source_root, sidecar_id="docs")
     rebuild_sidecar_index(registry, "docs")
-    server = KSidecarMcpServer(registry, ["docs"])
+    server = PsydecarMcpServer(registry, ["docs"])
 
     files = server.call_tool(
         {"name": "list_files", "arguments": {"sidecar_id": "docs", "prefix": "docs"}}
@@ -140,7 +140,7 @@ def test_mcp_status_and_search_do_not_create_missing_index(tmp_path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     registry.create(source_root, sidecar_id="docs")
-    server = KSidecarMcpServer(registry, ["docs"])
+    server = PsydecarMcpServer(registry, ["docs"])
     index_path = index_path_for_sidecar(registry, "docs")
 
     status = server.call_tool({"name": "get_status", "arguments": {"sidecar_id": "docs"}})
@@ -158,7 +158,7 @@ def test_mcp_stdio_server_writes_jsonrpc_response(tmp_path):
     source_root = tmp_path / "source"
     source_root.mkdir()
     registry.create(source_root, sidecar_id="docs")
-    server = KSidecarMcpServer(registry, ["docs"])
+    server = PsydecarMcpServer(registry, ["docs"])
     stdin = StringIO(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n")
     stdout = StringIO()
 

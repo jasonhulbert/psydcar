@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -70,6 +71,30 @@ def test_listing_sidecars_reads_persisted_metadata(tmp_path):
         source_a.resolve(),
         source_b.resolve(),
     ]
+
+
+def test_mark_indexing_preserves_existing_counts_and_last_refresh(tmp_path):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    registry = SidecarRegistry(tmp_path / "storage")
+    registry.create(source_root, sidecar_id="source")
+    last_refresh_at = datetime(2026, 5, 4, 12, 0, tzinfo=UTC)
+    registry.update_indexing_status(
+        "source",
+        indexing_status="indexed",
+        indexed_file_count=3,
+        chunk_count=9,
+        error_count=1,
+        last_refresh_at=last_refresh_at,
+    )
+
+    sidecar = registry.mark_indexing("source")
+
+    assert sidecar.indexing_status == "indexing"
+    assert sidecar.indexed_file_count == 3
+    assert sidecar.chunk_count == 9
+    assert sidecar.error_count == 1
+    assert sidecar.last_refresh_at == last_refresh_at
 
 
 def test_create_sidecar_rejects_duplicate_id(tmp_path):

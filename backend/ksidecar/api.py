@@ -20,6 +20,7 @@ from ksidecar.index import (
     SearchResult,
     list_sidecar_indexing_errors,
     rebuild_sidecar_index,
+    record_sidecar_indexing_error,
     refresh_sidecar_index,
 )
 from ksidecar.scanner import scan_files
@@ -288,7 +289,7 @@ def refresh_sidecar(
     background_tasks: BackgroundTasks,
     registry: RegistryDependency,
 ) -> OperationResponse:
-    registry.get(sidecar_id)
+    registry.mark_indexing(sidecar_id)
     background_tasks.add_task(run_index_task, registry.storage_root, sidecar_id, "refresh")
     return OperationResponse(sidecar_id=sidecar_id, operation="refresh", status="queued")
 
@@ -299,7 +300,7 @@ def rebuild_sidecar(
     background_tasks: BackgroundTasks,
     registry: RegistryDependency,
 ) -> OperationResponse:
-    registry.get(sidecar_id)
+    registry.mark_indexing(sidecar_id)
     background_tasks.add_task(run_index_task, registry.storage_root, sidecar_id, "rebuild")
     return OperationResponse(sidecar_id=sidecar_id, operation="rebuild", status="queued")
 
@@ -400,13 +401,24 @@ def search(
 
 def run_index_task(storage_root: Path | None, sidecar_id: str, operation: str) -> None:
     registry = SidecarRegistry(storage_root)
-    if operation == "refresh":
-        refresh_sidecar_index(registry, sidecar_id)
-        return
-    if operation == "rebuild":
-        rebuild_sidecar_index(registry, sidecar_id)
-        return
-    raise ValueError(f"unsupported indexing operation: {operation}")
+    try:
+        if operation == "refresh":
+            refresh_sidecar_index(registry, sidecar_id)
+            return
+        if operation == "rebuild":
+            rebuild_sidecar_index(registry, sidecar_id)
+            return
+        raise ValueError(f"unsupported indexing operation: {operation}")
+    except Exception as exc:
+        record_sidecar_indexing_error(
+            registry,
+            sidecar_id,
+            IndexingErrorRecord(
+                relative_path="__index_task__",
+                stage=operation,
+                message=str(exc),
+            ),
+        )
 
 
 def sidecar_to_response(sidecar: Sidecar) -> SidecarResponse:

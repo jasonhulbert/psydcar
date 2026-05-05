@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 
@@ -23,8 +23,12 @@ type Tab = 'files' | 'errors' | 'mcp' | 'search';
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
-export class App implements OnInit {
+export class App implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
+  private readonly indexingPollMs = 1200;
+  private indexingPollHandle: ReturnType<typeof setTimeout> | null = null;
+  private pollingIndexState = false;
+  private detailLoadToken = 0;
 
   readonly sidecars = signal<Sidecar[]>([]);
   readonly selectedId = signal<string | null>(null);
@@ -32,6 +36,9 @@ export class App implements OnInit {
     const selectedId = this.selectedId();
     return this.sidecars().find((sidecar) => sidecar.id === selectedId) ?? null;
   });
+  readonly selectedIsIndexing = computed(
+    () => this.selectedSidecar()?.indexing_status === 'indexing',
+  );
 
   readonly files = signal<FileEntry[]>([]);
   readonly errors = signal<IndexingError[]>([]);
@@ -40,12 +47,12 @@ export class App implements OnInit {
   readonly directoryBrowse = signal<DirectoryBrowse | null>(null);
 
   activeTab: Tab = 'files';
-  loadingSidecars = true;
-  loadingDetails = false;
-  creating = false;
-  operating = false;
-  browsing = false;
-  searching = false;
+  readonly loadingSidecars = signal(true);
+  readonly loadingDetails = signal(false);
+  readonly creating = signal(false);
+  readonly operating = signal(false);
+  readonly browsing = signal(false);
+  readonly searching = signal(false);
 
   appError = '';
   createError = '';
@@ -71,25 +78,57 @@ export class App implements OnInit {
     await this.loadDirectory();
   }
 
-  async loadSidecars(selectId?: string) {
-    this.loadingSidecars = true;
+  ngOnDestroy() {
+    this.clearIndexingPoll();
+  }
+
+  async loadSidecars(
+    selectId?: string,
+    options: { showLoading?: boolean; loadDetails?: boolean } = {},
+  ) {
+    const showLoading = options.showLoading ?? true;
+    const loadDetails = options.loadDetails ?? true;
+    const previousSelected = this.selectedSidecar();
+    if (showLoading) {
+      this.loadingSidecars.set(true);
+    }
     this.appError = '';
     try {
       const sidecars = await firstValueFrom(this.api.listSidecars());
       this.sidecars.set(sidecars);
       const nextSelected = selectId ?? this.selectedId() ?? sidecars[0]?.id ?? null;
       this.selectedId.set(sidecars.some((sidecar) => sidecar.id === nextSelected) ? nextSelected : null);
-      await this.loadDetails();
+      const selected = this.selectedSidecar();
+      if (loadDetails && selected?.indexing_status !== 'indexing') {
+        await this.loadDetails();
+      } else if (
+        selected &&
+        previousSelected?.id === selected?.id &&
+        previousSelected.indexing_status === 'indexing' &&
+        selected.indexing_status !== 'indexing'
+      ) {
+        await this.loadDetails();
+      } else if (selected?.indexing_status === 'indexing') {
+        this.cancelDetailLoading();
+      }
+      this.syncIndexingPoll();
     } catch (error) {
       this.appError = this.describeError(error);
     } finally {
-      this.loadingSidecars = false;
+      if (showLoading) {
+        this.loadingSidecars.set(false);
+      }
     }
   }
 
   async selectSidecar(sidecarId: string) {
     this.selectedId.set(sidecarId);
     this.copyStatus = '';
+    if (this.selectedSidecar()?.indexing_status === 'indexing') {
+      this.cancelDetailLoading();
+      this.syncIndexingPoll();
+      return;
+    }
     await this.loadDetails();
   }
 
@@ -99,7 +138,7 @@ export class App implements OnInit {
       return;
     }
 
-    this.creating = true;
+    this.creating.set(true);
     this.createError = '';
     try {
       const sidecar = await firstValueFrom(
@@ -120,7 +159,7 @@ export class App implements OnInit {
     } catch (error) {
       this.createError = this.describeError(error);
     } finally {
-      this.creating = false;
+      this.creating.set(false);
     }
   }
 
@@ -130,7 +169,7 @@ export class App implements OnInit {
       return;
     }
 
-    this.operating = true;
+    this.operating.set(true);
     this.detailError = '';
     try {
       if (operation === 'refresh') {
@@ -138,15 +177,16 @@ export class App implements OnInit {
       } else {
         await firstValueFrom(this.api.rebuildSidecar(sidecar.id));
       }
-      await this.loadSidecars(sidecar.id);
+      await this.loadSidecars(sidecar.id, { showLoading: false, loadDetails: false });
     } catch (error) {
       this.detailError = this.describeError(error);
     } finally {
-      this.operating = false;
+      this.operating.set(false);
     }
   }
 
   async loadDetails() {
+    const token = ++this.detailLoadToken;
     const sidecar = this.selectedSidecar();
     this.files.set([]);
     this.errors.set([]);
@@ -155,28 +195,37 @@ export class App implements OnInit {
     this.searchError = '';
     this.detailError = '';
     if (!sidecar) {
+      this.loadingDetails.set(false);
       return;
     }
 
-    this.loadingDetails = true;
+    this.loadingDetails.set(true);
     try {
       const [files, errors, mcpConfig] = await Promise.all([
         firstValueFrom(this.api.listFiles(sidecar.id)),
         firstValueFrom(this.api.listErrors(sidecar.id)),
         firstValueFrom(this.api.getMcpConfig(sidecar.id)),
       ]);
+      if (token !== this.detailLoadToken) {
+        return;
+      }
       this.files.set(files.files);
       this.errors.set(errors.errors);
       this.mcpConfig.set(mcpConfig);
     } catch (error) {
+      if (token !== this.detailLoadToken) {
+        return;
+      }
       this.detailError = this.describeError(error);
     } finally {
-      this.loadingDetails = false;
+      if (token === this.detailLoadToken) {
+        this.loadingDetails.set(false);
+      }
     }
   }
 
   async loadDirectory(path?: string | null) {
-    this.browsing = true;
+    this.browsing.set(true);
     this.browseError = '';
     try {
       const browse = await firstValueFrom(this.api.browseDirectories(path ?? undefined));
@@ -185,7 +234,7 @@ export class App implements OnInit {
     } catch (error) {
       this.browseError = this.describeError(error);
     } finally {
-      this.browsing = false;
+      this.browsing.set(false);
     }
   }
 
@@ -200,7 +249,7 @@ export class App implements OnInit {
       return;
     }
 
-    this.searching = true;
+    this.searching.set(true);
     this.searchError = '';
     try {
       const response = await firstValueFrom(
@@ -216,7 +265,7 @@ export class App implements OnInit {
       this.searchError = this.describeError(error);
       this.searchResults.set([]);
     } finally {
-      this.searching = false;
+      this.searching.set(false);
     }
   }
 
@@ -245,6 +294,49 @@ export class App implements OnInit {
   private cleanOptional(value: string) {
     const trimmed = value.trim();
     return trimmed ? trimmed : undefined;
+  }
+
+  private syncIndexingPoll() {
+    if (this.sidecars().some((sidecar) => sidecar.indexing_status === 'indexing')) {
+      this.scheduleIndexingPoll();
+      return;
+    }
+    this.clearIndexingPoll();
+  }
+
+  private scheduleIndexingPoll() {
+    if (this.indexingPollHandle) {
+      return;
+    }
+    this.indexingPollHandle = setTimeout(() => {
+      this.indexingPollHandle = null;
+      void this.pollIndexingState();
+    }, this.indexingPollMs);
+  }
+
+  private async pollIndexingState() {
+    if (this.pollingIndexState) {
+      this.scheduleIndexingPoll();
+      return;
+    }
+    this.pollingIndexState = true;
+    try {
+      await this.loadSidecars(undefined, { showLoading: false, loadDetails: false });
+    } finally {
+      this.pollingIndexState = false;
+    }
+  }
+
+  private clearIndexingPoll() {
+    if (this.indexingPollHandle) {
+      clearTimeout(this.indexingPollHandle);
+      this.indexingPollHandle = null;
+    }
+  }
+
+  private cancelDetailLoading() {
+    this.detailLoadToken++;
+    this.loadingDetails.set(false);
   }
 
   private describeError(error: unknown) {

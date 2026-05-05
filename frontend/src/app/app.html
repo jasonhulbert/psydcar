@@ -4,7 +4,7 @@
       <p class="eyebrow">Knowledge Sidecar</p>
       <h1>Local dashboard</h1>
     </div>
-    <button class="ghost" type="button" (click)="loadSidecars()" [disabled]="loadingSidecars">
+    <button class="ghost" type="button" (click)="loadSidecars()" [disabled]="loadingSidecars()">
       Refresh
     </button>
   </header>
@@ -20,7 +20,7 @@
         <span>{{ sidecars().length }}</span>
       </div>
 
-      @if (loadingSidecars) {
+      @if (loadingSidecars()) {
         <div class="state">Loading sidecars...</div>
       } @else if (sidecars().length === 0) {
         <div class="state">No sidecars yet.</div>
@@ -73,8 +73,8 @@
             [(ngModel)]="createForm.maxFileSizeBytes"
           />
         </label>
-        <button class="primary" type="submit" [disabled]="creating">
-          {{ creating ? 'Creating...' : 'Create sidecar' }}
+        <button class="primary" type="submit" [disabled]="creating()">
+          {{ creating() ? 'Creating...' : 'Create sidecar' }}
         </button>
         @if (createError) {
           <p class="form-error">{{ createError }}</p>
@@ -84,7 +84,7 @@
       <section class="browser" aria-label="Directory browser">
         <div class="panel-heading">
           <h2>Browse</h2>
-          <button class="link-button" type="button" (click)="loadDirectory(browsePath)" [disabled]="browsing">
+          <button class="link-button" type="button" (click)="loadDirectory(browsePath)" [disabled]="browsing()">
             Go
           </button>
         </div>
@@ -98,7 +98,7 @@
         @if (browseError) {
           <p class="form-error">{{ browseError }}</p>
         }
-        @if (browsing) {
+        @if (browsing()) {
           <div class="state">Loading directories...</div>
         } @else if (directoryBrowse(); as browse) {
           <div class="browser-actions">
@@ -128,11 +128,21 @@
             <p class="path">{{ sidecar.root_path }}</p>
           </div>
           <div class="actions">
-            <button type="button" class="ghost" (click)="runOperation('refresh')" [disabled]="operating">
-              Refresh index
+            <button
+              type="button"
+              class="ghost"
+              (click)="runOperation('refresh')"
+              [disabled]="operating() || selectedIsIndexing()"
+            >
+              {{ selectedIsIndexing() ? 'Indexing...' : 'Refresh index' }}
             </button>
-            <button type="button" class="primary" (click)="runOperation('rebuild')" [disabled]="operating">
-              Rebuild
+            <button
+              type="button"
+              class="primary"
+              (click)="runOperation('rebuild')"
+              [disabled]="operating() || selectedIsIndexing()"
+            >
+              {{ selectedIsIndexing() ? 'Indexing...' : 'Rebuild' }}
             </button>
           </div>
         </section>
@@ -160,8 +170,8 @@
           </div>
         </section>
 
-        @if (operating) {
-          <p class="notice">Index operation queued. Refresh the dashboard to see updated counts.</p>
+        @if (operating() || selectedIsIndexing()) {
+          <p class="notice">Indexing is running. Counts and errors will update automatically.</p>
         }
         @if (detailError) {
           <p class="alert">{{ detailError }}</p>
@@ -175,7 +185,7 @@
         </nav>
 
         <section class="content-panel">
-          @if (loadingDetails) {
+          @if (loadingDetails()) {
             <div class="state">Loading sidecar details...</div>
           } @else {
             @switch (activeTab) {
@@ -242,8 +252,8 @@
                     min="1"
                     [(ngModel)]="searchLimit"
                   />
-                  <button class="primary" type="submit" [disabled]="searching">
-                    {{ searching ? 'Searching...' : 'Search' }}
+                  <button class="primary" type="submit" [disabled]="searching()">
+                    {{ searching() ? 'Searching...' : 'Search' }}
                   </button>
                 </form>
                 @if (searchError) {

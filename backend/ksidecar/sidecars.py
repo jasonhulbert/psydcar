@@ -197,6 +197,16 @@ class SidecarRegistry:
         self._write_metadata(updated)
         return updated
 
+    def mark_indexing(self, sidecar_id: str) -> Sidecar:
+        sidecar = self.get(sidecar_id)
+        updated = replace(
+            sidecar,
+            updated_at=utc_now(),
+            indexing_status="indexing",
+        )
+        self._write_metadata(updated)
+        return updated
+
     def storage_dir(self, sidecar_id: str) -> Path:
         return self.sidecars_root / sidecar_id
 

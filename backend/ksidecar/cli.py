@@ -20,6 +20,7 @@ from ksidecar.index import (
     rebuild_sidecar_index,
     refresh_sidecar_index,
 )
+from ksidecar.mcp import McpError, parse_sidecar_ids, run_mcp_server
 from ksidecar.paths import ensure_app_storage_root, sidecars_root
 from ksidecar.search import DEFAULT_SEARCH_LIMIT, SearchError, search_sidecar
 from ksidecar.sidecars import Sidecar, SidecarError, SidecarRegistry
@@ -103,6 +104,17 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("sidecar_id", help="Sidecar id to inspect.")
     add_json_option(status_parser)
 
+    mcp_parser = subparsers.add_parser(
+        "mcp",
+        help="Start a read-only MCP server over stdio.",
+        description="Start a read-only MCP server over stdio.",
+    )
+    mcp_parser.add_argument(
+        "--sidecars",
+        required=True,
+        help="Comma-separated sidecar ids to expose, for example frontend,backend.",
+    )
+
     paths_parser = subparsers.add_parser(
         "paths",
         help="Show app-managed storage paths.",
@@ -122,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         return run_command(args, parser)
-    except (OSError, SidecarError, SearchError) as exc:
+    except (OSError, SidecarError, SearchError, McpError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -199,6 +211,10 @@ def run_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
             print_json(payload)
         else:
             print(format_status(sidecar, error_count=len(errors)))
+        return 0
+
+    if args.command == "mcp":
+        run_mcp_server(registry, parse_sidecar_ids(args.sidecars))
         return 0
 
     if args.command == "paths":

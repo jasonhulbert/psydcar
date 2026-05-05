@@ -111,6 +111,32 @@ def test_api_rebuild_refresh_files_errors_mcp_config_and_search(tmp_path):
     assert client.get("/api/sidecars").json()[0]["indexed_file_count"] == 1
 
 
+def test_api_exposes_inactive_watch_status(tmp_path):
+    client = make_client(tmp_path)
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+
+    assert client.post(
+        "/api/sidecars",
+        json={"id": "docs", "source_root": str(source_root)},
+    ).status_code == 201
+
+    response = client.get("/api/sidecars/docs/watch")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "sidecar_id": "docs",
+        "active": False,
+        "debounce_seconds": 1.5,
+        "pending_path_count": 0,
+        "last_event_at": None,
+        "last_refresh_at": None,
+        "last_batch_size": 0,
+        "refresh_count": 0,
+        "last_error": None,
+    }
+
+
 def test_api_validation_and_not_found_failures(tmp_path):
     client = make_client(tmp_path)
 

@@ -33,6 +33,14 @@ def test_help_includes_mcp_command(capsys):
     assert "Start a read-only MCP server over stdio." in capsys.readouterr().out
 
 
+def test_help_includes_watch_command(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["watch", "--help"])
+
+    assert exc_info.value.code == 0
+    assert "Watch sidecar source roots" in capsys.readouterr().out
+
+
 def test_sidecar_create_list_and_delete_json(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("KSIDECAR_HOME", str(tmp_path / "storage"))
     source_root = tmp_path / "source"

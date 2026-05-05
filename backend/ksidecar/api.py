@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -30,6 +31,7 @@ from ksidecar.sidecars import (
     SidecarNotFoundError,
     SidecarRegistry,
 )
+from ksidecar.watcher import SidecarWatchService, WatcherError, WatchStatus
 
 
 class SidecarConfigResponse(BaseModel):
@@ -102,6 +104,18 @@ class SearchResponse(BaseModel):
     results: list[dict[str, Any]]
 
 
+class WatchStatusResponse(BaseModel):
+    sidecar_id: str
+    active: bool
+    debounce_seconds: float
+    pending_path_count: int
+    last_event_at: str | None
+    last_refresh_at: str | None
+    last_batch_size: int
+    refresh_count: int
+    last_error: str | None
+
+
 class HealthResponse(BaseModel):
     name: str
     version: str
@@ -121,12 +135,24 @@ class DirectoryBrowseResponse(BaseModel):
 router = APIRouter()
 
 
-def create_app(config: AppConfig | None = None) -> FastAPI:
+def create_app(config: AppConfig | None = None, *, start_watchers: bool = False) -> FastAPI:
     """Create the dashboard API application."""
 
     app_config = config or AppConfig.load()
-    app = FastAPI(title="Knowledge Sidecar API", version=__version__)
+    watch_service = SidecarWatchService(SidecarRegistry(app_config.storage_root))
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if start_watchers:
+            watch_service.start_all()
+        try:
+            yield
+        finally:
+            watch_service.stop_all()
+
+    app = FastAPI(title="Knowledge Sidecar API", version=__version__, lifespan=lifespan)
     app.state.config = app_config
+    app.state.watch_service = watch_service
     app.include_router(router)
     app.dependency_overrides[get_registry] = make_registry_dependency(app_config)
 
@@ -153,6 +179,13 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     @app.exception_handler(SidecarError)
     async def sidecar_error_handler(_: Any, exc: SidecarError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
+    @app.exception_handler(WatcherError)
+    async def watcher_error_handler(_: Any, exc: WatcherError) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"detail": str(exc)},
@@ -253,6 +286,36 @@ def rebuild_sidecar(
     return OperationResponse(sidecar_id=sidecar_id, operation="rebuild", status="queued")
 
 
+@router.get("/api/sidecars/{sidecar_id}/watch", response_model=WatchStatusResponse)
+def watch_status(
+    sidecar_id: str,
+    request: Request,
+    registry: RegistryDependency,
+) -> WatchStatusResponse:
+    registry.get(sidecar_id)
+    return watch_status_to_response(request.app.state.watch_service.status(sidecar_id))
+
+
+@router.post("/api/sidecars/{sidecar_id}/watch", response_model=WatchStatusResponse)
+def start_watch(
+    sidecar_id: str,
+    request: Request,
+    registry: RegistryDependency,
+) -> WatchStatusResponse:
+    registry.get(sidecar_id)
+    return watch_status_to_response(request.app.state.watch_service.start(sidecar_id))
+
+
+@router.delete("/api/sidecars/{sidecar_id}/watch", response_model=WatchStatusResponse)
+def stop_watch(
+    sidecar_id: str,
+    request: Request,
+    registry: RegistryDependency,
+) -> WatchStatusResponse:
+    registry.get(sidecar_id)
+    return watch_status_to_response(request.app.state.watch_service.stop(sidecar_id))
+
+
 @router.get("/api/sidecars/{sidecar_id}/files", response_model=FilesResponse)
 def list_files(sidecar_id: str, registry: RegistryDependency) -> FilesResponse:
     sidecar = registry.get(sidecar_id)
@@ -338,6 +401,20 @@ def indexing_error_to_dict(error: IndexingErrorRecord) -> dict[str, str]:
 
 def search_result_to_dict(result: SearchResult) -> dict[str, Any]:
     return asdict(result)
+
+
+def watch_status_to_response(status: WatchStatus) -> WatchStatusResponse:
+    return WatchStatusResponse(
+        sidecar_id=status.sidecar_id,
+        active=status.active,
+        debounce_seconds=status.debounce_seconds,
+        pending_path_count=status.pending_path_count,
+        last_event_at=status.last_event_at.isoformat() if status.last_event_at else None,
+        last_refresh_at=status.last_refresh_at.isoformat() if status.last_refresh_at else None,
+        last_batch_size=status.last_batch_size,
+        refresh_count=status.refresh_count,
+        last_error=status.last_error,
+    )
 
 
 def make_registry_dependency(config: AppConfig) -> Callable[[], SidecarRegistry]:

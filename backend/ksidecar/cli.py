@@ -24,6 +24,12 @@ from ksidecar.mcp import McpError, parse_sidecar_ids, run_mcp_server
 from ksidecar.paths import ensure_app_storage_root, sidecars_root
 from ksidecar.search import DEFAULT_SEARCH_LIMIT, SearchError, search_sidecar
 from ksidecar.sidecars import Sidecar, SidecarError, SidecarRegistry
+from ksidecar.watcher import (
+    DEFAULT_WATCH_DEBOUNCE_SECONDS,
+    SidecarWatchService,
+    WatcherError,
+    WatchStatus,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -104,6 +110,24 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser.add_argument("sidecar_id", help="Sidecar id to inspect.")
     add_json_option(status_parser)
 
+    watch_parser = subparsers.add_parser(
+        "watch",
+        help="Watch sidecar source roots and refresh indexes after changes.",
+        description="Watch sidecar source roots and refresh indexes after changes.",
+    )
+    watch_parser.add_argument(
+        "sidecar_id",
+        nargs="?",
+        help="Sidecar id to watch. Omit to watch every registered sidecar.",
+    )
+    watch_parser.add_argument(
+        "--debounce",
+        type=float,
+        default=DEFAULT_WATCH_DEBOUNCE_SECONDS,
+        help="Debounce window in seconds.",
+    )
+    add_json_option(watch_parser)
+
     mcp_parser = subparsers.add_parser(
         "mcp",
         help="Start a read-only MCP server over stdio.",
@@ -134,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         return run_command(args, parser)
-    except (OSError, SidecarError, SearchError, McpError) as exc:
+    except (OSError, SidecarError, SearchError, McpError, WatcherError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -213,6 +237,23 @@ def run_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
             print(format_status(sidecar, error_count=len(errors)))
         return 0
 
+    if args.command == "watch":
+        service = SidecarWatchService(registry, debounce_seconds=args.debounce)
+        sidecar_ids = (
+            [args.sidecar_id] if args.sidecar_id else [sidecar.id for sidecar in registry.list()]
+        )
+        if not sidecar_ids:
+            print("No sidecars registered.")
+            return 0
+        if args.json:
+            statuses = [service.start(sidecar_id) for sidecar_id in sidecar_ids]
+            print_json(statuses)
+            service.stop_all()
+            return 0
+        print(f"Watching {', '.join(sidecar_ids)}. Press Ctrl+C to stop.")
+        service.run_until_interrupted(sidecar_ids)
+        return 0
+
     if args.command == "mcp":
         run_mcp_server(registry, parse_sidecar_ids(args.sidecars))
         return 0
@@ -246,7 +287,10 @@ def to_jsonable(value: Any) -> Any:
         return str(value)
     if isinstance(value, Sidecar):
         return value.to_json_dict()
-    if isinstance(value, RebuildResult | RefreshResult | SearchResult | IndexingErrorRecord):
+    if isinstance(
+        value,
+        RebuildResult | RefreshResult | SearchResult | IndexingErrorRecord | WatchStatus,
+    ):
         return {key: to_jsonable(item) for key, item in vars(value).items()}
     if isinstance(value, list | tuple):
         return [to_jsonable(item) for item in value]

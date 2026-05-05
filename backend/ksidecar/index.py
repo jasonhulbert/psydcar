@@ -209,6 +209,28 @@ def list_sidecar_indexing_errors(
         return list_indexing_errors(connection)
 
 
+def record_sidecar_indexing_error(
+    registry: SidecarRegistry,
+    sidecar_id: str,
+    error: IndexingErrorRecord,
+) -> None:
+    """Persist a service-level indexing error and sync sidecar status counts."""
+
+    sidecar = registry.get(sidecar_id)
+    with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
+        init_schema(connection)
+        insert_indexing_error(connection, error)
+        document_count, chunk_count, error_count = index_counts(connection)
+        connection.commit()
+    registry.update_indexing_status(
+        sidecar.id,
+        indexing_status=indexing_status_for_error_count(error_count),
+        indexed_file_count=document_count,
+        chunk_count=chunk_count,
+        error_count=error_count,
+    )
+
+
 def semantic_search_sidecar(
     registry: SidecarRegistry,
     sidecar_id: str,

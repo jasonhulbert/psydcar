@@ -34,6 +34,23 @@ def test_api_create_list_delete_sidecar_for_arbitrary_source_root(tmp_path):
     assert client.get("/api/sidecars").json() == []
 
 
+def test_api_browse_backend_directories(tmp_path):
+    client = make_client(tmp_path)
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+
+    response = client.get("/api/directories", params={"path": str(tmp_path)})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["path"] == str(tmp_path.resolve())
+    assert payload["parent_path"] == str(tmp_path.resolve().parent)
+    assert {"name": "source", "path": str(source_root.resolve())} in payload["entries"]
+
+    missing_response = client.get("/api/directories", params={"path": str(tmp_path / "missing")})
+    assert missing_response.status_code == 400
+
+
 def test_api_rebuild_refresh_files_errors_mcp_config_and_search(tmp_path):
     client = make_client(tmp_path)
     source_root = tmp_path / "source"
@@ -130,4 +147,3 @@ def test_api_validation_and_not_found_failures(tmp_path):
         params={"q": "needle", "limit": 0},
     )
     assert invalid_limit_response.status_code == 422
-

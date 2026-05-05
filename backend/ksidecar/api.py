@@ -107,6 +107,17 @@ class HealthResponse(BaseModel):
     version: str
 
 
+class DirectoryEntryResponse(BaseModel):
+    name: str
+    path: str
+
+
+class DirectoryBrowseResponse(BaseModel):
+    path: str
+    parent_path: str | None
+    entries: list[DirectoryEntryResponse]
+
+
 router = APIRouter()
 
 
@@ -167,6 +178,29 @@ RegistryDependency = Annotated[SidecarRegistry, Depends(get_registry)]
 @router.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(name="ksidecar", version=__version__)
+
+
+@router.get("/api/directories", response_model=DirectoryBrowseResponse)
+def browse_directories(path: str | None = None) -> DirectoryBrowseResponse:
+    current = Path(path).expanduser() if path else Path.home()
+    current = current.resolve()
+    if not current.is_dir():
+        raise OSError(f"directory does not exist: {current}")
+
+    entries: list[DirectoryEntryResponse] = []
+    for child in sorted(current.iterdir(), key=lambda candidate: candidate.name.casefold()):
+        try:
+            if child.is_dir():
+                entries.append(DirectoryEntryResponse(name=child.name, path=str(child.resolve())))
+        except OSError:
+            continue
+
+    parent = current.parent if current.parent != current else None
+    return DirectoryBrowseResponse(
+        path=str(current),
+        parent_path=str(parent) if parent else None,
+        entries=entries,
+    )
 
 
 @router.get("/api/sidecars", response_model=list[SidecarResponse])

@@ -1,0 +1,281 @@
+<main class="shell">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">Knowledge Sidecar</p>
+      <h1>Local dashboard</h1>
+    </div>
+    <button class="ghost" type="button" (click)="loadSidecars()" [disabled]="loadingSidecars">
+      Refresh
+    </button>
+  </header>
+
+  @if (appError) {
+    <p class="alert">{{ appError }}</p>
+  }
+
+  <section class="layout">
+    <aside class="sidebar" aria-label="Sidecars">
+      <div class="panel-heading">
+        <h2>Sidecars</h2>
+        <span>{{ sidecars().length }}</span>
+      </div>
+
+      @if (loadingSidecars) {
+        <div class="state">Loading sidecars...</div>
+      } @else if (sidecars().length === 0) {
+        <div class="state">No sidecars yet.</div>
+      } @else {
+        <div class="sidecar-list">
+          @for (sidecar of sidecars(); track sidecar.id) {
+            <button
+              class="sidecar-item"
+              type="button"
+              [class.active]="sidecar.id === selectedId()"
+              (click)="selectSidecar(sidecar.id)"
+            >
+              <span class="sidecar-name">{{ sidecar.name }}</span>
+              <span class="sidecar-path">{{ sidecar.root_path }}</span>
+              <span class="status" [class.busy]="sidecar.indexing_status === 'indexing'">
+                {{ sidecar.indexing_status }}
+              </span>
+            </button>
+          }
+        </div>
+      }
+
+      <form class="create-form" (ngSubmit)="createSidecar()">
+        <h2>Create</h2>
+        <label>
+          Source path
+          <input
+            name="sourceRoot"
+            [(ngModel)]="createForm.sourceRoot"
+            placeholder="/Users/me/project"
+            autocomplete="off"
+          />
+        </label>
+        <div class="two-up">
+          <label>
+            Name
+            <input name="name" [(ngModel)]="createForm.name" placeholder="Docs" />
+          </label>
+          <label>
+            ID
+            <input name="id" [(ngModel)]="createForm.id" placeholder="docs" />
+          </label>
+        </div>
+        <label>
+          Max file bytes
+          <input
+            name="maxFileSizeBytes"
+            type="number"
+            min="1"
+            [(ngModel)]="createForm.maxFileSizeBytes"
+          />
+        </label>
+        <button class="primary" type="submit" [disabled]="creating">
+          {{ creating ? 'Creating...' : 'Create sidecar' }}
+        </button>
+        @if (createError) {
+          <p class="form-error">{{ createError }}</p>
+        }
+      </form>
+
+      <section class="browser" aria-label="Directory browser">
+        <div class="panel-heading">
+          <h2>Browse</h2>
+          <button class="link-button" type="button" (click)="loadDirectory(browsePath)" [disabled]="browsing">
+            Go
+          </button>
+        </div>
+        <input
+          name="browsePath"
+          [(ngModel)]="browsePath"
+          (keyup.enter)="loadDirectory(browsePath)"
+          placeholder="Directory path"
+          autocomplete="off"
+        />
+        @if (browseError) {
+          <p class="form-error">{{ browseError }}</p>
+        }
+        @if (browsing) {
+          <div class="state">Loading directories...</div>
+        } @else if (directoryBrowse(); as browse) {
+          <div class="browser-actions">
+            <button class="ghost" type="button" (click)="useDirectory(browse.path)">Use current</button>
+            @if (browse.parent_path) {
+              <button class="ghost" type="button" (click)="loadDirectory(browse.parent_path)">Up</button>
+            }
+          </div>
+          <div class="directory-list">
+            @for (entry of browse.entries; track entry.path) {
+              <button type="button" (click)="loadDirectory(entry.path)">
+                <span>{{ entry.name }}</span>
+                <small>{{ entry.path }}</small>
+              </button>
+            }
+          </div>
+        }
+      </section>
+    </aside>
+
+    <section class="workspace">
+      @if (selectedSidecar(); as sidecar) {
+        <section class="status-panel">
+          <div>
+            <p class="eyebrow">Status</p>
+            <h2>{{ sidecar.name }}</h2>
+            <p class="path">{{ sidecar.root_path }}</p>
+          </div>
+          <div class="actions">
+            <button type="button" class="ghost" (click)="runOperation('refresh')" [disabled]="operating">
+              Refresh index
+            </button>
+            <button type="button" class="primary" (click)="runOperation('rebuild')" [disabled]="operating">
+              Rebuild
+            </button>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="Sidecar status">
+          <div>
+            <span>Status</span>
+            <strong>{{ sidecar.indexing_status }}</strong>
+          </div>
+          <div>
+            <span>Indexed files</span>
+            <strong>{{ sidecar.indexed_file_count | number }}</strong>
+          </div>
+          <div>
+            <span>Chunks</span>
+            <strong>{{ sidecar.chunk_count | number }}</strong>
+          </div>
+          <div>
+            <span>Errors</span>
+            <strong>{{ sidecar.error_count | number }}</strong>
+          </div>
+          <div>
+            <span>Last refresh</span>
+            <strong>{{ sidecar.last_refresh_at ? (sidecar.last_refresh_at | date: 'short') : 'Never' }}</strong>
+          </div>
+        </section>
+
+        @if (operating) {
+          <p class="notice">Index operation queued. Refresh the dashboard to see updated counts.</p>
+        }
+        @if (detailError) {
+          <p class="alert">{{ detailError }}</p>
+        }
+
+        <nav class="tabs" aria-label="Dashboard views">
+          <button type="button" [class.active]="activeTab === 'files'" (click)="activeTab = 'files'">Files</button>
+          <button type="button" [class.active]="activeTab === 'errors'" (click)="activeTab = 'errors'">Errors</button>
+          <button type="button" [class.active]="activeTab === 'mcp'" (click)="activeTab = 'mcp'">MCP config</button>
+          <button type="button" [class.active]="activeTab === 'search'" (click)="activeTab = 'search'">Search</button>
+        </nav>
+
+        <section class="content-panel">
+          @if (loadingDetails) {
+            <div class="state">Loading sidecar details...</div>
+          } @else {
+            @switch (activeTab) {
+              @case ('files') {
+                <div class="panel-heading">
+                  <h2>Files</h2>
+                  <span>{{ files().length }}</span>
+                </div>
+                @if (files().length === 0) {
+                  <div class="state">No files are visible to this sidecar yet.</div>
+                } @else {
+                  <div class="table-list">
+                    @for (file of files(); track file.relative_path) {
+                      <div class="row">
+                        <span class="main-text">{{ file.relative_path }}</span>
+                        <span>{{ file.extension || 'none' }}</span>
+                        <span>{{ file.size_bytes | number }} bytes</span>
+                      </div>
+                    }
+                  </div>
+                }
+              }
+              @case ('errors') {
+                <div class="panel-heading">
+                  <h2>Errors</h2>
+                  <span>{{ errors().length }}</span>
+                </div>
+                @if (errors().length === 0) {
+                  <div class="state">No indexing errors recorded.</div>
+                } @else {
+                  <div class="error-list">
+                    @for (error of errors(); track $index) {
+                      <pre>{{ error | json }}</pre>
+                    }
+                  </div>
+                }
+              }
+              @case ('mcp') {
+                <div class="panel-heading">
+                  <h2>MCP config</h2>
+                  <button class="primary" type="button" (click)="copyMcpConfig()">
+                    {{ copyStatus || 'Copy config' }}
+                  </button>
+                </div>
+                <pre class="code-block">{{ formattedMcpConfig() }}</pre>
+              }
+              @case ('search') {
+                <form class="search-form" (ngSubmit)="search()">
+                  <input
+                    name="searchQuery"
+                    [(ngModel)]="searchQuery"
+                    placeholder="Search this sidecar"
+                    autocomplete="off"
+                  />
+                  <select name="searchMode" [(ngModel)]="searchMode">
+                    <option value="hybrid">Hybrid</option>
+                    <option value="keyword">Keyword</option>
+                    <option value="semantic">Semantic</option>
+                  </select>
+                  <input
+                    class="limit-input"
+                    name="searchLimit"
+                    type="number"
+                    min="1"
+                    [(ngModel)]="searchLimit"
+                  />
+                  <button class="primary" type="submit" [disabled]="searching">
+                    {{ searching ? 'Searching...' : 'Search' }}
+                  </button>
+                </form>
+                @if (searchError) {
+                  <p class="form-error">{{ searchError }}</p>
+                }
+                @if (searchResults().length === 0) {
+                  <div class="state">No search results to preview.</div>
+                } @else {
+                  <div class="results">
+                    @for (result of searchResults(); track $index) {
+                      <article>
+                        <strong>{{ result.relative_path }}</strong>
+                        @if (result.score !== undefined) {
+                          <span>{{ result.score | number: '1.2-4' }}</span>
+                        }
+                        @if (result.snippet) {
+                          <p>{{ result.snippet }}</p>
+                        }
+                      </article>
+                    }
+                  </div>
+                }
+              }
+            }
+          }
+        </section>
+      } @else {
+        <section class="empty-main">
+          <h2>No sidecar selected</h2>
+          <p>Create a sidecar from any backend-visible local directory, or select one from the list.</p>
+        </section>
+      }
+    </section>
+  </section>
+</main>

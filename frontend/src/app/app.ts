@@ -13,15 +13,30 @@ import {
   SearchResult,
   Sidecar,
 } from './api.service';
+import { MetricCardComponent } from './ui/metric-card.component';
+import { PanelComponent } from './ui/panel.component';
+import { SectionHeaderComponent } from './ui/section-header.component';
+import { StatusBadgeComponent } from './ui/status-badge.component';
+import { cn } from './utils/cn';
 
 type SearchMode = 'keyword' | 'semantic' | 'hybrid';
 type Tab = 'files' | 'errors' | 'mcp' | 'search';
+type MetricTone = 'neutral' | 'good' | 'warn' | 'danger';
 
 @Component({
   selector: 'app-root',
-  imports: [CommonModule, FormsModule],
+  imports: [
+    CommonModule,
+    FormsModule,
+    MetricCardComponent,
+    PanelComponent,
+    SectionHeaderComponent,
+    StatusBadgeComponent,
+  ],
+  host: {
+    class: 'block min-h-screen bg-slate-950 font-sans text-slate-100',
+  },
   templateUrl: './app.html',
-  styleUrl: './app.css',
 })
 export class App implements OnInit, OnDestroy {
   private readonly api = inject(ApiService);
@@ -39,6 +54,27 @@ export class App implements OnInit, OnDestroy {
   readonly selectedIsIndexing = computed(
     () => this.selectedSidecar()?.indexing_status === 'indexing',
   );
+  readonly totalIndexedFiles = computed(() =>
+    this.sidecars().reduce((total, sidecar) => total + sidecar.indexed_file_count, 0),
+  );
+  readonly totalChunks = computed(() =>
+    this.sidecars().reduce((total, sidecar) => total + sidecar.chunk_count, 0),
+  );
+  readonly totalErrors = computed(() =>
+    this.sidecars().reduce((total, sidecar) => total + sidecar.error_count, 0),
+  );
+  readonly indexingCount = computed(
+    () => this.sidecars().filter((sidecar) => sidecar.indexing_status === 'indexing').length,
+  );
+  readonly serviceSummaryTone = computed<MetricTone>(() => {
+    if (this.totalErrors() > 0) {
+      return 'danger';
+    }
+    if (this.indexingCount() > 0) {
+      return 'warn';
+    }
+    return 'good';
+  });
 
   readonly files = signal<FileEntry[]>([]);
   readonly errors = signal<IndexingError[]>([]);
@@ -281,6 +317,49 @@ export class App implements OnInit, OnDestroy {
 
   formattedMcpConfig() {
     return JSON.stringify(this.mcpConfig()?.config ?? {}, null, 2);
+  }
+
+  searchResultPreview(result: SearchResult) {
+    return result.preview ?? result.snippet ?? '';
+  }
+
+  searchResultLocation(result: SearchResult) {
+    if (result.start_line && result.end_line) {
+      return `${result.relative_path}:${result.start_line}-${result.end_line}`;
+    }
+    if (result.line_number) {
+      return `${result.relative_path}:${result.line_number}`;
+    }
+    return result.relative_path;
+  }
+
+  formattedSearchResult(result: SearchResult) {
+    return JSON.stringify(result, null, 2);
+  }
+
+  tabButtonClasses(tab: Tab) {
+    return cn(
+      'min-h-10 rounded-md px-3 text-sm font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300 disabled:pointer-events-none disabled:opacity-50',
+      this.activeTab === tab
+        ? 'bg-teal-400 text-slate-950 shadow-sm shadow-teal-950/30'
+        : 'border border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-700 hover:bg-slate-900 hover:text-slate-50',
+    );
+  }
+
+  inputClasses() {
+    return 'min-h-10 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 shadow-sm shadow-black/20 placeholder:text-slate-500 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-300/20';
+  }
+
+  buttonClasses(variant: 'primary' | 'secondary' | 'compact' = 'secondary') {
+    return cn(
+      'inline-flex min-h-10 items-center justify-center rounded-md px-3 py-2 text-sm font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300 disabled:pointer-events-none disabled:opacity-50',
+      variant === 'primary' &&
+        'border border-teal-300 bg-teal-400 text-slate-950 shadow-sm shadow-teal-950/30 hover:bg-teal-300',
+      variant === 'secondary' &&
+        'border border-slate-700 bg-slate-900 text-slate-200 shadow-sm shadow-black/20 hover:border-slate-600 hover:bg-slate-800 hover:text-slate-50',
+      variant === 'compact' &&
+        'min-h-8 border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-200 hover:border-slate-600 hover:bg-slate-800',
+    );
   }
 
   trackSidecar(_: number, sidecar: Sidecar) {

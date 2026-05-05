@@ -1,290 +1,345 @@
-<main class="shell">
-  <header class="topbar">
-    <div>
-      <p class="eyebrow">Knowledge Sidecar</p>
-      <h1>Local dashboard</h1>
+<main class="mx-auto grid w-full max-w-[1480px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
+  <header class="flex flex-col gap-4 rounded-lg border border-slate-800 bg-slate-950 p-4 shadow-sm shadow-black/20 sm:p-5 lg:flex-row lg:items-center lg:justify-between">
+    <div class="min-w-0">
+      <p class="mb-1 text-xs font-bold uppercase text-slate-400">Knowledge Sidecar</p>
+      <h1 class="text-3xl font-semibold text-slate-50 sm:text-4xl">Service dashboard</h1>
+      <p class="mt-2 max-w-3xl text-sm text-slate-400">
+        Manage local sidecar indexes, inspect service health, browse source directories, and test retrieval.
+      </p>
     </div>
-    <button class="ghost" type="button" (click)="loadSidecars()" [disabled]="loadingSidecars()">
+    <button [class]="buttonClasses()" type="button" (click)="loadSidecars()" [disabled]="loadingSidecars()">
       Refresh
     </button>
   </header>
 
   @if (appError) {
-    <p class="alert">{{ appError }}</p>
+    <p class="rounded-lg border border-rose-400/40 bg-rose-400/10 p-3 text-sm font-medium text-rose-200">
+      {{ appError }}
+    </p>
   }
 
-  <section class="layout">
-    <aside class="sidebar" aria-label="Sidecars">
-      <div class="panel-heading">
-        <h2>Sidecars</h2>
-        <span>{{ sidecars().length }}</span>
-      </div>
+  <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Fleet summary">
+    <app-metric-card label="Sidecars" [value]="sidecars().length" />
+    <app-metric-card label="Indexed files" [value]="(totalIndexedFiles() | number) ?? '0'" />
+    <app-metric-card label="Chunks" [value]="(totalChunks() | number) ?? '0'" />
+    <app-metric-card
+      label="Service health"
+      [value]="indexingCount() ? indexingCount() + ' indexing' : totalErrors() ? totalErrors() + ' errors' : 'Ready'"
+      [tone]="serviceSummaryTone()"
+    />
+  </section>
 
-      @if (loadingSidecars()) {
-        <div class="state">Loading sidecars...</div>
-      } @else if (sidecars().length === 0) {
-        <div class="state">No sidecars yet.</div>
-      } @else {
-        <div class="sidecar-list">
-          @for (sidecar of sidecars(); track sidecar.id) {
-            <button
-              class="sidecar-item"
-              type="button"
-              [class.active]="sidecar.id === selectedId()"
-              (click)="selectSidecar(sidecar.id)"
-            >
-              <span class="sidecar-name">{{ sidecar.name }}</span>
-              <span class="sidecar-path">{{ sidecar.root_path }}</span>
-              <span class="status" [class.busy]="sidecar.indexing_status === 'indexing'">
-                {{ sidecar.indexing_status }}
-              </span>
-            </button>
+  <section class="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
+    <aside class="grid content-start gap-4" aria-label="Sidecars">
+      <app-panel>
+        <div class="grid gap-4">
+          <app-section-header title="Sidecars" [count]="sidecars().length" />
+
+          @if (loadingSidecars()) {
+            <div class="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">Loading sidecars...</div>
+          } @else if (sidecars().length === 0) {
+            <div class="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">No sidecars yet.</div>
+          } @else {
+            <div class="grid gap-2">
+              @for (sidecar of sidecars(); track sidecar.id) {
+                <button
+                  type="button"
+                  class="grid w-full min-w-0 gap-2 rounded-lg border p-3 text-left transition hover:border-teal-400/70 hover:bg-teal-400/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300"
+                  [class.border-teal-300]="sidecar.id === selectedId()"
+                  [class.bg-teal-400/10]="sidecar.id === selectedId()"
+                  [class.border-slate-800]="sidecar.id !== selectedId()"
+                  [class.bg-slate-950]="sidecar.id !== selectedId()"
+                  (click)="selectSidecar(sidecar.id)"
+                >
+                  <span class="truncate text-sm font-bold text-slate-50">{{ sidecar.name }}</span>
+                  <span class="break-words text-xs text-slate-400">{{ sidecar.root_path }}</span>
+                  <app-status-badge [status]="sidecar.indexing_status" />
+                </button>
+              }
+            </div>
           }
         </div>
-      }
+      </app-panel>
 
-      <form class="create-form" (ngSubmit)="createSidecar()">
-        <h2>Create</h2>
-        <label>
-          Source path
+      <app-panel>
+        <form class="grid gap-3" (ngSubmit)="createSidecar()">
+          <app-section-header title="Create sidecar" description="Register a backend-visible source directory." />
+          <label class="grid gap-1.5 text-sm font-semibold text-slate-300">
+            Source path
+            <input
+              [class]="inputClasses()"
+              name="sourceRoot"
+              [(ngModel)]="createForm.sourceRoot"
+              placeholder="/Users/me/project"
+              autocomplete="off"
+            />
+          </label>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label class="grid gap-1.5 text-sm font-semibold text-slate-300">
+              Name
+              <input [class]="inputClasses()" name="name" [(ngModel)]="createForm.name" placeholder="Docs" />
+            </label>
+            <label class="grid gap-1.5 text-sm font-semibold text-slate-300">
+              ID
+              <input [class]="inputClasses()" name="id" [(ngModel)]="createForm.id" placeholder="docs" />
+            </label>
+          </div>
+          <label class="grid gap-1.5 text-sm font-semibold text-slate-300">
+            Max file bytes
+            <input
+              [class]="inputClasses()"
+              name="maxFileSizeBytes"
+              type="number"
+              min="1"
+              [(ngModel)]="createForm.maxFileSizeBytes"
+            />
+          </label>
+          <button [class]="buttonClasses('primary')" type="submit" [disabled]="creating()">
+            {{ creating() ? 'Creating...' : 'Create sidecar' }}
+          </button>
+          @if (createError) {
+            <p class="rounded-lg border border-rose-400/40 bg-rose-400/10 p-3 text-sm font-medium text-rose-200">
+              {{ createError }}
+            </p>
+          }
+        </form>
+      </app-panel>
+
+      <app-panel>
+        <section class="grid gap-3" aria-label="Directory browser">
+          <app-section-header title="Browse">
+            <button [class]="buttonClasses('compact')" type="button" (click)="loadDirectory(browsePath)" [disabled]="browsing()">
+              Go
+            </button>
+          </app-section-header>
           <input
-            name="sourceRoot"
-            [(ngModel)]="createForm.sourceRoot"
-            placeholder="/Users/me/project"
+            [class]="inputClasses()"
+            name="browsePath"
+            [(ngModel)]="browsePath"
+            (keyup.enter)="loadDirectory(browsePath)"
+            placeholder="Directory path"
             autocomplete="off"
           />
-        </label>
-        <div class="two-up">
-          <label>
-            Name
-            <input name="name" [(ngModel)]="createForm.name" placeholder="Docs" />
-          </label>
-          <label>
-            ID
-            <input name="id" [(ngModel)]="createForm.id" placeholder="docs" />
-          </label>
-        </div>
-        <label>
-          Max file bytes
-          <input
-            name="maxFileSizeBytes"
-            type="number"
-            min="1"
-            [(ngModel)]="createForm.maxFileSizeBytes"
-          />
-        </label>
-        <button class="primary" type="submit" [disabled]="creating()">
-          {{ creating() ? 'Creating...' : 'Create sidecar' }}
-        </button>
-        @if (createError) {
-          <p class="form-error">{{ createError }}</p>
-        }
-      </form>
-
-      <section class="browser" aria-label="Directory browser">
-        <div class="panel-heading">
-          <h2>Browse</h2>
-          <button class="link-button" type="button" (click)="loadDirectory(browsePath)" [disabled]="browsing()">
-            Go
-          </button>
-        </div>
-        <input
-          name="browsePath"
-          [(ngModel)]="browsePath"
-          (keyup.enter)="loadDirectory(browsePath)"
-          placeholder="Directory path"
-          autocomplete="off"
-        />
-        @if (browseError) {
-          <p class="form-error">{{ browseError }}</p>
-        }
-        @if (browsing()) {
-          <div class="state">Loading directories...</div>
-        } @else if (directoryBrowse(); as browse) {
-          <div class="browser-actions">
-            <button class="ghost" type="button" (click)="useDirectory(browse.path)">Use current</button>
-            @if (browse.parent_path) {
-              <button class="ghost" type="button" (click)="loadDirectory(browse.parent_path)">Up</button>
-            }
-          </div>
-          <div class="directory-list">
-            @for (entry of browse.entries; track entry.path) {
-              <button type="button" (click)="loadDirectory(entry.path)">
-                <span>{{ entry.name }}</span>
-                <small>{{ entry.path }}</small>
-              </button>
-            }
-          </div>
-        }
-      </section>
+          @if (browseError) {
+            <p class="rounded-lg border border-rose-400/40 bg-rose-400/10 p-3 text-sm font-medium text-rose-200">
+              {{ browseError }}
+            </p>
+          }
+          @if (browsing()) {
+            <div class="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">Loading directories...</div>
+          } @else if (directoryBrowse(); as browse) {
+            <div class="flex flex-wrap gap-2">
+              <button [class]="buttonClasses()" type="button" (click)="useDirectory(browse.path)">Use current</button>
+              @if (browse.parent_path) {
+                <button [class]="buttonClasses()" type="button" (click)="loadDirectory(browse.parent_path)">Up</button>
+              }
+            </div>
+            <div class="grid max-h-[360px] gap-2 overflow-auto pr-1">
+              @for (entry of browse.entries; track entry.path) {
+                <button
+                  type="button"
+                  class="grid w-full min-w-0 gap-1 rounded-md border border-slate-800 bg-slate-950 p-3 text-left transition hover:border-slate-700 hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300"
+                  (click)="loadDirectory(entry.path)"
+                >
+                  <span class="truncate text-sm font-semibold text-slate-50">{{ entry.name }}</span>
+                  <small class="break-words text-xs text-slate-400">{{ entry.path }}</small>
+                </button>
+              }
+            </div>
+          }
+        </section>
+      </app-panel>
     </aside>
 
-    <section class="workspace">
+    <section class="grid min-w-0 content-start gap-4">
       @if (selectedSidecar(); as sidecar) {
-        <section class="status-panel">
-          <div>
-            <p class="eyebrow">Status</p>
-            <h2>{{ sidecar.name }}</h2>
-            <p class="path">{{ sidecar.root_path }}</p>
-          </div>
-          <div class="actions">
-            <button
-              type="button"
-              class="ghost"
-              (click)="runOperation('refresh')"
-              [disabled]="operating() || selectedIsIndexing()"
-            >
-              {{ selectedIsIndexing() ? 'Indexing...' : 'Refresh index' }}
-            </button>
-            <button
-              type="button"
-              class="primary"
-              (click)="runOperation('rebuild')"
-              [disabled]="operating() || selectedIsIndexing()"
-            >
-              {{ selectedIsIndexing() ? 'Indexing...' : 'Rebuild' }}
-            </button>
-          </div>
-        </section>
+        <app-panel variant="elevated">
+          <section class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <app-section-header
+              eyebrow="Status"
+              [title]="sidecar.name"
+              [description]="sidecar.root_path"
+            />
+            <div class="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                [class]="buttonClasses()"
+                (click)="runOperation('refresh')"
+                [disabled]="operating() || selectedIsIndexing()"
+              >
+                {{ selectedIsIndexing() ? 'Indexing...' : 'Refresh index' }}
+              </button>
+              <button
+                type="button"
+                [class]="buttonClasses('primary')"
+                (click)="runOperation('rebuild')"
+                [disabled]="operating() || selectedIsIndexing()"
+              >
+                {{ selectedIsIndexing() ? 'Indexing...' : 'Rebuild' }}
+              </button>
+            </div>
+          </section>
+        </app-panel>
 
-        <section class="metrics" aria-label="Sidecar status">
-          <div>
-            <span>Status</span>
-            <strong>{{ sidecar.indexing_status }}</strong>
-          </div>
-          <div>
-            <span>Indexed files</span>
-            <strong>{{ sidecar.indexed_file_count | number }}</strong>
-          </div>
-          <div>
-            <span>Chunks</span>
-            <strong>{{ sidecar.chunk_count | number }}</strong>
-          </div>
-          <div>
-            <span>Errors</span>
-            <strong>{{ sidecar.error_count | number }}</strong>
-          </div>
-          <div>
-            <span>Last refresh</span>
-            <strong>{{ sidecar.last_refresh_at ? (sidecar.last_refresh_at | date: 'short') : 'Never' }}</strong>
-          </div>
+        <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="Sidecar status">
+          <app-metric-card label="Status" [value]="sidecar.indexing_status" [tone]="selectedIsIndexing() ? 'warn' : 'good'" />
+          <app-metric-card label="Indexed files" [value]="(sidecar.indexed_file_count | number) ?? '0'" />
+          <app-metric-card label="Chunks" [value]="(sidecar.chunk_count | number) ?? '0'" />
+          <app-metric-card label="Errors" [value]="(sidecar.error_count | number) ?? '0'" [tone]="sidecar.error_count ? 'danger' : 'good'" />
+          <app-metric-card label="Last refresh" [value]="sidecar.last_refresh_at ? ((sidecar.last_refresh_at | date: 'short') ?? 'Never') : 'Never'" />
         </section>
 
         @if (operating() || selectedIsIndexing()) {
-          <p class="notice">Indexing is running. Counts and errors will update automatically.</p>
+          <p class="rounded-lg border border-teal-400/40 bg-teal-400/10 p-3 text-sm font-medium text-teal-100">
+            Indexing is running. Counts and errors will update automatically.
+          </p>
         }
         @if (detailError) {
-          <p class="alert">{{ detailError }}</p>
+          <p class="rounded-lg border border-rose-400/40 bg-rose-400/10 p-3 text-sm font-medium text-rose-200">
+            {{ detailError }}
+          </p>
         }
 
-        <nav class="tabs" aria-label="Dashboard views">
-          <button type="button" [class.active]="activeTab === 'files'" (click)="activeTab = 'files'">Files</button>
-          <button type="button" [class.active]="activeTab === 'errors'" (click)="activeTab = 'errors'">Errors</button>
-          <button type="button" [class.active]="activeTab === 'mcp'" (click)="activeTab = 'mcp'">MCP config</button>
-          <button type="button" [class.active]="activeTab === 'search'" (click)="activeTab = 'search'">Search</button>
+        <nav class="flex flex-wrap gap-2 border-b border-slate-800 pb-2" aria-label="Dashboard views">
+          <button type="button" [class]="tabButtonClasses('files')" (click)="activeTab = 'files'">Files</button>
+          <button type="button" [class]="tabButtonClasses('errors')" (click)="activeTab = 'errors'">Errors</button>
+          <button type="button" [class]="tabButtonClasses('mcp')" (click)="activeTab = 'mcp'">MCP config</button>
+          <button type="button" [class]="tabButtonClasses('search')" (click)="activeTab = 'search'">Search</button>
         </nav>
 
-        <section class="content-panel">
+        <app-panel>
           @if (loadingDetails()) {
-            <div class="state">Loading sidecar details...</div>
+            <div class="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">Loading sidecar details...</div>
           } @else {
             @switch (activeTab) {
               @case ('files') {
-                <div class="panel-heading">
-                  <h2>Files</h2>
-                  <span>{{ files().length }}</span>
+                <div class="grid gap-4">
+                  <app-section-header title="Files" [count]="files().length" />
+                  @if (files().length === 0) {
+                    <div class="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">No files are visible to this sidecar yet.</div>
+                  } @else {
+                    <div class="grid overflow-hidden rounded-lg border border-slate-800">
+                      @for (file of files(); track file.relative_path) {
+                        <div class="grid grid-cols-1 gap-2 border-b border-slate-800 p-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_90px_140px] md:items-center">
+                          <span class="break-words text-sm font-semibold text-slate-50">{{ file.relative_path }}</span>
+                          <span class="text-sm text-slate-400">{{ file.extension || 'none' }}</span>
+                          <span class="text-sm text-slate-400">{{ file.size_bytes | number }} bytes</span>
+                        </div>
+                      }
+                    </div>
+                  }
                 </div>
-                @if (files().length === 0) {
-                  <div class="state">No files are visible to this sidecar yet.</div>
-                } @else {
-                  <div class="table-list">
-                    @for (file of files(); track file.relative_path) {
-                      <div class="row">
-                        <span class="main-text">{{ file.relative_path }}</span>
-                        <span>{{ file.extension || 'none' }}</span>
-                        <span>{{ file.size_bytes | number }} bytes</span>
-                      </div>
-                    }
-                  </div>
-                }
               }
               @case ('errors') {
-                <div class="panel-heading">
-                  <h2>Errors</h2>
-                  <span>{{ errors().length }}</span>
+                <div class="grid gap-4">
+                  <app-section-header title="Errors" [count]="errors().length" />
+                  @if (errors().length === 0) {
+                    <div class="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">No indexing errors recorded.</div>
+                  } @else {
+                    <div class="grid gap-3">
+                      @for (error of errors(); track $index) {
+                        <pre class="max-w-full overflow-auto rounded-lg border border-slate-700 bg-black/40 p-4 text-xs text-slate-200">{{ error | json }}</pre>
+                      }
+                    </div>
+                  }
                 </div>
-                @if (errors().length === 0) {
-                  <div class="state">No indexing errors recorded.</div>
-                } @else {
-                  <div class="error-list">
-                    @for (error of errors(); track $index) {
-                      <pre>{{ error | json }}</pre>
-                    }
-                  </div>
-                }
               }
               @case ('mcp') {
-                <div class="panel-heading">
-                  <h2>MCP config</h2>
-                  <button class="primary" type="button" (click)="copyMcpConfig()">
-                    {{ copyStatus || 'Copy config' }}
-                  </button>
+                <div class="grid gap-4">
+                  <app-section-header title="MCP config">
+                    <button [class]="buttonClasses('primary')" type="button" (click)="copyMcpConfig()">
+                      {{ copyStatus || 'Copy config' }}
+                    </button>
+                  </app-section-header>
+                  <pre class="max-w-full overflow-auto rounded-lg border border-slate-700 bg-black/40 p-4 text-xs text-slate-200">{{ formattedMcpConfig() }}</pre>
                 </div>
-                <pre class="code-block">{{ formattedMcpConfig() }}</pre>
               }
               @case ('search') {
-                <form class="search-form" (ngSubmit)="search()">
-                  <input
-                    name="searchQuery"
-                    [(ngModel)]="searchQuery"
-                    placeholder="Search this sidecar"
-                    autocomplete="off"
-                  />
-                  <select name="searchMode" [(ngModel)]="searchMode">
-                    <option value="hybrid">Hybrid</option>
-                    <option value="keyword">Keyword</option>
-                    <option value="semantic">Semantic</option>
-                  </select>
-                  <input
-                    class="limit-input"
-                    name="searchLimit"
-                    type="number"
-                    min="1"
-                    [(ngModel)]="searchLimit"
-                  />
-                  <button class="primary" type="submit" [disabled]="searching()">
-                    {{ searching() ? 'Searching...' : 'Search' }}
-                  </button>
-                </form>
-                @if (searchError) {
-                  <p class="form-error">{{ searchError }}</p>
-                }
-                @if (searchResults().length === 0) {
-                  <div class="state">No search results to preview.</div>
-                } @else {
-                  <div class="results">
-                    @for (result of searchResults(); track $index) {
-                      <article>
-                        <strong>{{ result.relative_path }}</strong>
-                        @if (result.score !== undefined) {
-                          <span>{{ result.score | number: '1.2-4' }}</span>
-                        }
-                        @if (result.snippet) {
-                          <p>{{ result.snippet }}</p>
-                        }
-                      </article>
-                    }
-                  </div>
-                }
+                <div class="grid gap-4">
+                  <form class="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(180px,1fr)_140px_96px_auto]" (ngSubmit)="search()">
+                    <input
+                      [class]="inputClasses()"
+                      name="searchQuery"
+                      [(ngModel)]="searchQuery"
+                      placeholder="Search this sidecar"
+                      autocomplete="off"
+                    />
+                    <select [class]="inputClasses()" name="searchMode" [(ngModel)]="searchMode">
+                      <option value="hybrid">Hybrid</option>
+                      <option value="keyword">Keyword</option>
+                      <option value="semantic">Semantic</option>
+                    </select>
+                    <input
+                      [class]="inputClasses()"
+                      name="searchLimit"
+                      type="number"
+                      min="1"
+                      [(ngModel)]="searchLimit"
+                    />
+                    <button [class]="buttonClasses('primary')" type="submit" [disabled]="searching()">
+                      {{ searching() ? 'Searching...' : 'Search' }}
+                    </button>
+                  </form>
+                  @if (searchError) {
+                    <p class="rounded-lg border border-rose-400/40 bg-rose-400/10 p-3 text-sm font-medium text-rose-200">
+                      {{ searchError }}
+                    </p>
+                  }
+                  @if (searchResults().length === 0) {
+                    <div class="rounded-lg bg-slate-900 p-3 text-sm text-slate-400">No search results to preview.</div>
+                  } @else {
+                    <div class="grid min-w-0 gap-3">
+                      @for (result of searchResults(); track $index) {
+                        <article class="grid min-w-0 gap-4 overflow-hidden rounded-lg border border-slate-800 bg-slate-950 p-4">
+                          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div class="min-w-0">
+                              <strong class="break-words text-sm text-slate-50">{{ searchResultLocation(result) }}</strong>
+                              <div class="mt-2 flex flex-wrap gap-2">
+                                @if (result.chunk_id !== undefined) {
+                                  <span class="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-slate-300">
+                                    Chunk {{ result.chunk_id }}
+                                  </span>
+                                }
+                                @if (result.start_line !== undefined || result.end_line !== undefined) {
+                                  <span class="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs font-semibold text-slate-300">
+                                    Lines {{ result.start_line ?? '?' }}-{{ result.end_line ?? '?' }}
+                                  </span>
+                                }
+                              </div>
+                            </div>
+                            @if (result.score !== undefined) {
+                              <span class="w-fit rounded-full border border-teal-400/30 bg-teal-400/10 px-2.5 py-1 text-xs font-semibold text-teal-100">
+                                Score {{ result.score | number: '1.2-4' }}
+                              </span>
+                            }
+                          </div>
+                          @if (searchResultPreview(result)) {
+                            <p class="whitespace-pre-wrap break-words rounded-lg border border-slate-800 bg-black/30 p-3 text-sm leading-6 text-slate-200">
+                              {{ searchResultPreview(result) }}
+                            </p>
+                          }
+                          <details class="group min-w-0 overflow-hidden rounded-lg border border-slate-800 bg-slate-900">
+                            <summary class="cursor-pointer list-none px-3 py-2 text-sm font-semibold text-slate-300 transition hover:text-slate-50">
+                              Result details
+                            </summary>
+                            <pre class="block max-w-full overflow-x-auto whitespace-pre-wrap break-words border-t border-slate-800 p-3 text-xs text-slate-300">{{ formattedSearchResult(result) }}</pre>
+                          </details>
+                        </article>
+                      }
+                    </div>
+                  }
+                </div>
               }
             }
           }
-        </section>
+        </app-panel>
       } @else {
-        <section class="empty-main">
-          <h2>No sidecar selected</h2>
-          <p>Create a sidecar from any backend-visible local directory, or select one from the list.</p>
-        </section>
+        <app-panel>
+          <h2 class="text-base font-semibold text-slate-50">No sidecar selected</h2>
+          <p class="mt-2 text-sm text-slate-400">
+            Create a sidecar from any backend-visible local directory, or select one from the list.
+          </p>
+        </app-panel>
       }
     </section>
   </section>

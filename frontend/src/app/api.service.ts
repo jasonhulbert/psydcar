@@ -49,9 +49,13 @@ export interface McpConfig {
 }
 
 export interface SearchResult {
+  chunk_id?: number;
   relative_path: string;
   score?: number;
+  preview?: string;
   snippet?: string;
+  start_line?: number;
+  end_line?: number;
   line_number?: number;
   [key: string]: unknown;
 }

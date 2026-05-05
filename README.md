@@ -29,6 +29,22 @@ Run linting:
 uv run ruff check .
 ```
 
+Run static type checking with the same engine Pylance uses:
+
+```bash
+uv run pyright
+```
+
+Semantic search is local-only and optional for development. Install the embedding/vector
+runtime before expecting rebuilds to write `vectors.lance/` tables:
+
+```bash
+uv sync --extra semantic --group dev
+```
+
+The semantic runtime uses `sentence-transformers` with `BAAI/bge-small-en-v1.5` and
+stores LanceDB tables under each sidecar storage directory.
+
 ## Frontend
 
 The Angular dashboard is planned for a later phase. Phase 0 reserves `frontend/` but does

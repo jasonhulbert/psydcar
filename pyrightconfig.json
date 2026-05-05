@@ -1,0 +1,7 @@
+{
+  "include": ["backend/ksidecar", "backend/tests"],
+  "exclude": ["**/__pycache__", ".venv", "frontend"],
+  "extraPaths": ["backend"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}

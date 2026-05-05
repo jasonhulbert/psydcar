@@ -8,9 +8,13 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ksidecar.scanner import FileCandidate, scan_files
 from ksidecar.sidecars import Sidecar, SidecarRegistry
+
+if TYPE_CHECKING:
+    from ksidecar.vectors import VectorChunk
 
 INDEX_FILENAME = "index.sqlite"
 SCHEMA_VERSION = 1
@@ -150,6 +154,13 @@ def rebuild_sidecar_index(
     with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
         init_schema(connection)
         result = rebuild_index(connection, sidecar)
+        sync_sidecar_vector_index(connection, registry, sidecar.id)
+        document_count, chunk_count, error_count = index_counts(connection)
+        result = RebuildResult(
+            document_count=document_count,
+            chunk_count=chunk_count,
+            error_count=error_count,
+        )
     registry.update_indexing_status(
         sidecar.id,
         indexing_status=indexing_status_for_error_count(result.error_count),
@@ -168,6 +179,17 @@ def refresh_sidecar_index(
     with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
         init_schema(connection)
         result = refresh_index(connection, sidecar)
+        sync_sidecar_vector_index(connection, registry, sidecar.id)
+        document_count, chunk_count, error_count = index_counts(connection)
+        result = RefreshResult(
+            document_count=document_count,
+            chunk_count=chunk_count,
+            error_count=error_count,
+            new_count=result.new_count,
+            modified_count=result.modified_count,
+            unchanged_count=result.unchanged_count,
+            deleted_count=result.deleted_count,
+        )
     registry.update_indexing_status(
         sidecar.id,
         indexing_status=indexing_status_for_error_count(result.error_count),
@@ -185,6 +207,23 @@ def list_sidecar_indexing_errors(
     sidecar = registry.get(sidecar_id)
     with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
         return list_indexing_errors(connection)
+
+
+def semantic_search_sidecar(
+    registry: SidecarRegistry,
+    sidecar_id: str,
+    query: str,
+    *,
+    limit: int = 10,
+) -> list[SearchResult]:
+    sidecar = registry.get(sidecar_id)
+    with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:
+        return semantic_search(
+            connection,
+            query,
+            storage_dir=registry.storage_dir(sidecar.id),
+            limit=limit,
+        )
 
 
 def rebuild_index(connection: sqlite3.Connection, sidecar: Sidecar) -> RebuildResult:
@@ -319,7 +358,7 @@ def insert_document(
             "indexed",
         ),
     )
-    return int(cursor.lastrowid)
+    return inserted_row_id(cursor)
 
 
 def update_document_metadata(
@@ -380,6 +419,34 @@ def delete_document_by_path(connection: sqlite3.Connection, relative_path: str) 
     connection.execute("DELETE FROM documents WHERE relative_path = ?", (relative_path,))
 
 
+def sync_sidecar_vector_index(
+    connection: sqlite3.Connection,
+    registry: SidecarRegistry,
+    sidecar_id: str,
+) -> None:
+    from ksidecar.vectors import VectorIndexError, sync_vector_index, vector_runtime_available
+
+    clear_indexing_errors(connection, "__vector__")
+    if not vector_runtime_available():
+        connection.commit()
+        return
+    try:
+        sync_vector_index(
+            list_vector_chunks(connection),
+            storage_dir=registry.storage_dir(sidecar_id),
+        )
+    except VectorIndexError as exc:
+        insert_indexing_error(
+            connection,
+            IndexingErrorRecord(
+                relative_path="__vector__",
+                stage="vector",
+                message=str(exc),
+            ),
+        )
+    connection.commit()
+
+
 def insert_chunk(
     connection: sqlite3.Connection,
     document_id: int,
@@ -406,7 +473,7 @@ def insert_chunk(
             chunk.content_hash,
         ),
     )
-    chunk_id = int(cursor.lastrowid)
+    chunk_id = inserted_row_id(cursor)
     connection.execute(
         """
         INSERT INTO chunks_fts(rowid, chunk_id, relative_path, text)
@@ -482,10 +549,47 @@ def document_candidate_is_unchanged(document: DocumentRecord, candidate: FileCan
 
 
 def index_counts(connection: sqlite3.Connection) -> tuple[int, int, int]:
-    document_count = int(connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
-    chunk_count = int(connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
-    error_count = int(connection.execute("SELECT COUNT(*) FROM indexing_errors").fetchone()[0])
+    document_count = select_count(connection, "SELECT COUNT(*) FROM documents")
+    chunk_count = select_count(connection, "SELECT COUNT(*) FROM chunks")
+    error_count = select_count(connection, "SELECT COUNT(*) FROM indexing_errors")
     return document_count, chunk_count, error_count
+
+
+def inserted_row_id(cursor: sqlite3.Cursor) -> int:
+    row_id = cursor.lastrowid
+    if row_id is None:
+        raise IndexError("insert did not return a row id")
+    return row_id
+
+
+def select_count(connection: sqlite3.Connection, sql: str) -> int:
+    row = connection.execute(sql).fetchone()
+    if row is None:
+        raise IndexError("count query did not return a row")
+    return int(row[0])
+
+
+def list_vector_chunks(connection: sqlite3.Connection) -> list[VectorChunk]:
+    from ksidecar.vectors import VectorChunk
+
+    rows = connection.execute(
+        """
+        SELECT id, relative_path, start_line, end_line, text, content_hash
+        FROM chunks
+        ORDER BY id
+        """
+    ).fetchall()
+    return [
+        VectorChunk(
+            chunk_id=int(row["id"]),
+            relative_path=str(row["relative_path"]),
+            start_line=int(row["start_line"]),
+            end_line=int(row["end_line"]),
+            text=str(row["text"]),
+            content_hash=str(row["content_hash"]),
+        )
+        for row in rows
+    ]
 
 
 def indexing_status_for_error_count(error_count: int) -> str:
@@ -633,6 +737,24 @@ def keyword_search(
         )
         for row in rows
     ]
+
+
+def semantic_search(
+    connection: sqlite3.Connection,
+    query: str,
+    *,
+    storage_dir: Path,
+    limit: int = 10,
+) -> list[SearchResult]:
+    init_schema(connection)
+    from ksidecar.vectors import search_vectors
+
+    return search_vectors(
+        query,
+        chunks=list_vector_chunks(connection),
+        storage_dir=storage_dir,
+        limit=limit,
+    )
 
 
 def build_fts_query(query: str) -> str:

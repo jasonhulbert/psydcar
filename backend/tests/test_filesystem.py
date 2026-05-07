@@ -1,6 +1,6 @@
 import pytest
 
-from psydecar.filesystem import PathSafetyError, resolve_root_relative_path
+from psydcar.filesystem import PathSafetyError, resolve_root_relative_path
 
 
 def test_resolve_root_relative_path_uses_sidecar_source_root(tmp_path):

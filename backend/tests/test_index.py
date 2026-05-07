@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from psydecar.index import (
+from psydcar.index import (
     INDEX_FILENAME,
     chunk_content,
     connect_index,
@@ -11,7 +11,7 @@ from psydecar.index import (
     rebuild_sidecar_index,
     refresh_sidecar_index,
 )
-from psydecar.sidecars import SidecarRegistry
+from psydcar.sidecars import SidecarRegistry
 
 
 def test_chunk_markdown_splits_by_headings():
@@ -237,7 +237,7 @@ def test_refresh_captures_file_error_without_failing_whole_refresh(
     registry.create(source_root, sidecar_id="fixture")
     rebuild_sidecar_index(registry, "fixture")
 
-    import psydecar.index as index_module
+    import psydcar.index as index_module
 
     original_read_text_content = index_module.read_text_content
 

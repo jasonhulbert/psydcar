@@ -1,19 +1,19 @@
 from pathlib import Path
 
-from psydecar.config import AppConfig
-from psydecar.paths import app_storage_root, ensure_app_storage_root, sidecars_root
+from psydcar.config import AppConfig
+from psydcar.paths import app_storage_root, ensure_app_storage_root, sidecars_root
 
 
 def test_app_storage_root_defaults_to_home(monkeypatch, tmp_path):
-    monkeypatch.delenv("PSYDECAR_HOME", raising=False)
+    monkeypatch.delenv("PSYDCAR_HOME", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-    assert app_storage_root() == tmp_path / ".psydecar"
+    assert app_storage_root() == tmp_path / ".psydcar"
 
 
 def test_app_storage_root_can_be_overridden(monkeypatch, tmp_path):
     custom_root = tmp_path / "custom-storage"
-    monkeypatch.setenv("PSYDECAR_HOME", str(custom_root))
+    monkeypatch.setenv("PSYDCAR_HOME", str(custom_root))
 
     assert app_storage_root() == custom_root
 
@@ -26,10 +26,10 @@ def test_ensure_app_storage_root_creates_expected_layout(tmp_path):
 
 
 def test_app_config_loads_runtime_overrides(monkeypatch, tmp_path):
-    monkeypatch.setenv("PSYDECAR_HOME", str(tmp_path / "storage"))
-    monkeypatch.setenv("PSYDECAR_MAX_FILE_SIZE_BYTES", "42")
-    monkeypatch.setenv("PSYDECAR_IGNORED_DIRS", ".git,node_modules,custom")
-    monkeypatch.setenv("PSYDECAR_EMBEDDING_MODEL", "local/test-model")
+    monkeypatch.setenv("PSYDCAR_HOME", str(tmp_path / "storage"))
+    monkeypatch.setenv("PSYDCAR_MAX_FILE_SIZE_BYTES", "42")
+    monkeypatch.setenv("PSYDCAR_IGNORED_DIRS", ".git,node_modules,custom")
+    monkeypatch.setenv("PSYDCAR_EMBEDDING_MODEL", "local/test-model")
 
     config = AppConfig.load()
 

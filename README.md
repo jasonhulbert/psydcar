@@ -1,6 +1,6 @@
-# Psydecar
+# Psydcar
 
-Local-first psydecar proof of concept.
+Local-first psydcar proof of concept.
 
 ## Development
 
@@ -13,23 +13,23 @@ uv sync --group dev
 Run the CLI:
 
 ```bash
-uv run psydecar --help
-uv run psydecar paths
+uv run psydcar --help
+uv run psydcar paths
 ```
 
 Create and search a sidecar against any local directory:
 
 ```bash
-uv run psydecar sidecar create /path/to/project --id project
-uv run psydecar rebuild project
-uv run psydecar search project "needle" --mode keyword
-uv run psydecar status project
+uv run psydcar sidecar create /path/to/project --id project
+uv run psydcar rebuild project
+uv run psydcar search project "needle" --mode keyword
+uv run psydcar status project
 ```
 
 Run the API:
 
 ```bash
-uv run uvicorn psydecar.api:app --reload
+uv run uvicorn psydcar.api:app --reload
 ```
 
 Run the dashboard in another shell:
@@ -76,20 +76,20 @@ stores LanceDB tables under each sidecar storage directory.
 Resolved configuration can be inspected with:
 
 ```bash
-uv run psydecar config
+uv run psydcar config
 ```
 
 Environment variables:
 
-- `PSYDECAR_HOME`: app-managed storage path. Defaults to `~/.psydecar`.
-- `PSYDECAR_MAX_FILE_SIZE_BYTES`: maximum file size read by new sidecars.
-- `PSYDECAR_IGNORED_DIRS`: comma-separated directory names skipped while scanning.
-- `PSYDECAR_EMBEDDING_MODEL`: local `sentence-transformers` model name.
+- `PSYDCAR_HOME`: app-managed storage path. Defaults to `~/.psydcar`.
+- `PSYDCAR_MAX_FILE_SIZE_BYTES`: maximum file size read by new sidecars.
+- `PSYDCAR_IGNORED_DIRS`: comma-separated directory names skipped while scanning.
+- `PSYDCAR_EMBEDDING_MODEL`: local `sentence-transformers` model name.
 
 Per-sidecar overrides are available at creation time:
 
 ```bash
-uv run psydecar sidecar create /path/to/project \
+uv run psydcar sidecar create /path/to/project \
   --id project \
   --max-file-size 1000000 \
   --ignore-dir node_modules \
@@ -102,7 +102,7 @@ uv run psydecar sidecar create /path/to/project \
 Run the generated local fixture workflow before using a fresh clone on real data:
 
 ```bash
-uv run psydecar smoke --file-count 200 --max-search-seconds 1
+uv run psydcar smoke --file-count 200 --max-search-seconds 1
 ```
 
 The smoke command creates a temporary 100-2000 file style corpus, registers it as a

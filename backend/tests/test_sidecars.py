@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from psydecar.sidecars import (
+from psydcar.sidecars import (
     DEFAULT_INDEXING_STATUS,
     SIDECAR_METADATA_FILENAME,
     SidecarAlreadyExistsError,

@@ -1,4 +1,4 @@
-# Psydecar Dashboard
+# Psydcar Dashboard
 
 Angular 21 standalone dashboard for the local FastAPI backend.
 
@@ -13,7 +13,7 @@ npm install
 Start the backend from the repository root:
 
 ```bash
-uv run uvicorn psydecar.api:app --app-dir backend --reload
+uv run uvicorn psydcar.api:app --app-dir backend --reload
 ```
 
 Start the dashboard from this directory:

@@ -1,4 +1,4 @@
-"""Command-line entrypoint for Psydecar."""
+"""Command-line entrypoint for Psydcar."""
 
 from __future__ import annotations
 
@@ -11,14 +11,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from psydecar import __version__
-from psydecar.config import (
+from psydcar import __version__
+from psydcar.config import (
     EMBEDDING_MODEL_ENV,
     IGNORED_DIRS_ENV,
     MAX_FILE_SIZE_ENV,
     AppConfig,
 )
-from psydecar.index import (
+from psydcar.index import (
     IndexError,
     IndexingErrorRecord,
     RebuildResult,
@@ -28,11 +28,11 @@ from psydecar.index import (
     rebuild_sidecar_index,
     refresh_sidecar_index,
 )
-from psydecar.mcp import McpError, parse_sidecar_ids, run_mcp_server
-from psydecar.paths import ensure_app_storage_root, sidecars_root
-from psydecar.search import DEFAULT_SEARCH_LIMIT, SearchError, search_sidecar
-from psydecar.sidecars import Sidecar, SidecarConfig, SidecarError, SidecarRegistry
-from psydecar.watcher import (
+from psydcar.mcp import McpError, parse_sidecar_ids, run_mcp_server
+from psydcar.paths import ensure_app_storage_root, sidecars_root
+from psydcar.search import DEFAULT_SEARCH_LIMIT, SearchError, search_sidecar
+from psydcar.sidecars import Sidecar, SidecarConfig, SidecarError, SidecarRegistry
+from psydcar.watcher import (
     DEFAULT_WATCH_DEBOUNCE_SECONDS,
     SidecarWatchService,
     WatcherError,
@@ -42,8 +42,8 @@ from psydecar.watcher import (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="psydecar",
-        description="Manage local Psydecar indexes.",
+        prog="psydcar",
+        description="Manage local Psydcar indexes.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
@@ -491,7 +491,7 @@ def run_smoke_workflow(
 
     ensure_app_storage_root(config.storage_root)
     sidecar_id = f"smoke-{int(time.time() * 1000)}"
-    with tempfile.TemporaryDirectory(prefix="psydecar-smoke-") as source:
+    with tempfile.TemporaryDirectory(prefix="psydcar-smoke-") as source:
         source_root = Path(source)
         for index in range(file_count):
             token = query if index % 10 == 0 else "ordinary"

@@ -1,8 +1,8 @@
 import time
 
-from psydecar.index import RefreshResult, list_sidecar_indexing_errors
-from psydecar.sidecars import SidecarRegistry
-from psydecar.watcher import SidecarWatchService
+from psydcar.index import RefreshResult, list_sidecar_indexing_errors
+from psydcar.sidecars import SidecarRegistry
+from psydcar.watcher import SidecarWatchService
 
 
 def test_watcher_batches_burst_changes_into_one_refresh(tmp_path):

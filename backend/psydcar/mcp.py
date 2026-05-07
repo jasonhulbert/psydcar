@@ -11,9 +11,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TextIO
 
-from psydecar import __version__
-from psydecar.filesystem import resolve_root_relative_path
-from psydecar.index import (
+from psydcar import __version__
+from psydcar.filesystem import resolve_root_relative_path
+from psydcar.index import (
     IndexingErrorRecord,
     SearchResult,
     build_fts_query,
@@ -22,9 +22,9 @@ from psydecar.index import (
     read_text_content,
     text_preview,
 )
-from psydecar.scanner import scan_files
-from psydecar.search import DEFAULT_SEARCH_LIMIT, merge_search_results, normalize_limit
-from psydecar.sidecars import Sidecar, SidecarRegistry
+from psydcar.scanner import scan_files
+from psydcar.search import DEFAULT_SEARCH_LIMIT, merge_search_results, normalize_limit
+from psydcar.sidecars import Sidecar, SidecarRegistry
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
@@ -40,7 +40,7 @@ class McpError(ValueError):
     """Raised when an MCP request or tool call is invalid."""
 
 
-class PsydecarMcpServer:
+class PsydcarMcpServer:
     """Small JSON-RPC MCP server exposing read-only sidecar tools."""
 
     def __init__(self, registry: SidecarRegistry, sidecar_ids: Iterable[str]) -> None:
@@ -102,7 +102,7 @@ class PsydecarMcpServer:
         return {
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "psydecar", "version": __version__},
+            "serverInfo": {"name": "psydcar", "version": __version__},
         }
 
     def call_tool(self, params: Any) -> dict[str, Any]:
@@ -262,7 +262,7 @@ class PsydecarMcpServer:
 
 
 def run_mcp_server(registry: SidecarRegistry, sidecar_ids: Iterable[str]) -> None:
-    PsydecarMcpServer(registry, sidecar_ids).serve()
+    PsydcarMcpServer(registry, sidecar_ids).serve()
 
 
 def readonly_search_sidecar(
@@ -375,7 +375,7 @@ def readonly_semantic_search(
     storage_dir: Path,
     limit: int,
 ) -> list[SearchResult]:
-    from psydecar.vectors import search_vectors, vector_runtime_available
+    from psydcar.vectors import search_vectors, vector_runtime_available
 
     if not vector_runtime_available():
         return []

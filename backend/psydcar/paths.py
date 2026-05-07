@@ -1,18 +1,18 @@
-"""Filesystem paths for app-managed Psydecar data."""
+"""Filesystem paths for app-managed Psydcar data."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-APP_HOME_ENV = "PSYDECAR_HOME"
-DEFAULT_APP_DIRNAME = ".psydecar"
+APP_HOME_ENV = "PSYDCAR_HOME"
+DEFAULT_APP_DIRNAME = ".psydcar"
 
 
 def app_storage_root() -> Path:
     """Return the app-managed storage root.
 
-    The default is ``~/.psydecar``. Setting ``PSYDECAR_HOME`` is useful for tests and
+    The default is ``~/.psydcar``. Setting ``PSYDCAR_HOME`` is useful for tests and
     isolated local development.
     """
 

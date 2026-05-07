@@ -6,13 +6,13 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from psydecar.defaults import DEFAULT_EMBEDDING_MODEL
-from psydecar.paths import app_storage_root
-from psydecar.scanner import DEFAULT_MAX_FILE_SIZE_BYTES, IGNORED_DIRECTORY_NAMES
+from psydcar.defaults import DEFAULT_EMBEDDING_MODEL
+from psydcar.paths import app_storage_root
+from psydcar.scanner import DEFAULT_MAX_FILE_SIZE_BYTES, IGNORED_DIRECTORY_NAMES
 
-MAX_FILE_SIZE_ENV = "PSYDECAR_MAX_FILE_SIZE_BYTES"
-IGNORED_DIRS_ENV = "PSYDECAR_IGNORED_DIRS"
-EMBEDDING_MODEL_ENV = "PSYDECAR_EMBEDDING_MODEL"
+MAX_FILE_SIZE_ENV = "PSYDCAR_MAX_FILE_SIZE_BYTES"
+IGNORED_DIRS_ENV = "PSYDCAR_IGNORED_DIRS"
+EMBEDDING_MODEL_ENV = "PSYDCAR_EMBEDDING_MODEL"
 
 
 @dataclass(frozen=True)

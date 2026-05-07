@@ -12,9 +12,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from psydecar import __version__
-from psydecar.config import AppConfig
-from psydecar.index import (
+from psydcar import __version__
+from psydcar.config import AppConfig
+from psydcar.index import (
     IndexError,
     IndexingErrorRecord,
     SearchResult,
@@ -23,9 +23,9 @@ from psydecar.index import (
     record_sidecar_indexing_error,
     refresh_sidecar_index,
 )
-from psydecar.scanner import scan_files
-from psydecar.search import DEFAULT_SEARCH_LIMIT, SearchError, SearchMode, search_sidecar
-from psydecar.sidecars import (
+from psydcar.scanner import scan_files
+from psydcar.search import DEFAULT_SEARCH_LIMIT, SearchError, SearchMode, search_sidecar
+from psydcar.sidecars import (
     Sidecar,
     SidecarAlreadyExistsError,
     SidecarConfig,
@@ -33,7 +33,7 @@ from psydecar.sidecars import (
     SidecarNotFoundError,
     SidecarRegistry,
 )
-from psydecar.watcher import SidecarWatchService, WatcherError, WatchStatus
+from psydcar.watcher import SidecarWatchService, WatcherError, WatchStatus
 
 
 class SidecarConfigResponse(BaseModel):
@@ -156,7 +156,7 @@ def create_app(config: AppConfig | None = None, *, start_watchers: bool = False)
         finally:
             watch_service.stop_all()
 
-    app = FastAPI(title="Psydecar API", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Psydcar API", version=__version__, lifespan=lifespan)
     app.state.config = app_config
     app.state.watch_service = watch_service
     app.include_router(router)
@@ -223,7 +223,7 @@ RegistryDependency = Annotated[SidecarRegistry, Depends(get_registry)]
 
 @router.get("/api/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(name="psydecar", version=__version__)
+    return HealthResponse(name="psydcar", version=__version__)
 
 
 @router.get("/api/directories", response_model=DirectoryBrowseResponse)
@@ -369,12 +369,12 @@ def mcp_config(sidecar_id: str, registry: RegistryDependency) -> McpConfigRespon
     args = ["mcp", "--sidecars", sidecar.id]
     return McpConfigResponse(
         sidecar_id=sidecar.id,
-        command="psydecar",
+        command="psydcar",
         args=args,
         config={
             "mcpServers": {
-                f"psydecar-{sidecar.id}": {
-                    "command": "psydecar",
+                f"psydcar-{sidecar.id}": {
+                    "command": "psydcar",
                     "args": args,
                 }
             }

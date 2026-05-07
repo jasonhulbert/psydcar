@@ -1,5 +1,5 @@
 {
-  "include": ["backend/psydecar", "backend/tests"],
+  "include": ["backend/psydcar", "backend/tests"],
   "exclude": ["**/__pycache__", ".venv", "frontend"],
   "extraPaths": ["backend"],
   "pythonVersion": "3.11",

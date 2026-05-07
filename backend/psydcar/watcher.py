@@ -11,13 +11,13 @@ from pathlib import Path
 from threading import RLock, Timer
 from typing import Any
 
-from psydecar.index import (
+from psydcar.index import (
     IndexingErrorRecord,
     RefreshResult,
     record_sidecar_indexing_error,
     refresh_sidecar_index,
 )
-from psydecar.sidecars import SidecarRegistry
+from psydcar.sidecars import SidecarRegistry
 
 DEFAULT_WATCH_DEBOUNCE_SECONDS = 1.5
 WATCH_ERROR_PATH = "__watch__"
@@ -205,7 +205,7 @@ class SidecarWatchService:
             from watchdog.observers import Observer
         except ImportError as exc:
             raise WatcherError(
-                "watchdog is required for file watching; install the psydecar dependencies"
+                "watchdog is required for file watching; install the psydcar dependencies"
             ) from exc
         return Observer()
 

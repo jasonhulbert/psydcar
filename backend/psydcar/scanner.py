@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from psydecar.filesystem import resolve_source_root
+from psydcar.filesystem import resolve_source_root
 
 DEFAULT_MAX_FILE_SIZE_BYTES = 1_000_000
 BINARY_SAMPLE_SIZE = 8192

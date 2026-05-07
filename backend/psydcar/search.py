@@ -8,9 +8,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
-from psydecar.index import SearchResult, init_schema, keyword_search, semantic_search
-from psydecar.sidecars import SidecarRegistry
-from psydecar.vectors import DEFAULT_EMBEDDING_MODEL, VectorIndexError
+from psydcar.index import SearchResult, init_schema, keyword_search, semantic_search
+from psydcar.sidecars import SidecarRegistry
+from psydcar.vectors import DEFAULT_EMBEDDING_MODEL, VectorIndexError
 
 SearchMode = Literal["keyword", "semantic", "hybrid"]
 DEFAULT_SEARCH_LIMIT = 10
@@ -30,7 +30,7 @@ def search_sidecar(
 ) -> list[SearchResult]:
     """Search a persisted sidecar using the requested mode."""
 
-    from psydecar.index import connect_index, index_path_for_sidecar
+    from psydcar.index import connect_index, index_path_for_sidecar
 
     sidecar = registry.get(sidecar_id)
     with connect_index(index_path_for_sidecar(registry, sidecar.id)) as connection:

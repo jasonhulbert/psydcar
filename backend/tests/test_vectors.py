@@ -1,13 +1,13 @@
-import psydecar.vectors as vector_module
-from psydecar.index import (
+import psydcar.vectors as vector_module
+from psydcar.index import (
     connect_index,
     index_path_for_sidecar,
     list_indexing_errors,
     rebuild_sidecar_index,
     select_count,
 )
-from psydecar.sidecars import SidecarRegistry
-from psydecar.vectors import (
+from psydcar.sidecars import SidecarRegistry
+from psydcar.vectors import (
     VectorChunk,
     VectorIndexError,
     VectorSearchHit,

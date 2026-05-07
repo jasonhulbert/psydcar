@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from psydecar.scanner import SkipReason, scan_files, should_include_file
+from psydcar.scanner import SkipReason, scan_files, should_include_file
 
 
 def test_scan_files_skips_binary_oversized_and_ignored_directories(tmp_path):

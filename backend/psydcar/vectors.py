@@ -9,8 +9,8 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Protocol
 
-from psydecar.defaults import DEFAULT_EMBEDDING_MODEL
-from psydecar.index import SearchResult, text_preview
+from psydcar.defaults import DEFAULT_EMBEDDING_MODEL
+from psydcar.index import SearchResult, text_preview
 
 VECTOR_TABLE_NAME = "chunks"
 VECTOR_DIRNAME = "vectors.lance"
@@ -84,7 +84,7 @@ class LocalEmbeddingService:
         except Exception as exc:  # noqa: BLE001 - expose model loading failures clearly.
             raise VectorIndexError(
                 f"could not load local embedding model '{self.model_name}': {exc}. "
-                "Confirm the model is available locally or set PSYDECAR_EMBEDDING_MODEL."
+                "Confirm the model is available locally or set PSYDCAR_EMBEDDING_MODEL."
             ) from exc
         return self._model
 

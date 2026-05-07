@@ -10,11 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from psydecar.scanner import FileCandidate, scan_files
-from psydecar.sidecars import Sidecar, SidecarRegistry
+from psydcar.scanner import FileCandidate, scan_files
+from psydcar.sidecars import Sidecar, SidecarRegistry
 
 if TYPE_CHECKING:
-    from psydecar.vectors import VectorChunk
+    from psydcar.vectors import VectorChunk
 
 INDEX_FILENAME = "index.sqlite"
 SCHEMA_VERSION = 1
@@ -98,7 +98,7 @@ def connect_index(index_path: Path) -> sqlite3.Connection:
     except sqlite3.DatabaseError as exc:
         raise IndexError(
             f"corrupt sidecar index storage at {index_path}: {exc}. "
-            "Run `psydecar rebuild <sidecar-id>` or recreate the sidecar."
+            "Run `psydcar rebuild <sidecar-id>` or recreate the sidecar."
         ) from exc
 
 
@@ -455,7 +455,7 @@ def sync_sidecar_vector_index(
     registry: SidecarRegistry,
     sidecar: Sidecar,
 ) -> None:
-    from psydecar.vectors import VectorIndexError, sync_vector_index, vector_runtime_available
+    from psydcar.vectors import VectorIndexError, sync_vector_index, vector_runtime_available
 
     clear_indexing_errors(connection, "__vector__")
     if not vector_runtime_available():
@@ -602,7 +602,7 @@ def select_count(connection: sqlite3.Connection, sql: str) -> int:
 
 
 def list_vector_chunks(connection: sqlite3.Connection) -> list[VectorChunk]:
-    from psydecar.vectors import VectorChunk
+    from psydcar.vectors import VectorChunk
 
     rows = connection.execute(
         """
@@ -780,7 +780,7 @@ def semantic_search(
     limit: int = 10,
 ) -> list[SearchResult]:
     init_schema(connection)
-    from psydecar.vectors import search_vectors
+    from psydcar.vectors import search_vectors
 
     return search_vectors(
         query,

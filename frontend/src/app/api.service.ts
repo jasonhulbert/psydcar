@@ -86,6 +86,10 @@ export class ApiService {
     return this.http.post<Sidecar>('/api/sidecars', payload);
   }
 
+  deleteSidecar(sidecarId: string) {
+    return this.http.delete<void>(`/api/sidecars/${encodeURIComponent(sidecarId)}`);
+  }
+
   rebuildSidecar(sidecarId: string) {
     return this.http.post(`/api/sidecars/${encodeURIComponent(sidecarId)}/rebuild`, {});
   }

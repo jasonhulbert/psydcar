@@ -163,9 +163,17 @@
             <div class="flex flex-col gap-2 sm:flex-row">
               <button
                 type="button"
+                [class]="buttonClasses('danger')"
+                (click)="removeSelectedSidecar()"
+                [disabled]="operating() || removing() || selectedIsIndexing()"
+              >
+                {{ removing() ? 'Removing...' : 'Remove' }}
+              </button>
+              <button
+                type="button"
                 [class]="buttonClasses()"
                 (click)="runOperation('refresh')"
-                [disabled]="operating() || selectedIsIndexing()"
+                [disabled]="operating() || removing() || selectedIsIndexing()"
               >
                 {{ selectedIsIndexing() ? 'Indexing...' : 'Refresh index' }}
               </button>
@@ -173,7 +181,7 @@
                 type="button"
                 [class]="buttonClasses('primary')"
                 (click)="runOperation('rebuild')"
-                [disabled]="operating() || selectedIsIndexing()"
+                [disabled]="operating() || removing() || selectedIsIndexing()"
               >
                 {{ selectedIsIndexing() ? 'Indexing...' : 'Rebuild' }}
               </button>

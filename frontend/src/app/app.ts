@@ -87,6 +87,7 @@ export class App implements OnInit, OnDestroy {
   readonly loadingDetails = signal(false);
   readonly creating = signal(false);
   readonly operating = signal(false);
+  readonly removing = signal(false);
   readonly browsing = signal(false);
   readonly searching = signal(false);
 
@@ -221,6 +222,36 @@ export class App implements OnInit, OnDestroy {
     }
   }
 
+  async removeSelectedSidecar() {
+    const sidecar = this.selectedSidecar();
+    if (!sidecar) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Remove sidecar "${sidecar.name}"? Psydcar will delete its managed metadata and indexes, but not source files.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    this.removing.set(true);
+    this.detailError = '';
+    try {
+      await firstValueFrom(this.api.deleteSidecar(sidecar.id));
+      this.cancelDetailLoading();
+      this.files.set([]);
+      this.errors.set([]);
+      this.mcpConfig.set(null);
+      this.searchResults.set([]);
+      this.selectedId.set(null);
+      await this.loadSidecars(undefined, { showLoading: false });
+    } catch (error) {
+      this.detailError = this.describeError(error);
+    } finally {
+      this.removing.set(false);
+    }
+  }
+
   async loadDetails() {
     const token = ++this.detailLoadToken;
     const sidecar = this.selectedSidecar();
@@ -350,7 +381,7 @@ export class App implements OnInit, OnDestroy {
     return 'min-h-10 w-full min-w-0 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 shadow-sm shadow-black/20 placeholder:text-slate-500 focus:border-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-300/20';
   }
 
-  buttonClasses(variant: 'primary' | 'secondary' | 'compact' = 'secondary') {
+  buttonClasses(variant: 'primary' | 'secondary' | 'compact' | 'danger' = 'secondary') {
     return cn(
       'inline-flex min-h-10 items-center justify-center rounded-md px-3 py-2 text-sm font-semibold transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300 disabled:pointer-events-none disabled:opacity-50',
       variant === 'primary' &&
@@ -359,6 +390,8 @@ export class App implements OnInit, OnDestroy {
         'border border-slate-700 bg-slate-900 text-slate-200 shadow-sm shadow-black/20 hover:border-slate-600 hover:bg-slate-800 hover:text-slate-50',
       variant === 'compact' &&
         'min-h-8 border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-200 hover:border-slate-600 hover:bg-slate-800',
+      variant === 'danger' &&
+        'border border-rose-400/50 bg-rose-400/10 text-rose-100 shadow-sm shadow-black/20 hover:border-rose-300 hover:bg-rose-400/20',
     );
   }
 

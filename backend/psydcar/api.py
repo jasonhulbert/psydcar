@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sysconfig
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -100,7 +102,8 @@ class McpConfigResponse(BaseModel):
     sidecar_id: str
     command: str
     args: list[str]
-    config: dict[str, Any]
+    claude_code_config: dict[str, Any]
+    codex_config: str
 
 
 class SearchResponse(BaseModel):
@@ -366,19 +369,24 @@ def list_errors(sidecar_id: str, registry: RegistryDependency) -> ErrorsResponse
 @router.get("/api/sidecars/{sidecar_id}/mcp-config", response_model=McpConfigResponse)
 def mcp_config(sidecar_id: str, registry: RegistryDependency) -> McpConfigResponse:
     sidecar = registry.get(sidecar_id)
+    server_name = f"psydcar-{sidecar.id}"
+    command = psydcar_command_path()
     args = ["mcp", "--sidecars", sidecar.id]
     return McpConfigResponse(
         sidecar_id=sidecar.id,
-        command="psydcar",
+        command=command,
         args=args,
-        config={
+        claude_code_config={
             "mcpServers": {
-                f"psydcar-{sidecar.id}": {
-                    "command": "psydcar",
+                server_name: {
+                    "type": "stdio",
+                    "command": command,
                     "args": args,
+                    "env": {},
                 }
             }
         },
+        codex_config=codex_mcp_config(server_name, command, args),
     )
 
 
@@ -446,6 +454,25 @@ def watch_status_to_response(status: WatchStatus) -> WatchStatusResponse:
         refresh_count=status.refresh_count,
         last_error=status.last_error,
     )
+
+
+def psydcar_command_path() -> str:
+    return str((Path(sysconfig.get_path("scripts")) / "psydcar").resolve())
+
+
+def codex_mcp_config(server_name: str, command: str, args: list[str]) -> str:
+    quoted_args = ", ".join(toml_string(arg) for arg in args)
+    return "\n".join(
+        [
+            f"[mcp_servers.{toml_string(server_name)}]",
+            f"command = {toml_string(command)}",
+            f"args = [{quoted_args}]",
+        ]
+    )
+
+
+def toml_string(value: str) -> str:
+    return json.dumps(value)
 
 
 def make_registry_dependency(config: AppConfig) -> Callable[[], SidecarRegistry]:

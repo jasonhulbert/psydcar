@@ -1,3 +1,7 @@
+import json
+import sysconfig
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from psydcar.api import create_app
@@ -96,13 +100,25 @@ def test_api_rebuild_refresh_files_errors_mcp_config_and_search(tmp_path):
     mcp_response = client.get("/api/sidecars/docs/mcp-config")
     assert mcp_response.status_code == 200
     mcp_payload = mcp_response.json()
-    assert mcp_payload["command"] == "psydcar"
+    psydcar_command = str((Path(sysconfig.get_path("scripts")) / "psydcar").resolve())
+    assert mcp_payload["command"] == psydcar_command
     assert mcp_payload["args"] == ["mcp", "--sidecars", "docs"]
-    assert mcp_payload["config"]["mcpServers"]["psydcar-docs"]["args"] == [
+    claude_config = mcp_payload["claude_code_config"]["mcpServers"]["psydcar-docs"]
+    assert claude_config["type"] == "stdio"
+    assert claude_config["command"] == psydcar_command
+    assert claude_config["args"] == [
         "mcp",
         "--sidecars",
         "docs",
     ]
+    assert claude_config["env"] == {}
+    assert mcp_payload["codex_config"] == "\n".join(
+        [
+            '[mcp_servers."psydcar-docs"]',
+            f"command = {json.dumps(psydcar_command)}",
+            'args = ["mcp", "--sidecars", "docs"]',
+        ]
+    )
 
     notes_path.write_text("# Notes\nneedle api docs\nsecond line\n", encoding="utf-8")
     refresh_response = client.post("/api/sidecars/docs/refresh")

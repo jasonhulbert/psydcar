@@ -38,6 +38,74 @@ describe('App', () => {
     expect(compiled.querySelector('h1')?.textContent).toContain('Service dashboard');
   });
 
+  it('should render and copy separate MCP configs', async () => {
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(App);
+    const app = fixture.componentInstance;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    fixture.detectChanges();
+    await flushInitialLoad(fixture, http);
+
+    const claudeCodeConfig = {
+      mcpServers: {
+        'psydcar-docs': {
+          type: 'stdio',
+          command: '/tmp/bin/psydcar',
+          args: ['mcp', '--sidecars', 'docs'],
+          env: {},
+        },
+      },
+    };
+    const codexConfig =
+      '[mcp_servers."psydcar-docs"]\ncommand = "/tmp/bin/psydcar"\nargs = ["mcp", "--sidecars", "docs"]';
+
+    app.sidecars.set([
+      {
+        id: 'docs',
+        name: 'Docs',
+        root_path: '/tmp/docs',
+        created_at: '2026-01-01T00:00:00+00:00',
+        updated_at: '2026-01-01T00:00:00+00:00',
+        indexing_status: 'indexed',
+        last_refresh_at: null,
+        indexed_file_count: 1,
+        chunk_count: 1,
+        error_count: 0,
+        config: {
+          max_file_size_bytes: 1000,
+        },
+      },
+    ]);
+    app.selectedId.set('docs');
+    app.activeTab = 'mcp';
+    app.mcpConfig.set({
+      sidecar_id: 'docs',
+      command: '/tmp/bin/psydcar',
+      args: ['mcp', '--sidecars', 'docs'],
+      claude_code_config: claudeCodeConfig,
+      codex_config: codexConfig,
+    });
+    fixture.detectChanges();
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.textContent).toContain('Claude Code');
+    expect(compiled.textContent).toContain('.mcp.json');
+    expect(compiled.textContent).toContain('Codex');
+    expect(compiled.textContent).toContain('config.toml');
+    expect(compiled.textContent).toContain('"type": "stdio"');
+    expect(compiled.textContent).toContain('[mcp_servers."psydcar-docs"]');
+
+    await app.copyMcpConfig('claude-code');
+    expect(writeText).toHaveBeenLastCalledWith(JSON.stringify(claudeCodeConfig, null, 2));
+
+    await app.copyMcpConfig('codex');
+    expect(writeText).toHaveBeenLastCalledWith(codexConfig);
+  });
+
   it('should remove the selected sidecar after confirmation', async () => {
     const http = TestBed.inject(HttpTestingController);
     const fixture = TestBed.createComponent(App);

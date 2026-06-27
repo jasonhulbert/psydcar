@@ -45,7 +45,8 @@ export interface McpConfig {
   sidecar_id: string;
   command: string;
   args: string[];
-  config: Record<string, unknown>;
+  claude_code_config: Record<string, unknown>;
+  codex_config: string;
 }
 
 export interface SearchResult {

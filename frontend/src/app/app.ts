@@ -22,6 +22,7 @@ import { cn } from './utils/cn';
 type SearchMode = 'keyword' | 'semantic' | 'hybrid';
 type Tab = 'files' | 'errors' | 'mcp' | 'search';
 type MetricTone = 'neutral' | 'good' | 'warn' | 'danger';
+type McpConfigTarget = 'claude-code' | 'codex';
 
 @Component({
   selector: 'app-root',
@@ -96,7 +97,7 @@ export class App implements OnInit, OnDestroy {
   detailError = '';
   browseError = '';
   searchError = '';
-  copyStatus = '';
+  copyStatus: McpConfigTarget | '' = '';
 
   createForm = {
     id: '',
@@ -336,18 +337,24 @@ export class App implements OnInit, OnDestroy {
     }
   }
 
-  async copyMcpConfig() {
+  async copyMcpConfig(target: McpConfigTarget) {
     const config = this.mcpConfig();
     if (!config) {
       return;
     }
 
-    await navigator.clipboard.writeText(this.formattedMcpConfig());
-    this.copyStatus = 'Copied';
+    await navigator.clipboard.writeText(
+      target === 'claude-code' ? this.formattedClaudeCodeMcpConfig() : this.formattedCodexMcpConfig(),
+    );
+    this.copyStatus = target;
   }
 
-  formattedMcpConfig() {
-    return JSON.stringify(this.mcpConfig()?.config ?? {}, null, 2);
+  formattedClaudeCodeMcpConfig() {
+    return JSON.stringify(this.mcpConfig()?.claude_code_config ?? {}, null, 2);
+  }
+
+  formattedCodexMcpConfig() {
+    return this.mcpConfig()?.codex_config ?? '';
   }
 
   searchResultPreview(result: SearchResult) {

@@ -254,12 +254,33 @@
               }
               @case ('mcp') {
                 <div class="grid gap-4">
-                  <app-section-header title="MCP config">
-                    <button [class]="buttonClasses('primary')" type="button" (click)="copyMcpConfig()">
-                      {{ copyStatus || 'Copy config' }}
-                    </button>
-                  </app-section-header>
-                  <pre class="max-w-full overflow-auto rounded-lg border border-slate-700 bg-black/40 p-4 text-xs text-slate-200">{{ formattedMcpConfig() }}</pre>
+                  <app-section-header title="MCP config" />
+                  <div class="grid gap-4 xl:grid-cols-2">
+                    <section class="grid min-w-0 content-start gap-2">
+                      <div class="flex min-w-0 items-center justify-between gap-3">
+                        <div class="min-w-0">
+                          <h3 class="text-sm font-bold text-slate-50">Claude Code</h3>
+                          <p class="text-xs text-slate-400">.mcp.json</p>
+                        </div>
+                        <button [class]="buttonClasses('primary')" type="button" (click)="copyMcpConfig('claude-code')">
+                          {{ copyStatus === 'claude-code' ? 'Copied' : 'Copy' }}
+                        </button>
+                      </div>
+                      <pre class="max-w-full overflow-auto rounded-lg border border-slate-700 bg-black/40 p-4 text-xs text-slate-200">{{ formattedClaudeCodeMcpConfig() }}</pre>
+                    </section>
+                    <section class="grid min-w-0 content-start gap-2">
+                      <div class="flex min-w-0 items-center justify-between gap-3">
+                        <div class="min-w-0">
+                          <h3 class="text-sm font-bold text-slate-50">Codex</h3>
+                          <p class="text-xs text-slate-400">config.toml</p>
+                        </div>
+                        <button [class]="buttonClasses('primary')" type="button" (click)="copyMcpConfig('codex')">
+                          {{ copyStatus === 'codex' ? 'Copied' : 'Copy' }}
+                        </button>
+                      </div>
+                      <pre class="max-w-full overflow-auto rounded-lg border border-slate-700 bg-black/40 p-4 text-xs text-slate-200">{{ formattedCodexMcpConfig() }}</pre>
+                    </section>
+                  </div>
                 </div>
               }
               @case ('search') {

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psydcar"
+version = "0.1.0"
+description = "Local knowledge sidecars for coding agents"
+requires-python = ">=3.10"
+dependencies = ["pypdf>=6.0,<7", "mcp>=2.3,<3"]
+
+[project.scripts]
+psydcar = "psydcar.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+psydcar = ["dashboard_assets/*"]

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Sidecars · Psydcar</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Workspace">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div><strong>psydcar</strong><span>Knowledge workspace</span></div>
+      </div>
+      <div class="sidebar-section-label">WORKSPACE</div>
+      <nav aria-label="Primary">
+        <a class="nav-item active" href="/" aria-current="page"><span class="nav-symbol" aria-hidden="true">◫</span> Sidecars <span class="nav-count" id="nav-count">0</span></a>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-note">
+        <span class="note-icon" aria-hidden="true">◎</span>
+        <strong>Local by design</strong>
+        <p>Source files stay in their folders. Psydcar keeps a searchable view for your tools.</p>
+      </div>
+      <div class="sidebar-footer"><span class="live-dot"></span> <span id="sidebar-watch-label">Starting source watcher</span></div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div class="breadcrumb"><span>Workspace</span><span class="crumb-separator">/</span><strong>Sidecars</strong></div>
+        <div class="topbar-actions">
+          <span class="local-label"><span class="live-dot"></span><span id="topbar-watch-label">Local service</span></span>
+          <button class="icon-button" id="refresh-button" type="button" aria-label="Refresh dashboard" title="Refresh dashboard">↻</button>
+        </div>
+      </header>
+
+      <div class="page-wrap">
+        <section class="hero" aria-labelledby="page-title">
+          <div class="hero-copy">
+            <p class="eyebrow"><span class="eyebrow-line"></span> YOUR KNOWLEDGE, READY TO USE</p>
+            <h1 id="page-title">Sidecars</h1>
+            <p class="hero-description">Keep local collections in sync and see exactly what your agents can find.</p>
+            <button class="button button-primary" id="create-button" type="button"><span aria-hidden="true">＋</span> New sidecar</button>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="orbit orbit-three"></div>
+            <div class="art-tile tile-back"><span></span><span></span><span></span></div>
+            <div class="art-tile tile-front"><b></b><span></span><span></span><span></span></div>
+            <div class="art-spark spark-one"></div><div class="art-spark spark-two"></div>
+          </div>
+        </section>
+
+        <div id="banner" class="banner" role="status" hidden></div>
+
+        <section class="overview" aria-label="Sidecar overview">
+          <div class="metric"><span class="metric-icon total" aria-hidden="true">▦</span><span class="metric-label">Total sidecars</span><strong id="metric-total">—</strong><small>Reusable across projects</small></div>
+          <div class="metric"><span class="metric-icon current" aria-hidden="true">✓</span><span class="metric-label">Current</span><strong id="metric-current">—</strong><small>Ready for retrieval</small></div>
+          <div class="metric"><span class="metric-icon pending" aria-hidden="true">↻</span><span class="metric-label">Updating</span><strong id="metric-pending">—</strong><small>Work in progress</small></div>
+          <div class="metric"><span class="metric-icon attention" aria-hidden="true">!</span><span class="metric-label">Needs attention</span><strong id="metric-attention">—</strong><small>Review source or processing</small></div>
+        </section>
+
+        <section class="setup-section" aria-labelledby="setup-title">
+          <div class="setup-heading"><div><p class="section-kicker">GET CONNECTED</p><h2 id="setup-title">Make your knowledge available</h2></div><p>Choose processing and give each agent connection only the sidecars it needs.</p></div>
+          <div class="setup-grid">
+            <article class="setup-card" aria-labelledby="provider-card-title">
+              <div class="setup-icon provider-icon" aria-hidden="true">✳</div>
+              <div class="setup-card-top"><p class="section-kicker">PROCESSING</p><span id="provider-state" class="status-pill not-indexed">Not configured</span></div>
+              <h3 id="provider-card-title">Embedding provider</h3>
+              <p id="provider-description" class="setup-description">Lexical search is available. Configure an OpenAI-compatible provider to add semantic ranking.</p>
+              <div id="provider-summary" class="setup-summary" hidden></div>
+              <div class="setup-actions"><button class="button button-quiet" id="provider-button" type="button">Configure provider</button><button class="button button-text danger-text" id="clear-provider-button" type="button" hidden>Remove</button></div>
+            </article>
+            <article class="setup-card" aria-labelledby="connection-card-title">
+              <div class="setup-icon connection-icon" aria-hidden="true">⌘</div>
+              <div class="setup-card-top"><p class="section-kicker">AGENT ACCESS</p><span id="connection-count" class="setup-count">0 sidecars</span></div>
+              <h3 id="connection-card-title">MCP connections</h3>
+              <p id="connection-description" class="setup-description">Choose one or more sidecars and prepare a local MCP entry for a project or coding tool.</p>
+              <div class="setup-actions"><button class="button button-quiet" id="connection-button" type="button">Prepare connection <span aria-hidden="true">→</span></button></div>
+            </article>
+          </div>
+        </section>
+
+        <div class="work-grid" id="sidecars">
+          <section class="collection-panel" aria-labelledby="collection-title">
+            <div class="section-heading">
+              <div><p class="section-kicker">YOUR COLLECTIONS</p><h2 id="collection-title">Managed sidecars <span id="sidecar-count">0</span></h2></div>
+              <label class="filter"><span aria-hidden="true">⌕</span><span class="visually-hidden">Filter sidecars</span><input id="filter-input" type="search" placeholder="Filter sidecars" autocomplete="off"></label>
+            </div>
+            <div id="sidecar-list" class="sidecar-list" aria-live="polite"></div>
+            <div id="empty-state" class="empty-state" hidden>
+              <div class="empty-illustration" aria-hidden="true"><span>▱</span><i></i></div>
+              <h3>No sidecars yet</h3>
+              <p>Choose a local folder to make its text, code, and PDFs searchable across your projects.</p>
+              <button class="button button-primary" id="empty-create-button" type="button">Create your first sidecar</button>
+            </div>
+            <div id="filter-empty" class="filter-empty" hidden>No sidecars match this filter. Try another name or source path.</div>
+          </section>
+
+          <aside class="detail-panel" id="detail-panel" aria-label="Sidecar details">
+            <div class="detail-placeholder" id="detail-placeholder"><span class="placeholder-icon" aria-hidden="true">◫</span><h2>Choose a sidecar</h2><p>Select a collection to see its source, update history, and next actions.</p></div>
+            <div id="detail-content" hidden></div>
+          </aside>
+        </div>
+        <footer class="page-footer">Psydcar indexes supported text, code, and extractable PDF pages. Your source files remain the authority.</footer>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="create-dialog" class="modal" aria-labelledby="create-title">
+    <form id="create-form" novalidate>
+      <div class="modal-head"><div><p class="section-kicker">NEW COLLECTION</p><h2 id="create-title">Create a sidecar</h2></div><button class="close-button" type="button" data-close aria-label="Close">×</button></div>
+      <p class="modal-intro">Connect one local directory tree. Psydcar will index supported files inside it.</p>
+      <label class="field"><span>Name</span><input id="create-name" name="name" maxlength="120" placeholder="e.g. Product research" autocomplete="off" required><small>A name you will recognize in the CLI and dashboard.</small></label>
+      <label class="field"><span>Source directory</span><input id="create-source" name="source" placeholder="/Users/you/Notes" autocomplete="off" required><small>Enter an existing directory path on this computer.</small></label>
+      <p class="form-note">Creating starts an update. If an embedding provider is configured, source passages may be sent to it.</p>
+      <div class="form-error" id="create-error" role="alert" hidden></div>
+      <div class="modal-actions"><button class="button button-quiet" type="button" data-close>Cancel</button><button class="button button-primary" type="submit">Create sidecar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="rename-dialog" class="modal" aria-labelledby="rename-title">
+    <form id="rename-form" novalidate>
+      <div class="modal-head"><div><p class="section-kicker">SIDECAR SETTINGS</p><h2 id="rename-title">Rename sidecar</h2></div><button class="close-button" type="button" data-close aria-label="Close">×</button></div>
+      <p class="modal-intro">Its stable ID, source directory, and indexed evidence stay connected.</p>
+      <label class="field"><span>New name</span><input id="rename-name" name="name" maxlength="120" required></label>
+      <div class="form-error" id="rename-error" role="alert" hidden></div>
+      <div class="modal-actions"><button class="button button-quiet" type="button" data-close>Cancel</button><button class="button button-primary" type="submit">Save name</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="remove-dialog" class="modal" aria-labelledby="remove-title">
+    <form id="remove-form" novalidate>
+      <div class="modal-head"><div><p class="section-kicker danger-text">REMOVE SIDECAR</p><h2 id="remove-title">Remove this sidecar?</h2></div><button class="close-button" type="button" data-close aria-label="Close">×</button></div>
+      <p class="modal-intro">This removes the managed sidecar and its search index. <strong>Your source directory and files are not deleted.</strong></p>
+      <label class="field"><span>Type <strong id="remove-name-label"></strong> to confirm</span><input id="remove-confirm" autocomplete="off" required></label>
+      <div class="form-error" id="remove-error" role="alert" hidden></div>
+      <div class="modal-actions"><button class="button button-quiet" type="button" data-close>Cancel</button><button class="button button-danger" id="remove-submit" type="submit" disabled>Remove sidecar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="provider-dialog" class="modal setup-modal" aria-labelledby="provider-title">
+    <form id="provider-form" novalidate>
+      <div class="modal-head"><div><p class="section-kicker">PROCESSING ROUTE</p><h2 id="provider-title">Embedding provider</h2></div><button class="close-button" type="button" data-close aria-label="Close">×</button></div>
+      <p class="modal-intro">Use an OpenAI-compatible provider or gateway. After you save it, manual or automatic sidecar updates may send source passages.</p>
+      <label class="field"><span>Base URL</span><input id="provider-base-url" type="url" placeholder="https://provider.example/v1" autocomplete="url" required><small>Use the base URL before <code>/embeddings</code>.</small></label>
+      <label class="field"><span>Embedding model</span><input id="provider-model" placeholder="Your model name" autocomplete="off" required></label>
+      <label class="field"><span>API key environment variable <em>optional</em></span><input id="provider-env" placeholder="PSYDCAR_EMBEDDING_KEY" autocomplete="off"><small>Set the value in the dashboard process. Psydcar stores only this variable name.</small></label>
+      <label class="check-field"><input id="provider-insecure" type="checkbox"><span>Allow remote HTTP if HTTPS is unavailable</span></label>
+      <p class="form-note">Test sends only the phrase “Psydcar provider connection test.” It never sends a source file.</p>
+      <div class="form-error" id="provider-error" role="alert" hidden></div>
+      <div class="test-result" id="provider-test-result" role="status" hidden></div>
+      <div class="modal-actions"><button class="button button-quiet" type="button" data-close>Cancel</button><button class="button button-quiet" id="provider-test-button" type="button">Test settings</button><button class="button button-primary" id="provider-save-button" type="submit">Save provider</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="clear-provider-dialog" class="modal" aria-labelledby="clear-provider-title">
+    <form id="clear-provider-form">
+      <div class="modal-head"><div><p class="section-kicker danger-text">REMOVE PROVIDER</p><h2 id="clear-provider-title">Remove provider?</h2></div><button class="close-button" type="button" data-close aria-label="Close">×</button></div>
+      <p class="modal-intro">This removes the provider settings and stored vectors. Lexical evidence and sidecars remain available. You can configure a provider again later.</p>
+      <div class="form-error" id="clear-provider-error" role="alert" hidden></div>
+      <div class="modal-actions"><button class="button button-quiet" type="button" data-close>Cancel</button><button class="button button-danger" type="submit">Remove provider</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="connection-dialog" class="modal connection-modal" aria-labelledby="connection-title">
+    <form id="connection-form" novalidate>
+      <div class="modal-head"><div><p class="section-kicker">LOCAL AGENT ACCESS</p><h2 id="connection-title">Prepare an MCP connection</h2></div><button class="close-button" type="button" data-close aria-label="Close">×</button></div>
+      <p class="modal-intro">Give this project or tool an explicit set of sidecars. Psydcar fixes this selection when its MCP process starts.</p>
+      <label class="field"><span>Connection name</span><input id="connection-name" placeholder="project-notes" autocomplete="off" maxlength="64" required><small>Start with a letter. Use letters, numbers, dashes, or underscores.</small></label>
+      <fieldset class="selection-field"><legend>Available sidecars <span id="selected-count">0 selected</span></legend><div id="connection-sidecars" class="selection-list"></div><p id="connection-empty" class="selection-empty" hidden>Create a sidecar first, then return here to select it.</p></fieldset>
+      <div class="form-error" id="connection-error" role="alert" hidden></div>
+      <div class="modal-actions"><button class="button button-quiet" type="button" data-close>Close</button><button class="button button-primary" type="submit">Generate configuration</button></div>
+    </form>
+    <div id="connection-result" class="connection-result" hidden>
+      <div class="result-head"><div><p class="section-kicker">READY TO CONNECT</p><h3 id="result-name">Connection</h3></div><span class="status-pill current">Selected access</span></div>
+      <p id="result-selection" class="result-copy"></p>
+      <ol class="connection-steps"><li>Install Psydcar in this Python environment, then add this entry to your MCP client's local stdio server settings.</li><li>If your client uses a different wrapper, use the same <code>command</code>, <code>args</code>, and <code>env</code> fields.</li><li>Restart the MCP client. Its <code>search</code> and <code>retrieve</code> tools can access only these sidecar IDs.</li></ol>
+      <div class="code-heading"><strong>Server configuration</strong><button class="mini-button" id="copy-connection-button" type="button">Copy JSON</button></div>
+      <pre id="connection-json" tabindex="0"></pre>
+      <p class="result-footnote" id="result-footnote">If the client cannot start Psydcar, check that the Python path exists and Psydcar is installed there. A removed sidecar ID makes this connection fail closed.</p>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <noscript><div class="noscript">Enable JavaScript to manage sidecars in the local dashboard. The CLI remains available.</div></noscript>
+</body>
+</html>

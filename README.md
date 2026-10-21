@@ -18,9 +18,9 @@ tar -xzf psydcar-vVERSION-linux-x86_64.tar.gz
 sh psydcar-vVERSION-linux-x86_64/install.sh
 ```
 
-Replace `VERSION` with the number after `v` in the release tag. For example, tag `v0.1.0` uses `psydcar-v0.1.0-macos-arm64.tar.gz`. Open a new terminal and run `psydcar --version`. The installer places the command at `~/.local/bin/psydcar`, stores program versions under `~/.local/opt/psydcar`, and adds the command directory to your zsh or bash startup files. To upgrade manually, download the newer asset for your machine, extract it, and run its `install.sh` again. The command path stays the same; sidecar data remains in its per-user store. `PSYDCAR_HOME` still selects a different absolute store directory.
+Replace `VERSION` with the number after `v` in the release tag. For example, tag `v0.1.1` uses `psydcar-v0.1.1-macos-arm64.tar.gz`. Open a new terminal and run `psydcar --version`. The installer places the command at `~/.local/bin/psydcar`, stores program versions under `~/.local/opt/psydcar`, and adds the command directory to your zsh or bash startup files. To upgrade manually, download the newer asset for your machine, extract it, and run its `install.sh` again. The command path stays the same; sidecar data remains in its per-user store. `PSYDCAR_HOME` still selects a different absolute store directory.
 
-The first macOS release is unsigned and not notarized. The installer can finish before macOS checks the app. If macOS blocks `psydcar --version` on first launch, open **System Settings → Privacy & Security**, find the blocked Psydcar notice, and select **Open Anyway**. Confirm the prompt and run the command again. [Apple explains this manual override](https://support.apple.com/en-us/102445).
+The macOS release is unsigned and not notarized. The installer can finish before macOS checks the app. If macOS blocks `psydcar --version` on first launch, open **System Settings → Privacy & Security**, find the blocked Psydcar notice, and select **Open Anyway**. Confirm the prompt and run the command again. [Apple explains this manual override](https://support.apple.com/en-us/102445). The macOS `v0.1.0` asset has a bundled Python signature defect; use `v0.1.1` or newer if macOS reports that version as damaged.
 
 For development from this repository, use Python 3.10 or newer and install Psydcar into the Python environment you intend to use:
 

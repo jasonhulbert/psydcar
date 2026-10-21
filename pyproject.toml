@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psydcar"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local knowledge sidecars for coding agents"
 requires-python = ">=3.10"
 dependencies = ["pypdf>=6.0,<7", "mcp>=2.3,<3"]

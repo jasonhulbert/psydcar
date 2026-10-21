@@ -28,7 +28,26 @@ version=$(cat "$(dirname "$installer")/VERSION")
 test "$(cat "$(dirname "$installer")/TARGET")" = "$target"
 
 case "$target" in
-    macos-arm64) shell=/bin/zsh ;;
+    macos-arm64)
+        shell=/bin/zsh
+        bundle="$(dirname "$installer")/psydcar"
+        python_library=
+        for candidate in "$bundle/_internal/Python.framework/Versions"/*/Python \
+            "$bundle/_internal"/libpython*.dylib; do
+            [ -f "$candidate" ] || continue
+            if [ -n "$python_library" ]; then
+                echo "Release bundle contains more than one Python library." >&2
+                exit 1
+            fi
+            python_library=$candidate
+        done
+        if [ -z "$python_library" ]; then
+            echo "Release bundle is missing its Python library." >&2
+            exit 1
+        fi
+        codesign --verify --strict "$python_library"
+        codesign --verify --strict "$bundle/psydcar"
+        ;;
     linux-x86_64) shell=/bin/bash ;;
     *) echo "Unsupported test target: $target" >&2; exit 1 ;;
 esac

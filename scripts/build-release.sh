@@ -28,24 +28,20 @@ rm -rf "$stage"
 mkdir -p "$stage"
 cp -R build/release-dist/psydcar "$stage/psydcar"
 if [ "$target" = macos-arm64 ]; then
-    python_library=
+    found_python_library=no
     for candidate in "$stage/psydcar/_internal/Python.framework/Versions"/*/Python \
         "$stage/psydcar/_internal"/libpython*.dylib; do
-        [ -f "$candidate" ] || continue
-        if [ -n "$python_library" ]; then
-            echo "Release bundle contains more than one Python library." >&2
-            exit 1
-        fi
-        python_library=$candidate
+        [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
+        found_python_library=yes
+        # A collected framework binary can retain a signature for omitted resources.
+        # Sign each staged Python library as a standalone binary.
+        codesign --force --sign - --timestamp=none "$candidate"
+        codesign --verify --strict "$candidate"
     done
-    if [ -z "$python_library" ]; then
+    if [ "$found_python_library" = no ]; then
         echo "Release bundle is missing its Python library." >&2
         exit 1
     fi
-    # A collected Python framework binary retains a signature for omitted resources.
-    # Sign the staged binary as a standalone library.
-    codesign --force --sign - --timestamp=none "$python_library"
-    codesign --verify --strict "$python_library"
     codesign --verify --strict "$stage/psydcar/psydcar"
 fi
 cp scripts/install-release.sh "$stage/install.sh"

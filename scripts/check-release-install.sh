@@ -31,21 +31,17 @@ case "$target" in
     macos-arm64)
         shell=/bin/zsh
         bundle="$(dirname "$installer")/psydcar"
-        python_library=
+        found_python_library=no
         for candidate in "$bundle/_internal/Python.framework/Versions"/*/Python \
             "$bundle/_internal"/libpython*.dylib; do
-            [ -f "$candidate" ] || continue
-            if [ -n "$python_library" ]; then
-                echo "Release bundle contains more than one Python library." >&2
-                exit 1
-            fi
-            python_library=$candidate
+            [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
+            found_python_library=yes
+            codesign --verify --strict "$candidate"
         done
-        if [ -z "$python_library" ]; then
+        if [ "$found_python_library" = no ]; then
             echo "Release bundle is missing its Python library." >&2
             exit 1
         fi
-        codesign --verify --strict "$python_library"
         codesign --verify --strict "$bundle/psydcar"
         ;;
     linux-x86_64) shell=/bin/bash ;;

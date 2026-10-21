@@ -8,6 +8,7 @@ import signal
 import sys
 import threading
 from collections.abc import Sequence
+from importlib.metadata import PackageNotFoundError, version
 
 from .embeddings import ProviderStore
 from .evidence import EvidenceStore
@@ -34,6 +35,11 @@ def _details(sidecar: Sidecar) -> str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="psydcar", description="Manage local knowledge sidecars.")
+    try:
+        installed_version = version("psydcar")
+    except PackageNotFoundError:
+        installed_version = "development"
+    parser.add_argument("--version", action="version", version=f"psydcar {installed_version}")
     commands = parser.add_subparsers(dest="command", required=True)
     sidecar = commands.add_parser("sidecar", help="Create and manage sidecars")
     actions = sidecar.add_subparsers(dest="action", required=True)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-import importlib.util
 import json
 import re
 import secrets
@@ -14,6 +13,7 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -191,10 +191,9 @@ class DashboardServer(ThreadingHTTPServer):
         if not isinstance(references, list) or any(not isinstance(item, str) for item in references):
             raise StoreError("Select one or more sidecars for this connection.")
         ids = selected_ids(self.store, references)
-        if importlib.util.find_spec("mcp") is None:
-            raise StoreError("MCP support is unavailable in this Python. Install Psydcar with its dependencies, then reopen the dashboard.")
-        args = ["-m", "psydcar", "mcp", *(part for sidecar_id in ids for part in ("--sidecar-id", sidecar_id))]
-        entry = {"command": sys.executable, "args": args, "env": {"PSYDCAR_HOME": str(self.store.db_path.parent)}}
+        args = ["mcp", *(part for sidecar_id in ids for part in ("--sidecar-id", sidecar_id))]
+        entry = {"command": str(Path.home() / ".local" / "bin" / "psydcar"),
+                 "args": args, "env": {"PSYDCAR_HOME": str(self.store.db_path.parent)}}
         return {
             "name": name,
             "selected": [{"id": sidecar_id, "name": self.store.get(sidecar_id).name} for sidecar_id in ids],

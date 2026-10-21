@@ -4,7 +4,25 @@ Psydcar makes a local directory of notes, code, and searchable PDFs available to
 
 ## Try the complete local path
 
-Use Python 3.10 or newer. From this repository, install Psydcar into the Python environment you intend to use:
+Download the asset for your machine from the [versioned GitHub Releases](https://github.com/jasonhulbert/psydcar/releases). Supported systems are Apple silicon Macs running macOS 15 or newer and Linux x86-64 systems with glibc 2.35 or newer, such as Ubuntu 22.04 or newer. The release archives include Psydcar, its Python runtime, dependencies, dashboard assets, and an installer. No Python setup, repository checkout, or administrator access is needed.
+
+```console
+tar -xzf psydcar-vVERSION-macos-arm64.tar.gz
+sh psydcar-vVERSION-macos-arm64/install.sh
+```
+
+On Linux x86-64, use its asset instead:
+
+```console
+tar -xzf psydcar-vVERSION-linux-x86_64.tar.gz
+sh psydcar-vVERSION-linux-x86_64/install.sh
+```
+
+Replace `VERSION` with the number after `v` in the release tag. For example, tag `v0.1.0` uses `psydcar-v0.1.0-macos-arm64.tar.gz`. Open a new terminal and run `psydcar --version`. The installer places the command at `~/.local/bin/psydcar`, stores program versions under `~/.local/opt/psydcar`, and adds the command directory to your zsh or bash startup files. To upgrade manually, download the newer asset for your machine, extract it, and run its `install.sh` again. The command path stays the same; sidecar data remains in its per-user store. `PSYDCAR_HOME` still selects a different absolute store directory.
+
+The first macOS release is unsigned and not notarized. The installer can finish before macOS checks the app. If macOS blocks `psydcar --version` on first launch, open **System Settings → Privacy & Security**, find the blocked Psydcar notice, and select **Open Anyway**. Confirm the prompt and run the command again. [Apple explains this manual override](https://support.apple.com/en-us/102445).
+
+For development from this repository, use Python 3.10 or newer and install Psydcar into the Python environment you intend to use:
 
 ```console
 python -m pip install -e .
@@ -103,7 +121,7 @@ Search may show the last indexed passage while an update is pending or failed. C
 
 ## Give an MCP client explicit access
 
-Use **MCP connections** → **Prepare connection** in the dashboard. Give the connection a name, check one or more sidecars in **Available sidecars**, then choose **Generate configuration**. The result names and lists the exact selected stable IDs. **Copy JSON** provides an MCP stdio entry with the dashboard's installed Python executable, `--sidecar-id` arguments, and the local `PSYDCAR_HOME` value. Add it to the MCP settings of that project or coding tool, then restart the client. The client must use a Python environment with Psydcar installed. If your client has a different settings wrapper, use the entry's `command`, `args`, and `env` fields.
+Install the Psydcar release for your machine as described above. Then use **MCP connections** → **Prepare connection** in the dashboard. Give the connection a name, check one or more sidecars in **Available sidecars**, then choose **Generate configuration**. The result names and lists the exact selected stable IDs. **Copy JSON** provides an MCP stdio entry with the absolute path to the installed `~/.local/bin/psydcar` command, `--sidecar-id` arguments, and the local `PSYDCAR_HOME` value. Add it to the MCP settings of that project or coding tool, then restart the client. The command path stays the same when you install a newer release, so the saved connection does not need to be regenerated. If your client has a different settings wrapper, use the entry's `command`, `args`, and `env` fields.
 
 For manual setup, copy stable IDs from `psydcar sidecar list` and configure a stdio process with this command. Repeat `--sidecar-id` for more sidecars:
 
@@ -129,4 +147,4 @@ Psydcar ignores hidden files and directories, unsupported extensions, and direct
 | **Stale** or **Needs attention** | Run `psydcar sidecar show NAME`, fix the reported source or provider problem, and update. |
 | A PDF page has no searchable text | Use a text-searchable PDF or OCR the source outside Psydcar, then update. |
 | **Credential missing** or a provider test fails | Set the named variable before starting the dashboard or MCP client. Check the URL, model, and gateway, then test again. |
-| An MCP connection fails to start | Check that its selected IDs still exist, its Python path has Psydcar installed, and `PSYDCAR_HOME` points to the same store. Generate the entry again if any of these changed. |
+| An MCP connection fails to start | Check that its selected IDs still exist, the release command is installed at the saved path, and `PSYDCAR_HOME` points to the same store. Generate the entry again if the selected IDs or store changed. |

@@ -431,7 +431,7 @@
       byId("result-name").textContent = preview.name;
       byId("result-selection").textContent = `Access: ${preview.selected.map((item) => `${item.name} (${item.id})`).join(", ")}.`;
       byId("connection-json").textContent = JSON.stringify(preview.config, null, 2);
-      byId("result-footnote").textContent = `If the client cannot start Psydcar, check that the Python path exists and Psydcar is installed there. A removed sidecar ID makes this connection fail closed.${model.provider.api_key_env ? ` To use embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
+      byId("result-footnote").textContent = `If the client cannot start Psydcar, check that the release is installed at the command path above. A removed sidecar ID makes this connection fail closed.${model.provider.api_key_env ? ` To use embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
       byId("connection-result").hidden = false;
       byId("connection-result").scrollIntoView({ block: "nearest" });
     } catch (error) { formError("connection-error", error.message); }

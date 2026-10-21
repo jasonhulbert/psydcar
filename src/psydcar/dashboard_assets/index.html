@@ -177,10 +177,10 @@
     <div id="connection-result" class="connection-result" hidden>
       <div class="result-head"><div><p class="section-kicker">READY TO CONNECT</p><h3 id="result-name">Connection</h3></div><span class="status-pill current">Selected access</span></div>
       <p id="result-selection" class="result-copy"></p>
-      <ol class="connection-steps"><li>Install Psydcar in this Python environment, then add this entry to your MCP client's local stdio server settings.</li><li>If your client uses a different wrapper, use the same <code>command</code>, <code>args</code>, and <code>env</code> fields.</li><li>Restart the MCP client. Its <code>search</code> and <code>retrieve</code> tools can access only these sidecar IDs.</li></ol>
+      <ol class="connection-steps"><li>Install the Psydcar release for your machine, then add this entry to your MCP client's local stdio server settings.</li><li>If your client uses a different wrapper, use the same <code>command</code>, <code>args</code>, and <code>env</code> fields.</li><li>Restart the MCP client. Its <code>search</code> and <code>retrieve</code> tools can access only these sidecar IDs.</li></ol>
       <div class="code-heading"><strong>Server configuration</strong><button class="mini-button" id="copy-connection-button" type="button">Copy JSON</button></div>
       <pre id="connection-json" tabindex="0"></pre>
-      <p class="result-footnote" id="result-footnote">If the client cannot start Psydcar, check that the Python path exists and Psydcar is installed there. A removed sidecar ID makes this connection fail closed.</p>
+      <p class="result-footnote" id="result-footnote">If the client cannot start Psydcar, check that the release is installed at the command path above. A removed sidecar ID makes this connection fail closed.</p>
     </div>
   </dialog>
 

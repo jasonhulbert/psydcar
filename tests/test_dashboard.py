@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -256,7 +256,6 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.http("DELETE", "/api/provider", {"confirm": "clear"})[0], 200)
             self.assertEqual(self.http("GET", "/api/sidecars")[1]["provider"]["state"], "unconfigured")
 
-    @unittest.skipUnless(importlib.util.find_spec("mcp"), "Install the declared mcp dependency for connection preview")
     def test_connection_preview_uses_exact_ids_and_local_store(self) -> None:
         one = self.server.store.create("One", self.source)
         second_source = self.root / "second"
@@ -270,16 +269,15 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(status, 200, preview)
         self.assertEqual(preview["selected"], [{"id": one.id, "name": "One"}])
         entry = preview["config"]["mcpServers"]["project_a"]
-        self.assertEqual(entry["command"], sys.executable)
-        self.assertEqual(entry["args"], ["-m", "psydcar", "mcp", "--sidecar-id", one.id])
+        self.assertEqual(entry["command"], str(Path.home() / ".local" / "bin" / "psydcar"))
+        self.assertEqual(entry["args"], ["mcp", "--sidecar-id", one.id])
         self.assertEqual(entry["env"], {"PSYDCAR_HOME": str(self.database.parent)})
         self.assertNotIn(two.id, json.dumps(preview))
-        self.assertEqual(self.http("POST", "/api/connections/preview", {"name": "project_b", "sidecar_ids": [one.id, two.id]})[0], 200)
-        with patch("psydcar.dashboard.importlib.util.find_spec", return_value=None):
-            status, unavailable = self.http("POST", "/api/connections/preview",
-                                            {"name": "project_a", "sidecar_ids": [one.id]})
-        self.assertEqual(status, 400)
-        self.assertIn("Install Psydcar with its dependencies", unavailable["error"])
+        status, combined = self.http("POST", "/api/connections/preview",
+                                     {"name": "project_b", "sidecar_ids": [one.id, two.id]})
+        self.assertEqual(status, 200)
+        self.assertEqual(combined["entry"]["args"],
+                         ["mcp", "--sidecar-id", one.id, "--sidecar-id", two.id])
 
     def test_static_assets_and_package_data(self) -> None:
         for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js"):

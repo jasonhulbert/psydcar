@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import re
 import secrets
 import signal
@@ -76,6 +77,34 @@ def _provider_test_hint(error: EmbeddingError) -> str:
     if "could not be reached" in detail:
         return "Check that the gateway is running or that this computer can reach the provider URL."
     return "Check that this URL and model support the OpenAI-compatible /embeddings route."
+
+
+def _installed_pipx_command() -> Path:
+    """Accept only the stable link exposed by this user's Psydcar pipx venv."""
+    command = Path.home() / ".local" / "bin" / "psydcar"
+    if not command.exists() and not command.is_symlink():
+        raise StoreError(f"Psydcar is not installed at {command}. Follow the README's pipx install steps, then try again.")
+
+    recovery = (f"{command} is not the Psydcar command installed by pipx. Inspect what owns that path "
+                "before changing it. Follow the README's migration steps if this is an earlier Psydcar install.")
+    if not command.is_symlink():
+        raise StoreError(recovery)
+    try:
+        target = command.resolve(strict=True)
+        home = Path.home().resolve(strict=True)
+        if (not target.is_file() or not os.access(target, os.X_OK)
+                or not target.is_relative_to(home)
+                or target.name != "psydcar" or target.parent.name != "bin"
+                or target.parent.parent.name != "psydcar" or target.parent.parent.parent.name != "venvs"):
+            raise StoreError(recovery)
+        metadata = json.loads((target.parent.parent / "pipx_metadata.json").read_text(encoding="utf-8"))
+        package = metadata["main_package"]
+        exposed = {Path(item["__Path__"]).resolve(strict=True) for item in package["app_paths"]}
+        if package["package"] != "psydcar" or "psydcar" not in package["apps"] or target not in exposed:
+            raise StoreError(recovery)
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+        raise StoreError(recovery) from exc
+    return command
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -192,7 +221,7 @@ class DashboardServer(ThreadingHTTPServer):
             raise StoreError("Select one or more sidecars for this connection.")
         ids = selected_ids(self.store, references)
         args = ["mcp", *(part for sidecar_id in ids for part in ("--sidecar-id", sidecar_id))]
-        entry = {"command": str(Path.home() / ".local" / "bin" / "psydcar"),
+        entry = {"command": str(_installed_pipx_command()),
                  "args": args, "env": {"PSYDCAR_HOME": str(self.store.db_path.parent)}}
         return {
             "name": name,

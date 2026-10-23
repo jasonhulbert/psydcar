@@ -374,7 +374,7 @@
   });
   byId("connection-button").addEventListener("click", openConnection);
   byId("provider-form").addEventListener("input", () => { byId("provider-test-result").hidden = true; formError("provider-error", ""); });
-  byId("connection-form").addEventListener("input", () => { byId("connection-result").hidden = true; formError("connection-error", ""); });
+  byId("connection-form").addEventListener("input", () => { byId("connection-result").hidden = true; model.connectionPreview = null; formError("connection-error", ""); });
 
   byId("provider-test-button").addEventListener("click", async () => {
     const button = byId("provider-test-button");
@@ -425,13 +425,15 @@
     if (!sidecarIds.length) { formError("connection-error", "Select at least one sidecar. Create one first if this list is empty."); return; }
     const button = event.target.querySelector('[type="submit"]');
     button.disabled = true;
+    byId("connection-result").hidden = true;
+    model.connectionPreview = null;
     try {
       const preview = await request("/api/connections/preview", { method: "POST", body: JSON.stringify({ name, sidecar_ids: sidecarIds }) });
       model.connectionPreview = preview;
       byId("result-name").textContent = preview.name;
       byId("result-selection").textContent = `Access: ${preview.selected.map((item) => `${item.name} (${item.id})`).join(", ")}.`;
       byId("connection-json").textContent = JSON.stringify(preview.config, null, 2);
-      byId("result-footnote").textContent = `If the client cannot start Psydcar, check that the release is installed at the command path above. A removed sidecar ID makes this connection fail closed.${model.provider.api_key_env ? ` To use embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
+      byId("result-footnote").textContent = `The pipx command path stays the same after an upgrade. A removed sidecar ID makes this connection fail closed.${model.provider.api_key_env ? ` To use embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
       byId("connection-result").hidden = false;
       byId("connection-result").scrollIntoView({ block: "nearest" });
     } catch (error) { formError("connection-error", error.message); }

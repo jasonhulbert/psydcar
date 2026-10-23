@@ -2,25 +2,89 @@
 
 Psydcar makes a local directory of notes, code, and searchable PDFs available to your coding agents. Each **sidecar** has one source directory, a name, and a stable ID. Psydcar stores an index for one OS user; it does not move or edit the source files. The same sidecar can serve several projects and tools.
 
-## Try the complete local path
+## Install on an Apple silicon Mac
 
-Download the asset for your machine from the [versioned GitHub Releases](https://github.com/jasonhulbert/psydcar/releases). Supported systems are Apple silicon Macs running macOS 15 or newer and Linux x86-64 systems with glibc 2.35 or newer, such as Ubuntu 22.04 or newer. The release archives include Psydcar, its Python runtime, dependencies, dashboard assets, and an installer. No Python setup, repository checkout, or administrator access is needed.
-
-```console
-tar -xzf psydcar-vVERSION-macos-arm64.tar.gz
-sh psydcar-vVERSION-macos-arm64/install.sh
-```
-
-On Linux x86-64, use its asset instead:
+The interim release supports Apple silicon Macs running macOS 15 or newer. Install [Homebrew](https://brew.sh/) if it is not already available, then install pyenv and pipx. Pyenv provides Python 3.11.14 for Psydcar without changing your selected Python version:
 
 ```console
-tar -xzf psydcar-vVERSION-linux-x86_64.tar.gz
-sh psydcar-vVERSION-linux-x86_64/install.sh
+brew install pyenv pipx
+pyenv install -s 3.11.14
+pipx ensurepath
 ```
 
-Replace `VERSION` with the number after `v` in the release tag. For example, tag `v0.1.1` uses `psydcar-v0.1.1-macos-arm64.tar.gz`. Open a new terminal and run `psydcar --version`. The installer places the command at `~/.local/bin/psydcar`, stores program versions under `~/.local/opt/psydcar`, and adds the command directory to your zsh or bash startup files. To upgrade manually, download the newer asset for your machine, extract it, and run its `install.sh` again. The command path stays the same; sidecar data remains in its per-user store. `PSYDCAR_HOME` still selects a different absolute store directory.
+Open a new terminal so pipx's command directory is on `PATH`. Install the package from PyPI using the pyenv Python:
 
-The macOS release is unsigned and not notarized. The installer can finish before macOS checks the app. If macOS blocks `psydcar --version` on first launch, open **System Settings → Privacy & Security**, find the blocked Psydcar notice, and select **Open Anyway**. Confirm the prompt and run the command again. [Apple explains this manual override](https://support.apple.com/en-us/102445). The macOS `v0.1.0` asset has a bundled Python signature defect; use `v0.1.1` or newer if macOS reports that version as damaged.
+```console
+pipx install --python "$(pyenv prefix 3.11.14)/bin/python3.11" psydcar
+command -v psydcar
+psydcar --version
+psydcar --help
+```
+
+`command -v psydcar` should print `/Users/YOUR_NAME/.local/bin/psydcar`. If it reports another path, inspect that command before continuing. The pipx command stays at `~/.local/bin/psydcar`; Psydcar keeps sidecar data outside its installed package. `PSYDCAR_HOME` can select another absolute store directory.
+
+To try the installed CLI, follow the temporary sidecar example below. Then run `psydcar dashboard` from the same terminal to open the local dashboard. Press Ctrl-C to stop it.
+
+### Move from an earlier installation
+
+Check the command your current shell runs before installing with pipx. If it runs, save the output of `psydcar sidecar list` so you can compare IDs later. Also check whether the pipx command location is already occupied:
+
+```console
+type -a psydcar
+ls -ld "$HOME/.local/bin/psydcar"
+```
+
+The `ls` command may report that the file does not exist; that is safe for a new pipx install. An earlier Psydcar release installer created a regular file at this path with exactly these three lines:
+
+```sh
+#!/bin/sh
+# Installed Psydcar launcher. The current link changes on reinstall.
+exec "$HOME/.local/opt/psydcar/current/psydcar" "$@"
+```
+
+If the path is a regular file, inspect it with `cat "$HOME/.local/bin/psydcar"`. The command below also checks its exact contents before moving it. Change the backup name if you already have a file with that name:
+
+```console
+old="$HOME/.local/bin/psydcar"
+backup="$HOME/.local/bin/psydcar.old-release"
+if [ ! -f "$old" ] || [ -L "$old" ] || ! cmp -s "$old" <(printf '%s\n' '#!/bin/sh' '# Installed Psydcar launcher. The current link changes on reinstall.' 'exec "$HOME/.local/opt/psydcar/current/psydcar" "$@"'); then
+    printf 'Stop: this is not the earlier Psydcar release launcher.\n' >&2
+    false
+elif [ -e "$backup" ] || [ -L "$backup" ]; then
+    printf 'Stop: backup name is already in use. Choose another.\n' >&2
+    false
+else
+    mv "$old" "$backup"
+fi
+```
+
+If the launcher check fails, stop and resolve ownership before installing. A symlink or file with different contents is not the recognized release launcher. If only the backup name is occupied, choose an unused backup name and rerun the check. Do not use `pipx install --force` to replace a command. Leave `~/.local/opt/psydcar` and your sidecar store in place while you verify the new install.
+
+Now follow the pipx install commands above. Keep the same absolute `PSYDCAR_HOME` value in the new shell if you used one before. Otherwise, Psydcar continues to use its default macOS store. Compare `psydcar sidecar list` before and after migration to confirm the same stable IDs and source directories are present.
+
+If `type -a psydcar` shows a pyenv shim before the pipx path, check which pyenv installation owns it:
+
+```console
+pyenv which psydcar
+pyenv exec python -m pip show psydcar
+```
+
+Only when `pip show` reports an `Editable project location` that points to your earlier Psydcar checkout, remove that package from the selected pyenv environment with `pyenv exec python -m pip uninstall psydcar`, then run `pyenv rehash`. Do not remove a pyenv command whose owner you cannot identify. If pyenv still puts its shim first, put `export PATH="$HOME/.local/bin:$PATH"` after your pyenv initialization in `~/.zshrc`. Open a new terminal and check `command -v psydcar`; it must report `$HOME/.local/bin/psydcar`. Then run `psydcar --version` and `psydcar sidecar list` in that new shell. A saved MCP connection still uses the same absolute command and store path.
+
+### Upgrade and recover
+
+After a newer version is published to PyPI, upgrade the pipx installation:
+
+```console
+pipx upgrade psydcar
+command -v psydcar
+psydcar --version
+psydcar sidecar list
+```
+
+The command should still resolve to `$HOME/.local/bin/psydcar`, and `sidecar list` should show the same IDs and sources. Pipx replaces the program environment, not the sidecar store. Keep the same absolute `PSYDCAR_HOME` value if you use a custom store. Restart a running dashboard and MCP client so their processes use the new version. Saved MCP configurations keep working because their absolute command path and selected IDs do not change.
+
+There is no certified rollback version for an upgraded store yet. Do not point an earlier Psydcar version at your live store until its compatibility with a copy of the upgraded store has been checked. If a published version is defective, use a newer fixed version when available. PyPI does not allow replacing files for an existing version. Maintainers should consider yanking a defective version when new installs could be harmed, and publish the fix under a new version; yanking does not repair installations that already have it.
 
 For development from this repository, use Python 3.10 or newer and install Psydcar into the Python environment you intend to use:
 
@@ -28,7 +92,7 @@ For development from this repository, use Python 3.10 or newer and install Psydc
 python -m pip install -e .
 ```
 
-These commands create an isolated example on macOS or Linux. Keep this terminal open so the `PSYDCAR_HOME` setting remains available. For a lasting collection, use an existing source directory from a fresh terminal without `PSYDCAR_HOME`, or set it to a permanent absolute directory.
+These commands create an isolated example. Keep this terminal open so the `PSYDCAR_HOME` setting remains available. For a lasting collection, use an existing source directory from a fresh terminal without `PSYDCAR_HOME`, or set it to a permanent absolute directory.
 
 ```console
 export PSYDCAR_DEMO_DIR="$(mktemp -d)"
@@ -48,7 +112,7 @@ psydcar retrieve --sidecar "Demo notes" EVIDENCE_ID
 
 Open the browser dashboard from the same terminal with `psydcar dashboard`. It opens at `http://127.0.0.1:8765` and stays in the foreground. Press Ctrl-C to stop it. The dashboard and CLI use the same store and stable sidecar IDs.
 
-The example store is under the temporary `PSYDCAR_DEMO_DIR`. Psydcar normally uses `~/Library/Application Support/psydcar` on macOS, `$XDG_DATA_HOME/psydcar` or `~/.local/share/psydcar` on Linux, and `%LOCALAPPDATA%/psydcar` on Windows. `PSYDCAR_HOME` selects a different absolute store directory. Start the dashboard, CLI, and MCP client with the same value when you use one.
+The example store is under the temporary `PSYDCAR_DEMO_DIR`. On macOS, Psydcar normally uses `~/Library/Application Support/psydcar`. `PSYDCAR_HOME` selects a different absolute store directory. Start the dashboard, CLI, and MCP client with the same value when you use one.
 
 ## Create and manage a real sidecar
 
@@ -121,7 +185,7 @@ Search may show the last indexed passage while an update is pending or failed. C
 
 ## Give an MCP client explicit access
 
-Install the Psydcar release for your machine as described above. Then use **MCP connections** → **Prepare connection** in the dashboard. Give the connection a name, check one or more sidecars in **Available sidecars**, then choose **Generate configuration**. The result names and lists the exact selected stable IDs. **Copy JSON** provides an MCP stdio entry with the absolute path to the installed `~/.local/bin/psydcar` command, `--sidecar-id` arguments, and the local `PSYDCAR_HOME` value. Add it to the MCP settings of that project or coding tool, then restart the client. The command path stays the same when you install a newer release, so the saved connection does not need to be regenerated. If your client has a different settings wrapper, use the entry's `command`, `args`, and `env` fields.
+Install Psydcar with pipx as described above. Then use **MCP connections** → **Prepare connection** in the dashboard. Give the connection a name, check one or more sidecars in **Available sidecars**, then choose **Generate configuration**. The result names and lists the exact selected stable IDs. **Copy JSON** provides an MCP stdio entry with the absolute path to the installed `~/.local/bin/psydcar` command, `--sidecar-id` arguments, and the local `PSYDCAR_HOME` value. Add it to the MCP settings of that project or coding tool, then restart the client. The command path stays the same when you install a newer release, so the saved connection does not need to be regenerated. If your client has a different settings wrapper, use the entry's `command`, `args`, and `env` fields.
 
 For manual setup, copy stable IDs from `psydcar sidecar list` and configure a stdio process with this command. Repeat `--sidecar-id` for more sidecars:
 
@@ -147,4 +211,4 @@ Psydcar ignores hidden files and directories, unsupported extensions, and direct
 | **Stale** or **Needs attention** | Run `psydcar sidecar show NAME`, fix the reported source or provider problem, and update. |
 | A PDF page has no searchable text | Use a text-searchable PDF or OCR the source outside Psydcar, then update. |
 | **Credential missing** or a provider test fails | Set the named variable before starting the dashboard or MCP client. Check the URL, model, and gateway, then test again. |
-| An MCP connection fails to start | Check that its selected IDs still exist, the release command is installed at the saved path, and `PSYDCAR_HOME` points to the same store. Generate the entry again if the selected IDs or store changed. |
+| An MCP connection fails to start | Check that its selected IDs still exist, the pipx command is installed at the saved path, and `PSYDCAR_HOME` points to the same store. Generate the entry again if the selected IDs or store changed. |

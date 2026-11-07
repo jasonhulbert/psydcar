@@ -5,18 +5,22 @@ tag=$1
 version=${tag#v}
 test "$tag" = "v$version"
 
-# Keep the public check on the same prerequisite and install commands as the README.
-brew install pyenv pipx
-pyenv install -s 3.11.14
-pipx ensurepath
-zsh -lic 'pipx install --python "$(pyenv prefix 3.11.14)/bin/python3.11" psydcar'
-
-command_path=$(zsh -lic 'command -v psydcar')
-test "$command_path" = "$HOME/.local/bin/psydcar"
-test "$(zsh -lic 'psydcar --version')" = "psydcar $version"
-zsh -lic 'psydcar --help' >/dev/null
+# PyPI's index can lag a few minutes behind an upload, so retry the pinned install.
+attempt=1
+until python -m pipx install "psydcar==$version"; do
+    if [ "$attempt" -ge 30 ]; then
+        echo "psydcar $version could not be installed from PyPI" >&2
+        exit 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 10
+done
 PATH="$HOME/.local/bin:$PATH"
 export PATH
+
+test "$(command -v psydcar)" = "$HOME/.local/bin/psydcar"
+test "$(psydcar --version)" = "psydcar $version"
+psydcar --help >/dev/null
 
 work=$(mktemp -d)
 dashboard_pid=
@@ -61,10 +65,10 @@ grep -q '<title>Sidecars' "$work/dashboard.html"
 grep -q 'sidecar' "$work/dashboard.js"
 grep -q 'sidebar' "$work/dashboard.css"
 
-"$(pyenv prefix 3.11.14)/bin/python3.11" scripts/check-release-mcp.py save \
+python scripts/check-release-mcp.py save \
     "$dashboard_url" "$HOME" "$store" "$sidecar_id" "$work/connection.json"
 kill "$dashboard_pid"
 wait "$dashboard_pid" 2>/dev/null || true
 dashboard_pid=
-"$(pyenv prefix 3.11.14)/bin/python3.11" scripts/check-release-mcp.py check \
+python scripts/check-release-mcp.py check \
     "$work/connection.json" "$HOME" "$store" "$sidecar_id"

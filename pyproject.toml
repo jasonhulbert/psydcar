@@ -1,14 +1,39 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "psydcar"
 version = "0.1.3"
-description = "Local knowledge sidecars for coding agents"
+description = "Give coding agents searchable access to your local notes, code, and PDFs over MCP"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jason Hulbert" }]
 requires-python = ">=3.10"
 dependencies = ["pypdf>=6.0,<7", "mcp>=2.3,<3"]
+keywords = ["mcp", "model-context-protocol", "coding-agents", "search", "embeddings", "rag", "knowledge-base"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Topic :: Text Processing :: Indexing",
+]
+
+[project.urls]
+Homepage = "https://github.com/jasonhulbert/psydcar"
+Issues = "https://github.com/jasonhulbert/psydcar/issues"
+Changelog = "https://github.com/jasonhulbert/psydcar/blob/main/CHANGELOG.md"
 
 [project.scripts]
 psydcar = "psydcar.cli:main"

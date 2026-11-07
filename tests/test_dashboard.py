@@ -56,11 +56,6 @@ class DashboardTests(unittest.TestCase):
         self.work = self.root / "other-project"
         self.work.mkdir()
         self.database = self.root / "store" / "psydcar.sqlite3"
-        self.pipx_home = self.root / "home"
-        self.pipx_home.mkdir()
-        home_patch = patch("psydcar.dashboard.Path.home", return_value=self.pipx_home)
-        home_patch.start()
-        self.addCleanup(home_patch.stop)
         try:
             self.server = DashboardServer(SidecarStore(self.database), port=0, watch_interval=0.1)
         except PermissionError as exc:
@@ -111,19 +106,6 @@ class DashboardTests(unittest.TestCase):
     def entry(self, sidecar_id: str) -> dict:
         sidecars = self.http("GET", "/api/sidecars")[1]["sidecars"]
         return next(item for item in sidecars if item["id"] == sidecar_id)
-
-    def install_pipx_fixture(self) -> Path:
-        target = self.pipx_home / "Library" / "Application Support" / "pipx" / "venvs" / "psydcar" / "bin" / "psydcar"
-        target.parent.mkdir(parents=True)
-        target.write_text("#!/bin/sh\nexit 0\n")
-        target.chmod(0o755)
-        metadata = {"main_package": {"package": "psydcar", "apps": ["psydcar"],
-                                     "app_paths": [{"__Path__": str(target)}]}}
-        (target.parent.parent / "pipx_metadata.json").write_text(json.dumps(metadata))
-        command = self.pipx_home / ".local" / "bin" / "psydcar"
-        command.parent.mkdir(parents=True, exist_ok=True)
-        command.symlink_to(target)
-        return command
 
     def test_browser_management_shares_cli_state_and_watches_sources(self) -> None:
         self.assertEqual(self.http("GET", "/api/bootstrap")[1]["sidecars"], [])
@@ -242,7 +224,6 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn(PROBE_SECRET, json.dumps(saved) + json.dumps(self.http("GET", "/api/bootstrap")[1]))
             self.assertIn("Model: demo-model", self.cli("provider", "show").stdout)
             if importlib.util.find_spec("mcp"):
-                self.install_pipx_fixture()
                 status, preview = self.http("POST", "/api/connections/preview",
                                             {"name": "private_project", "sidecar_ids": [sidecar.id]})
                 self.assertEqual(status, 200, preview)
@@ -276,7 +257,9 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.http("GET", "/api/sidecars")[1]["provider"]["state"], "unconfigured")
 
     def test_connection_preview_uses_exact_ids_and_local_store(self) -> None:
-        self.install_pipx_fixture()
+        which = patch("psydcar.dashboard.shutil.which", return_value=None)
+        which.start()
+        self.addCleanup(which.stop)
         one = self.server.store.create("One", self.source)
         second_source = self.root / "second"
         second_source.mkdir()
@@ -289,44 +272,28 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(status, 200, preview)
         self.assertEqual(preview["selected"], [{"id": one.id, "name": "One"}])
         entry = preview["config"]["mcpServers"]["project_a"]
-        self.assertEqual(entry["command"], str(Path.home() / ".local" / "bin" / "psydcar"))
-        self.assertEqual(entry["args"], ["mcp", "--sidecar-id", one.id])
+        self.assertEqual(entry["command"], str(Path(sys.executable).absolute()))
+        self.assertEqual(entry["args"], ["-m", "psydcar", "mcp", "--sidecar-id", one.id])
         self.assertEqual(entry["env"], {"PSYDCAR_HOME": str(self.database.parent)})
         self.assertNotIn(two.id, json.dumps(preview))
         status, combined = self.http("POST", "/api/connections/preview",
                                      {"name": "project_b", "sidecar_ids": [one.id, two.id]})
         self.assertEqual(status, 200)
         self.assertEqual(combined["entry"]["args"],
-                         ["mcp", "--sidecar-id", one.id, "--sidecar-id", two.id])
+                         ["-m", "psydcar", "mcp", "--sidecar-id", one.id, "--sidecar-id", two.id])
 
-    def test_connection_preview_rejects_missing_or_conflicting_command(self) -> None:
+    def test_connection_preview_uses_installed_command_on_path(self) -> None:
         one = self.server.store.create("One", self.source)
-        request = {"name": "project_a", "sidecar_ids": [one.id]}
-        status, missing = self.http("POST", "/api/connections/preview", request)
-        self.assertEqual(status, 400)
-        self.assertIn("pipx install", missing["error"])
-
-        command = self.pipx_home / ".local" / "bin" / "psydcar"
-        command.parent.mkdir(parents=True)
-        command.write_text("unrelated command")
-        status, conflict = self.http("POST", "/api/connections/preview", request)
-        self.assertEqual(status, 400)
-        self.assertIn("Inspect what owns", conflict["error"])
-        self.assertEqual(command.read_text(), "unrelated command")
-
-        command.unlink()
-        self.install_pipx_fixture()
-        metadata = command.resolve().parent.parent / "pipx_metadata.json"
-        data = json.loads(metadata.read_text())
-        data["main_package"]["package"] = "another-package"
-        metadata.write_text(json.dumps(data))
-        status, conflict = self.http("POST", "/api/connections/preview", request)
-        self.assertEqual(status, 400)
-        self.assertIn("Inspect what owns", conflict["error"])
-
-        data["main_package"]["package"] = "psydcar"
-        metadata.write_text(json.dumps(data))
-        self.assertEqual(self.http("POST", "/api/connections/preview", request)[0], 200)
+        scripts = self.root / "bin"
+        scripts.mkdir()
+        command = scripts / "psydcar"
+        command.write_text("#!/bin/sh\n")
+        with patch("psydcar.dashboard.shutil.which", return_value=str(command)), \
+                patch("psydcar.dashboard._script_dirs", return_value={scripts.resolve()}):
+            status, preview = self.http("POST", "/api/connections/preview", {"name": "project_a", "sidecar_ids": [one.id]})
+        self.assertEqual(status, 200, preview)
+        self.assertEqual(preview["entry"]["command"], str(command.absolute()))
+        self.assertEqual(preview["entry"]["args"], ["mcp", "--sidecar-id", one.id])
 
     def test_static_assets_and_package_data(self) -> None:
         for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js"):

@@ -40,16 +40,13 @@ CI runs the suite on macOS and Linux for every supported Python version. Some te
 
 ## Releasing
 
-Releases are published to PyPI by `.github/workflows/release.yml` through PyPI trusted publishing.
+Releases are automatic. `.github/workflows/release.yml` runs on every push to `main`. If the `version` in `pyproject.toml` has no matching `vX.Y.Z` tag yet, the workflow runs these steps:
 
-1. Bump `version` in `pyproject.toml`. Move the **Unreleased** changelog entries under a new version heading. Merge both changes to `main`.
-2. Tag the merge commit and push the tag:
+1. Builds and checks the distributions.
+2. Publishes them to PyPI through trusted publishing.
+3. Tags the commit and creates a GitHub Release with generated notes.
+4. Installs the release from public PyPI on macOS and Linux and runs a smoke test.
 
-   ```console
-   git tag -a v0.1.4 -m "psydcar 0.1.4"
-   git push origin v0.1.4
-   ```
-
-3. The workflow builds and checks the distributions, then publishes them to PyPI. Next it installs the release from public PyPI on macOS and Linux and runs a smoke test. Finally it creates the GitHub Release with generated notes.
+To ship a release, bump `version` in `pyproject.toml` and move the **Unreleased** changelog entries under a new version heading, all in the pull request. Merging it publishes the release. Merges that don't change the version publish nothing.
 
 PyPI never allows a version's files to be replaced. If a published version is broken, release a fix under a new version. Consider [yanking](https://pypi.org/help/#yanked) the broken version if new installs could be harmed. Yanking doesn't repair existing installations.

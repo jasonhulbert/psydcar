@@ -180,7 +180,7 @@
       <ol class="connection-steps"><li>Add this entry to your MCP client's local stdio server settings.</li><li>If your client uses a different wrapper, use the same <code>command</code>, <code>args</code>, and <code>env</code> fields.</li><li>Restart the MCP client. Its <code>search</code> and <code>retrieve</code> tools can access only these sidecar IDs.</li></ol>
       <div class="code-heading"><strong>Server configuration</strong><button class="mini-button" id="copy-connection-button" type="button">Copy JSON</button></div>
       <pre id="connection-json" tabindex="0"></pre>
-      <p class="result-footnote" id="result-footnote">The pipx command path stays the same after an upgrade. A removed sidecar ID makes this connection fail closed.</p>
+      <p class="result-footnote" id="result-footnote">This entry keeps working after you upgrade Psydcar. If you remove a selected sidecar, this entry refuses to start; generate a new one.</p>
     </div>
   </dialog>
 

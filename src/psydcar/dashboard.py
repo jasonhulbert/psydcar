@@ -71,7 +71,8 @@ def _provider_test_hint(error: EmbeddingError) -> str:
     if "credential is missing" in detail:
         return "Set that environment variable before starting the dashboard and MCP client, then restart the dashboard and test again."
     if "HTTP 401" in detail or "HTTP 403" in detail:
-        return "Check the credential variable, model, and provider URL."
+        return ("Check the credential variable, model, and provider URL. A gateway, proxy, "
+                "or firewall in front of the provider may also have rejected the request.")
     if "HTTP 5" in detail:
         return "The provider is unavailable. Check its service or gateway, then retry."
     if "could not be reached" in detail:

@@ -13,12 +13,38 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from .store import SidecarStore, StoreError
 
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_ERROR_BODY_READ_LIMIT = 2048
+_ERROR_EXCERPT_LIMIT = 200
+
+
+def _user_agent() -> str:
+    try:
+        return f"psydcar/{version('psydcar')}"
+    except PackageNotFoundError:
+        return "psydcar/development"
+
+
+def _error_excerpt(exc: urllib.error.HTTPError, secret: str | None) -> str:
+    """Return a short, single-line excerpt of a provider error body with the credential redacted."""
+    try:
+        raw = exc.read(_ERROR_BODY_READ_LIMIT)
+    except (OSError, ValueError):
+        return ""
+    text = raw.decode("utf-8", errors="replace") if raw else ""
+    if secret:
+        text = text.replace(secret, "[redacted]")
+    text = " ".join(_CONTROL_CHARS.sub(" ", text).split())
+    if len(text) > _ERROR_EXCERPT_LIMIT:
+        text = text[:_ERROR_EXCERPT_LIMIT].rstrip() + "..."
+    return text
 
 
 class EmbeddingError(Exception):
@@ -245,7 +271,7 @@ class EmbeddingClient:
         secret = os.environ.get(self.config.api_key_env) if self.config.api_key_env else None
         if self.config.api_key_env and not secret:
             raise EmbeddingError(f"Embedding credential is missing from environment variable {self.config.api_key_env}.")
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", "User-Agent": _user_agent()}
         if secret:
             headers["Authorization"] = f"Bearer {secret}"
         payload = json.dumps({"model": self.config.model, "input": texts}).encode("utf-8")
@@ -254,7 +280,11 @@ class EmbeddingClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read(16 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as exc:
-            raise EmbeddingError(f"Embedding provider returned HTTP {exc.code}.") from exc
+            excerpt = _error_excerpt(exc, secret)
+            message = f"Embedding provider returned HTTP {exc.code}."
+            if excerpt:
+                message += f" Response: {excerpt}"
+            raise EmbeddingError(message) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise EmbeddingError("Embedding provider could not be reached or timed out.") from exc
         if len(raw) > 16 * 1024 * 1024:

@@ -10,6 +10,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 try:
     from test_pdf_cli import write_pdf
@@ -20,6 +21,9 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SECRET = "VERY_SECRET_TEST_CREDENTIAL"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from psydcar.embeddings import EmbeddingClient, EmbeddingError, ProviderConfig
 
 
 def deterministic_vector(text: str) -> list[float]:
@@ -39,12 +43,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         state["requests"].append({
             "path": self.path,
             "authorization": self.headers.get("Authorization"),
+            "user_agent": self.headers.get("User-Agent"),
             "body": body,
         })
         if state["fail_on_request"] == len(state["requests"]):
-            self.send_response(503)
+            status, payload = state.get("fail_response", (503, b"temporary failure"))
+            self.send_response(status)
             self.end_headers()
-            self.wfile.write(b"temporary failure")
+            self.wfile.write(payload)
             return
         if state["bad_encoding_on_request"] == len(state["requests"]):
             payload = b"\xff"
@@ -70,6 +76,45 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+
+class EmbeddingClientTests(unittest.TestCase):
+    def setUp(self) -> None:
+        try:
+            self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
+        except PermissionError:
+            self.skipTest("loopback sockets are unavailable in this sandbox")
+        self.server.state = {"requests": [], "fail_on_request": None, "bad_encoding_on_request": None, "pause_on_request": None}
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.thread.join, 2)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        config = ProviderConfig(f"http://127.0.0.1:{self.server.server_port}/v1", "test", "PSYDCAR_TEST_KEY", False, "r", "t")
+        self.client = EmbeddingClient(config, timeout=5)
+        env = patch.dict(os.environ, {"PSYDCAR_TEST_KEY": SECRET})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def fail_with(self, status: int, payload: bytes) -> str:
+        self.server.state["fail_on_request"] = 1
+        self.server.state["fail_response"] = (status, payload)
+        with self.assertRaises(EmbeddingError) as raised:
+            self.client.embed(["ping"])
+        return str(raised.exception)
+
+    def test_request_identifies_psydcar_user_agent(self) -> None:
+        self.client.embed(["ping"])
+        self.assertTrue(self.server.state["requests"][0]["user_agent"].startswith("psydcar/"))
+
+    def test_http_error_includes_status_and_body_excerpt(self) -> None:
+        message = self.fail_with(403, b"error code: 1010")
+        self.assertIn("HTTP 403", message)
+        self.assertIn("error code: 1010", message)
+
+    def test_http_error_excerpt_redacts_credential(self) -> None:
+        message = self.fail_with(401, f"invalid token {SECRET}".encode())
+        self.assertNotIn(SECRET, message)
 
 
 @unittest.skipUnless(PdfReader is not None, "pypdf is not installed in this Python environment")

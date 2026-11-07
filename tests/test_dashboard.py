@@ -296,12 +296,15 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(preview["entry"]["args"], ["mcp", "--sidecar-id", one.id])
 
     def test_static_assets_and_package_data(self) -> None:
-        for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js"):
+        for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js",
+                     "/assets/Geist-Variable.woff2", "/assets/GeistMono-Variable.woff2"):
             request = Request(self.server.url + path)
             with urlopen(request, timeout=3) as response:
                 self.assertEqual(response.status, 200)
                 self.assertIn("script-src 'self'", response.headers["Content-Security-Policy"])
                 self.assertGreater(len(response.read()), 100)
+        with urlopen(Request(self.server.url + "/"), timeout=3) as response:
+            self.assertIn(b'<symbol id="plus"', response.read())
 
 
 if __name__ == "__main__":

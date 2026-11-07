@@ -4,6 +4,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-07
+
 ### Changed
 
 - The dashboard has a new design. Sidecars appear in a table you can filter by status, and the selected sidecar's details stay beside the list. It has a violet and pink color palette that meets WCAG AA text contrast. It uses the Geist and Geist Mono fonts and Lucide icons, both bundled locally, and follows the system light or dark theme.
@@ -48,7 +50,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 - First release: local sidecars for text, code, and PDFs with lexical and optional embedding search, a file watcher, a browser dashboard, and an MCP server limited to selected sidecars.
 
-[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jasonhulbert/psydcar/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/jasonhulbert/psydcar/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jasonhulbert/psydcar/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/jasonhulbert/psydcar/compare/v0.1.1...v0.1.2

@@ -15,6 +15,7 @@ import threading
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,16 @@ _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/assets/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
     "/assets/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
+    "/assets/Geist-Variable.woff2": ("Geist-Variable.woff2", "font/woff2"),
+    "/assets/GeistMono-Variable.woff2": ("GeistMono-Variable.woff2", "font/woff2"),
 }
+
+
+def _installed_version() -> str:
+    try:
+        return version("psydcar")
+    except PackageNotFoundError:
+        return "development"
 
 
 def _provider_view(config: ProviderConfig | None) -> dict[str, Any]:
@@ -215,7 +225,8 @@ class DashboardServer(ThreadingHTTPServer):
                 "pdf_pages": self.evidence.pdf_page_notices(sidecar.id),
             })
         return {"sidecars": entries, "watching": self._watch_thread.is_alive(),
-                "provider_configured": provider_configured, "provider": provider}
+                "provider_configured": provider_configured, "provider": provider,
+                "version": _installed_version(), "data_dir": str(self.store.db_path.parent)}
 
     def connection_preview(self, name: Any, references: Any) -> dict[str, Any]:
         if not isinstance(name, str) or not _CONNECTION_NAME.fullmatch(name):
@@ -311,7 +322,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if path in _ASSETS:
                 filename, content_type = _ASSETS[path]
-                body = files("psydcar").joinpath("dashboard_assets", filename).read_bytes()
+                assets = files("psydcar").joinpath("dashboard_assets")
+                body = assets.joinpath(filename).read_bytes()
+                if filename == "index.html":
+                    body = body.replace(b"<!-- psydcar:icons -->", assets.joinpath("icons.svg").read_bytes())
                 self._headers(HTTPStatus.OK, content_type, len(body))
                 self.wfile.write(body)
                 return

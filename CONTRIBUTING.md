@@ -32,6 +32,18 @@ python -m unittest discover -s tests
 
 CI runs the suite on macOS and Linux for every supported Python version. Some tests start local HTTP servers on `127.0.0.1`, so a sandbox that blocks loopback sockets will skip them.
 
+## Dashboard assets
+
+The dashboard in `src/psydcar/dashboard_assets` is plain HTML, CSS, and JavaScript with no build step. Its content security policy allows only same-origin assets, so fonts and icons are bundled:
+
+- **Fonts:** Geist and Geist Mono variable fonts from the [`geist`](https://www.npmjs.com/package/geist) npm package, under the SIL Open Font License in `Geist-OFL.txt`.
+- **Icons:** `icons.svg` is a sprite with only the [Lucide](https://lucide.dev) icons the dashboard uses. The server inlines it into the page, and markup references an icon as `<use href="#NAME">`. To add one, put its name in `ICONS` in `scripts/build-dashboard-icons.py` and regenerate the sprite:
+
+```console
+npm pack lucide-static && mkdir lucide && tar -xzf lucide-static-*.tgz -C lucide
+python scripts/build-dashboard-icons.py lucide/package
+```
+
 ## Pull requests
 
 - Keep each pull request focused on one change.

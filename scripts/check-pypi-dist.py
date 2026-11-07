@@ -21,6 +21,10 @@ REQUIRED_PACKAGE_FILES = {
     "psydcar/dashboard_assets/index.html",
     "psydcar/dashboard_assets/dashboard.css",
     "psydcar/dashboard_assets/dashboard.js",
+    "psydcar/dashboard_assets/icons.svg",
+    "psydcar/dashboard_assets/Geist-Variable.woff2",
+    "psydcar/dashboard_assets/GeistMono-Variable.woff2",
+    "psydcar/dashboard_assets/Geist-OFL.txt",
 }
 
 

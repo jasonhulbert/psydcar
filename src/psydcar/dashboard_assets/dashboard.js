@@ -1,8 +1,17 @@
 (() => {
   "use strict";
 
+  const SVG = "http://www.w3.org/2000/svg";
+  const ICONS = "";
   const byId = (id) => document.getElementById(id);
-  const model = { token: null, sidecars: [], selectedId: null, filter: "", watching: false, loading: false, toastTimer: null, provider: { configured: false }, connectionPreview: null };
+  const stacked = window.matchMedia("(max-width: 1120px)");
+  const model = {
+    token: null, sidecars: [], selectedId: null, filter: "", statusFilter: "all",
+    watching: false, loading: false, toastTimer: null, provider: { configured: false },
+    connectionPreview: null, snapshotKey: "", renderedAt: 0,
+  };
+
+  // DOM helpers
 
   function element(tag, className, value) {
     const item = document.createElement(tag);
@@ -17,40 +26,114 @@
     return item;
   }
 
-  function date(value) {
-    if (!value) return "Never";
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  function icon(name, className = "") {
+    const svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("class", `icon ${className}`.trim());
+    svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS(SVG, "use");
+    use.setAttribute("href", `${ICONS}#${name}`);
+    svg.append(use);
+    return svg;
   }
+
+  function button(parent, className, label, { iconName, focusKey, onClick, ariaLabel } = {}) {
+    const item = add(parent, "button", className);
+    item.type = "button";
+    if (iconName) item.append(icon(iconName));
+    if (label) item.append(document.createTextNode(label));
+    if (ariaLabel) { item.setAttribute("aria-label", ariaLabel); item.title = ariaLabel; }
+    if (focusKey) item.dataset.focusKey = focusKey;
+    if (onClick) item.addEventListener("click", onClick);
+    return item;
+  }
+
+  function setIcon(svg, name) {
+    svg.querySelector("use").setAttribute("href", `${ICONS}#${name}`);
+  }
+
+  async function copyText(value, trigger, confirmation) {
+    try {
+      await navigator.clipboard.writeText(value);
+      if (trigger) {
+        const svg = trigger.querySelector("svg");
+        if (svg) { setIcon(svg, "check"); setTimeout(() => setIcon(svg, "copy"), 1400); }
+      }
+      if (confirmation) message(confirmation);
+    } catch {
+      message("Copy failed. Select the text and copy it manually.", true);
+    }
+  }
+
+  // Formatting
+
+  const absoluteFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const relativeFormat = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+  function parseDate(value) {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function date(value) {
+    const parsed = parseDate(value);
+    return parsed ? absoluteFormat.format(parsed) : value || "Never";
+  }
+
+  function relative(value) {
+    const parsed = parseDate(value);
+    if (!parsed) return value || "Never";
+    const seconds = (parsed.getTime() - Date.now()) / 1000;
+    const abs = Math.abs(seconds);
+    if (abs < 45) return "Just now";
+    if (abs < 3600) return relativeFormat.format(Math.round(seconds / 60), "minute");
+    if (abs < 86400) return relativeFormat.format(Math.round(seconds / 3600), "hour");
+    if (abs < 7 * 86400) return relativeFormat.format(Math.round(seconds / 86400), "day");
+    const sameYear = parsed.getFullYear() === new Date().getFullYear();
+    return parsed.toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { dateStyle: "medium" });
+  }
+
+  const count = (value) => Number(value || 0).toLocaleString();
+  const plural = (value, word) => `${count(value)} ${word}${Number(value) === 1 ? "" : "s"}`;
+
+  // Status
 
   function status(sidecar) {
-    if (sidecar.queued || sidecar.state === "pending") return { label: "Updating", className: "pending" };
-    if (sidecar.state === "attention" || sidecar.error) return { label: "Needs attention", className: "attention" };
-    if (sidecar.freshness === "stale") return { label: "Stale", className: "stale" };
-    if (sidecar.state === "not_indexed") return { label: "Not indexed", className: "not-indexed" };
-    return { label: "Current", className: "current" };
+    if (sidecar.queued || sidecar.state === "pending") return { label: "Updating", tone: "info", group: "pending", spinner: true };
+    if (sidecar.state === "attention" || sidecar.error) return { label: "Needs attention", tone: "danger", group: "attention" };
+    if (sidecar.freshness === "stale") return { label: "Stale", tone: "warning", group: "attention" };
+    if (sidecar.state === "not_indexed") return { label: "Not indexed", tone: "neutral", group: "none" };
+    return { label: "Current", tone: "success", group: "current" };
   }
 
-  function pill(sidecar) {
+  function badge(sidecar) {
     const value = status(sidecar);
-    return element("span", `status-pill ${value.className}`, value.label);
+    const item = element("span", `badge${value.tone === "neutral" ? "" : ` badge-${value.tone}`}`);
+    if (value.spinner) item.append(icon("loader-circle", "spin"));
+    item.append(document.createTextNode(value.label));
+    return item;
   }
+
+  // Notifications
 
   function message(text, error = false) {
     const toast = byId("toast");
-    toast.textContent = text;
-    toast.classList.toggle("error", error);
+    byId("toast-text").textContent = text;
+    byId("toast-icon").setAttribute("href", `${ICONS}#${error ? "circle-alert" : "circle-check"}`);
+    toast.classList.toggle("is-error", error);
+    toast.hidden = true;
+    void toast.offsetWidth;
     toast.hidden = false;
     clearTimeout(model.toastTimer);
-    model.toastTimer = setTimeout(() => { toast.hidden = true; }, 5500);
+    model.toastTimer = setTimeout(() => { toast.hidden = true; }, 5000);
   }
 
-  function banner(text, error = false) {
-    const item = byId("banner");
-    item.textContent = text;
-    item.classList.toggle("error", error);
-    item.hidden = !text;
+  function banner(text) {
+    byId("banner-text").textContent = text;
+    byId("banner").hidden = !text;
   }
+
+  // Data
 
   async function request(path, options = {}) {
     const headers = { Accept: "application/json", ...options.headers };
@@ -68,82 +151,126 @@
     return payload;
   }
 
-  function applySnapshot(payload) {
-    model.sidecars = payload.sidecars || [];
-    model.provider = payload.provider || { configured: false };
-    model.watching = Boolean(payload.watching);
+  function applySnapshot(payload, force) {
+    const { token, ...snapshot } = payload;
+    const key = JSON.stringify(snapshot);
+    if (!force && key === model.snapshotKey && Date.now() - model.renderedAt < 30000) return;
+    model.snapshotKey = key;
+    model.sidecars = snapshot.sidecars || [];
+    model.provider = snapshot.provider || { configured: false };
+    model.watching = Boolean(snapshot.watching);
     if (model.selectedId && !model.sidecars.some((item) => item.id === model.selectedId)) model.selectedId = null;
     if (!model.selectedId && model.sidecars.length) model.selectedId = model.sidecars[0].id;
-    const watchText = model.watching ? "Watching local sources" : "Source watcher unavailable";
-    byId("sidebar-watch-label").textContent = watchText;
-    byId("topbar-watch-label").textContent = model.watching ? "Local · watching" : "Local · watcher stopped";
-    document.querySelectorAll(".live-dot").forEach((dot) => dot.classList.toggle("offline", !model.watching));
-    if (!model.watching) banner("Automatic source updates are unavailable. Use Update on a sidecar or restart the dashboard.", true);
-    else banner("");
+
+    const watch = byId("watch-status");
+    watch.classList.toggle("is-on", model.watching);
+    watch.classList.toggle("is-off", !model.watching);
+    byId("watch-label").textContent = model.watching ? "Watching for changes" : "Watcher stopped";
+    watch.title = model.watching ? "Sidecars update automatically when their folders change." : "Automatic updates are off. Use Update on a sidecar.";
+    banner(model.watching ? "" : "Automatic updates are unavailable. Use Update on a sidecar, or restart the dashboard.");
+    byId("footer-version").textContent = snapshot.version ? `Psydcar ${snapshot.version}` : "Psydcar";
+    byId("footer-data-dir").textContent = snapshot.data_dir || "—";
     render();
   }
 
-  async function refresh(first = false) {
+  async function refresh(first = false, force = false) {
     if (model.loading) return;
     model.loading = true;
     try {
       const payload = await request(first || !model.token ? "/api/bootstrap" : "/api/sidecars");
       if (payload.token) model.token = payload.token;
-      applySnapshot(payload);
+      applySnapshot(payload, first || force);
     } catch (error) {
-      banner(`Dashboard could not load: ${error.message} Reload the page or check the local service.`, true);
+      banner(`The dashboard could not reach the local service. ${error.message} Check that psydcar dashboard is still running, then reload.`);
     } finally {
       model.loading = false;
     }
   }
 
+  // Rendering
+
   function render() {
-    const items = model.sidecars;
-    const statuses = items.map(status);
-    byId("metric-total").textContent = items.length;
-    byId("metric-current").textContent = statuses.filter((item) => item.className === "current").length;
-    byId("metric-pending").textContent = statuses.filter((item) => item.className === "pending").length;
-    byId("metric-attention").textContent = statuses.filter((item) => item.className === "attention" || item.className === "stale").length;
-    byId("nav-count").textContent = items.length;
-    byId("sidecar-count").textContent = items.length;
+    const focusKey = document.activeElement?.dataset?.focusKey;
+    renderCounts();
     renderSetup();
     renderList();
     renderDetail();
+    if (focusKey) document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    model.renderedAt = Date.now();
+  }
+
+  function renderCounts() {
+    const groups = model.sidecars.map((item) => status(item).group);
+    const setCount = (id, value) => {
+      byId(id).textContent = count(value);
+      byId(id).classList.toggle("is-zero", value === 0);
+    };
+    setCount("count-all", groups.length);
+    ["current", "pending", "attention"].forEach((group) => {
+      setCount(`count-${group}`, groups.filter((item) => item === group).length);
+    });
+    document.querySelectorAll("#status-filters button").forEach((item) => {
+      item.setAttribute("aria-pressed", String(item.dataset.status === model.statusFilter));
+    });
+  }
+
+  function visibleSidecars() {
+    const query = model.filter.trim().toLocaleLowerCase();
+    return model.sidecars.filter((item) => {
+      if (model.statusFilter !== "all" && status(item).group !== model.statusFilter) return false;
+      return `${item.name} ${item.source_path}`.toLocaleLowerCase().includes(query);
+    });
+  }
+
+  function select(id, reveal) {
+    model.selectedId = id;
+    renderList();
+    renderDetail();
+    if (reveal && stacked.matches) document.querySelector(".layout-side").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function renderList() {
-    const list = byId("sidecar-list");
-    list.replaceChildren();
-    const query = model.filter.trim().toLocaleLowerCase();
-    const items = model.sidecars.filter((item) => `${item.name} ${item.source_path}`.toLocaleLowerCase().includes(query));
-    byId("empty-state").hidden = model.sidecars.length !== 0;
-    byId("filter-empty").hidden = model.sidecars.length === 0 || items.length !== 0;
+    const rows = byId("sidecar-rows");
+    rows.replaceChildren();
+    const items = visibleSidecars();
+    const empty = model.sidecars.length === 0;
+    byId("sidecar-table").hidden = empty || items.length === 0;
+    byId("list-toolbar").hidden = empty;
+    byId("create-button").hidden = empty;
+    byId("layout").classList.toggle("is-empty", empty);
+    byId("empty-state").hidden = !empty;
+    byId("filter-empty").hidden = empty || items.length !== 0;
+
     for (const sidecar of items) {
-      const card = element("button", "sidecar-card");
-      card.type = "button";
-      card.classList.toggle("selected", sidecar.id === model.selectedId);
-      card.setAttribute("aria-pressed", String(sidecar.id === model.selectedId));
-      card.setAttribute("aria-label", `${sidecar.name}, ${status(sidecar).label}. Show details.`);
-      const top = add(card, "div", "card-top");
-      add(top, "span", "folder-icon", "▱").setAttribute("aria-hidden", "true");
-      const main = add(top, "div", "card-main");
-      add(main, "h3", "", sidecar.name);
-      const path = add(main, "p", "card-path", sidecar.source_path);
+      const selected = sidecar.id === model.selectedId;
+      const row = add(rows, "tr", selected ? "is-selected" : "");
+      row.addEventListener("click", () => select(sidecar.id, true));
+
+      const nameCell = add(row, "td");
+      const name = add(nameCell, "div", "row-name");
+      const link = button(name, "row-link", sidecar.name, { focusKey: `row:${sidecar.id}` });
+      link.setAttribute("aria-current", String(selected));
+      link.addEventListener("keydown", (event) => moveSelection(event, items, sidecar.id));
+      const path = add(name, "span", "row-path");
+      add(path, "bdi", "", sidecar.source_path);
       path.title = sidecar.source_path;
-      add(top, "span", "card-badge").append(pill(sidecar));
-      const meta = add(card, "div", "card-meta");
-      add(meta, "span", "", `${sidecar.coverage.files} files`);
-      add(meta, "span", "", `${sidecar.coverage.passages} passages`);
-      add(meta, "span", "push", sidecar.queued ? "Updating now" : "View details →");
-      card.addEventListener("click", () => { model.selectedId = sidecar.id; render(); });
-      list.append(card);
+
+      add(row, "td").append(badge(sidecar));
+      add(row, "td", "num", count(sidecar.coverage.files));
+      add(row, "td", "num", count(sidecar.coverage.passages));
+      const updated = add(row, "td", "updated", sidecar.update.last_success_at ? relative(sidecar.update.last_success_at) : "Never");
+      if (sidecar.update.last_success_at) updated.title = date(sidecar.update.last_success_at);
     }
   }
 
-  function infoRow(parent, label, value) {
-    const row = add(parent, "div", "info-row");
-    add(row, "span", "", label);
-    add(row, "strong", "", value);
+  function moveSelection(event, items, id) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const index = items.findIndex((item) => item.id === id) + (event.key === "ArrowDown" ? 1 : -1);
+    const next = items[index];
+    if (!next) return;
+    select(next.id, false);
+    document.querySelector(`[data-focus-key="row:${CSS.escape(next.id)}"]`)?.focus();
   }
 
   function section(parent, title) {
@@ -152,106 +279,205 @@
     return block;
   }
 
-  function guidance(sidecar) {
-    if (sidecar.queued) return "An update is running. Indexed evidence will remain available while it finishes.";
-    if (sidecar.state === "attention") return "The last update needs review. Read the issue below, fix the source or provider, then choose Update.";
-    if (sidecar.source_drift) return "The source changed since the last index. Choose Update to refresh this sidecar.";
-    if (sidecar.state === "pending") return "Processing has not finished. Check the update details below.";
-    if (sidecar.state === "not_indexed") return "No update has completed yet. Choose Update to index supported files.";
-    return "The indexed source is current. The source watcher will follow new changes while this dashboard is open.";
+  function props(parent, rows) {
+    const list = add(parent, "dl", "props");
+    for (const [label, value, title] of rows) {
+      add(list, "dt", "", label);
+      const item = add(list, "dd", "", value);
+      if (title) item.title = title;
+    }
+    return list;
   }
 
-  function issueBox(parent, title, lines, next) {
-    const box = add(parent, "div", "attention-box");
-    add(box, "strong", "", title);
-    const list = add(box, "ul");
-    for (const line of lines) add(list, "li", "", line);
-    if (next) add(box, "p", "guidance", next);
+  function flash(parent, tone, title, { text, lines } = {}) {
+    const box = add(parent, "div", `flash flash-${tone}`);
+    box.append(icon(tone === "info" ? "info" : tone === "danger" ? "circle-alert" : "triangle-alert"));
+    const body = add(box, "div", "flash-body");
+    add(body, "strong", "", title);
+    if (lines && lines.length) {
+      const list = add(body, "ul");
+      for (const line of lines) add(list, "li", "", line);
+    }
+    if (text) add(body, "p", "", text);
+    return box;
+  }
+
+  function issuesFor(sidecar) {
+    const issues = Array.isArray(sidecar.update.issues)
+      ? sidecar.update.issues.map((issue) => typeof issue === "string" ? issue : [issue.source || issue.path, issue.error || issue.message].filter(Boolean).join(": "))
+      : [];
+    if (sidecar.error && !issues.includes(sidecar.error)) issues.unshift(sidecar.error);
+    return issues;
+  }
+
+  function guidance(parent, sidecar) {
+    if (sidecar.queued || sidecar.state === "pending") {
+      flash(parent, "info", "Update in progress", { text: "Search keeps using the current index until the update finishes." });
+      return;
+    }
+    const issues = issuesFor(sidecar);
+    if (issues.length || sidecar.state === "attention") {
+      const removed = sidecar.status === "source_attention";
+      flash(parent, "danger", removed ? "Files were removed from the folder" : "The last update needs attention", {
+        lines: issues.length ? issues : [removed ? "A source file was removed from this sidecar's index." : "The last processing pass did not complete."],
+        text: removed
+          ? "Restore the files if that was unintended, or run Update to accept the change."
+          : "Fix the source or provider, then run Update to retry.",
+      });
+      return;
+    }
+    if (sidecar.source_drift || sidecar.freshness === "stale") {
+      flash(parent, "warning", "Folder changed since the last update", { text: "Search results may be out of date. Run Update to re-index." });
+      return;
+    }
+    if (sidecar.state === "not_indexed") {
+      flash(parent, "info", "Not indexed yet", { text: "Run Update to index supported files in this folder." });
+    }
   }
 
   function renderDetail() {
     const sidecar = model.sidecars.find((item) => item.id === model.selectedId);
-    byId("detail-placeholder").hidden = Boolean(sidecar);
+    const placeholder = byId("detail-placeholder");
+    placeholder.hidden = Boolean(sidecar);
     const target = byId("detail-content");
     target.hidden = !sidecar;
     target.replaceChildren();
     if (!sidecar) {
-      byId("detail-placeholder").querySelector("h2").textContent = model.sidecars.length ? "Choose a sidecar" : "Your details will appear here";
-      byId("detail-placeholder").querySelector("p").textContent = model.sidecars.length ? "Select a collection to see its source, update history, and next actions." : "Create your first sidecar to see its source coverage and update history.";
+      placeholder.querySelector("h3").textContent = model.sidecars.length ? "No sidecar selected" : "Nothing to show yet";
+      placeholder.querySelector("p").textContent = model.sidecars.length
+        ? "Select a sidecar to see its coverage, update history, and actions."
+        : "Details for a sidecar appear here once you create one.";
       return;
     }
 
+    const state = status(sidecar);
     const head = add(target, "div", "detail-header");
-    add(head, "p", "detail-eyebrow", "SIDECAR DETAILS");
-    const title = add(head, "div", "detail-title-row");
+    const title = add(head, "div", "detail-title");
     add(title, "h2", "", sidecar.name);
-    title.append(pill(sidecar));
-    add(head, "p", "detail-subtitle", guidance(sidecar));
-    const actions = add(head, "div", "detail-actions");
-    const updateButton = add(actions, "button", "button button-primary", sidecar.queued ? "Update running" : "↻ Update now");
-    updateButton.type = "button";
-    updateButton.disabled = sidecar.queued;
-    updateButton.addEventListener("click", () => updateSidecar(sidecar));
-    const renameButton = add(actions, "button", "button button-quiet", "Rename");
-    renameButton.type = "button";
-    renameButton.addEventListener("click", () => openRename(sidecar));
-    const removeButton = add(actions, "button", "button button-text danger-text", "Remove");
-    removeButton.type = "button";
-    removeButton.addEventListener("click", () => openRemove(sidecar));
+    title.append(badge(sidecar));
+    const path = add(head, "div", "detail-path");
+    add(add(path, "span"), "bdi", "", sidecar.source_path);
+    const copyPath = button(path, "btn-icon btn-icon-sm", "", { iconName: "copy", ariaLabel: "Copy folder path", focusKey: "detail:copy-path" });
+    copyPath.addEventListener("click", () => copyText(sidecar.source_path, copyPath, "Folder path copied."));
 
-    const body = add(target, "div", "detail-body");
-    const source = section(body, "Source coverage");
-    add(source, "div", "source-path", sidecar.source_path);
-    infoRow(source, "Indexed files", sidecar.coverage.files);
-    infoRow(source, "Text and code", sidecar.coverage.text_files);
-    infoRow(source, "PDFs", sidecar.coverage.pdfs);
-    infoRow(source, "Searchable passages", sidecar.coverage.passages);
-    infoRow(source, "Index freshness", sidecar.freshness === "stale" ? "Stale" : sidecar.freshness === "not_indexed" ? "Not indexed" : "Current");
-    infoRow(source, "Source changes", sidecar.source_drift ? "Detected since update" : "None since last update");
-    const identity = section(body, "Identity");
-    const idRow = add(identity, "div", "id-row");
-    const code = add(idRow, "code", "", sidecar.id);
-    code.title = sidecar.id;
-    const copy = add(idRow, "button", "mini-button", "Copy ID");
-    copy.type = "button";
-    copy.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(sidecar.id); message("Sidecar ID copied."); }
-      catch { message(`Sidecar ID: ${sidecar.id}`); }
+    const actions = add(target, "div", "detail-actions");
+    const needsUpdate = state.group === "attention" || sidecar.state === "not_indexed";
+    const update = button(actions, `btn btn-sm${needsUpdate ? " btn-primary" : ""}`, sidecar.queued ? "Updating…" : "Update", {
+      focusKey: "detail:update", onClick: () => updateSidecar(sidecar),
     });
-    const history = section(body, "Update history");
-    infoRow(history, "Last successful update", date(sidecar.update.last_success_at));
-    infoRow(history, "Last attempt", date(sidecar.update.started_at));
-    infoRow(history, "Files added", sidecar.update.added);
-    infoRow(history, "Files changed", sidecar.update.changed);
-    infoRow(history, "Files removed", sidecar.update.deleted);
+    update.prepend(icon(sidecar.queued ? "loader-circle" : "refresh-cw", sidecar.queued ? "spin" : ""));
+    update.disabled = Boolean(sidecar.queued);
+    button(actions, "btn btn-sm", "Rename", { iconName: "pencil", focusKey: "detail:rename", onClick: () => openRename(sidecar) });
+    button(actions, "btn btn-sm btn-danger-quiet", "Remove", { iconName: "trash-2", focusKey: "detail:remove", onClick: () => openRemove(sidecar) });
+
+    guidance(target, sidecar);
+
+    const stats = add(target, "div", "stats");
+    for (const [label, value] of [["Files", sidecar.coverage.files], ["Text/code", sidecar.coverage.text_files], ["PDFs", sidecar.coverage.pdfs], ["Passages", sidecar.coverage.passages]]) {
+      const stat = add(stats, "div", "stat");
+      add(stat, "span", "stat-value", count(value));
+      add(stat, "span", "stat-label", label);
+    }
+
+    const updates = section(target, "Updates");
+    props(updates, [
+      ["Last successful", sidecar.update.last_success_at ? relative(sidecar.update.last_success_at) : "Never", sidecar.update.last_success_at ? date(sidecar.update.last_success_at) : ""],
+      ["Last attempt", sidecar.update.started_at ? relative(sidecar.update.started_at) : "Never", sidecar.update.started_at ? date(sidecar.update.started_at) : ""],
+      ["Folder changes", sidecar.source_drift ? "Detected" : "None"],
+    ]);
+    const changes = add(updates, "div", "change-list");
+    for (const [className, sign, value, word] of [["change-added", "+", sidecar.update.added, "added"], ["change-changed", "~", sidecar.update.changed, "changed"], ["change-removed", "−", sidecar.update.deleted, "removed"]]) {
+      const chip = add(changes, "span", Number(value) ? `change ${className}` : "change");
+      add(chip, "strong", "", `${sign}${count(value)}`);
+      chip.append(document.createTextNode(word));
+    }
+
     if (sidecar.embedding) {
-      const embedding = section(body, "Embeddings");
-      infoRow(embedding, "State", sidecar.embedding.status.replaceAll("_", " "));
-      infoRow(embedding, "Progress", `${sidecar.embedding.embedded_count} of ${sidecar.embedding.expected_count} passages`);
-      if (sidecar.embedding.message) issueBox(embedding, "Provider needs attention", [sidecar.embedding.message], "Check the configured provider and its credential, then choose Update.");
+      const embedding = section(target, "Embeddings");
+      const expected = Number(sidecar.embedding.expected_count || 0);
+      const done = Number(sidecar.embedding.embedded_count || 0);
+      props(embedding, [["State", sidecar.embedding.status.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase())]]);
+      const bar = add(embedding, "div", "progress");
+      bar.setAttribute("role", "progressbar");
+      bar.setAttribute("aria-label", "Embedded passages");
+      bar.setAttribute("aria-valuemin", "0");
+      bar.setAttribute("aria-valuemax", String(expected));
+      bar.setAttribute("aria-valuenow", String(done));
+      add(bar, "span").style.width = `${expected ? Math.min(100, (done / expected) * 100) : 0}%`;
+      add(embedding, "p", "progress-caption", `${count(done)} of ${plural(expected, "passage")}`);
+      if (sidecar.embedding.message) {
+        flash(embedding, "danger", "Provider needs attention", { lines: [sidecar.embedding.message], text: "Check the provider settings and credential, then run Update." });
+      }
     }
-    const issues = Array.isArray(sidecar.update.issues) ? sidecar.update.issues.map((issue) => typeof issue === "string" ? issue : [issue.source || issue.path, issue.error || issue.message].filter(Boolean).join(": ")) : [];
-    if (sidecar.error && !issues.includes(sidecar.error)) issues.unshift(sidecar.error);
-    if (issues.length) {
-      const review = section(body, "Needs attention");
-      issueBox(review, "Source or processing issue", issues, sidecar.status === "source_attention" ? "Restore a file if its removal was unintended, or choose Update to acknowledge it. Removing this sidecar is a separate action." : "Fix the source or provider and choose Update to retry.");
-    } else if (sidecar.state === "attention") {
-      const review = section(body, "Needs attention");
-      issueBox(review, "Review the last update", [sidecar.status === "source_attention" ? "A source file was removed from this sidecar's index." : "The last processing pass did not complete."], "Review the source and choose Update to clear this notice.");
-    } else if (sidecar.source_drift) {
-      const review = section(body, "Source changed");
-      issueBox(review, "Indexed content may be out of date", ["A file changed, appeared, or disappeared since the last update."], "Choose Update to reconcile this sidecar now.");
-    }
+
     const pages = (sidecar.pdf_pages || []).filter((page) => page.status !== "indexed");
     if (pages.length) {
-      const pdf = section(body, "PDF page notices");
-      issueBox(pdf, "Pages without searchable text", pages.map((page) => `${page.source}, page ${page.page}: ${page.message || page.status}`), "Use a text-searchable PDF or OCR the source file, then choose Update.");
+      const pdf = section(target, "PDF pages without text");
+      flash(pdf, "warning", `${plural(pages.length, "page")} can't be searched`, {
+        lines: pages.map((page) => `${page.source}, page ${page.page}: ${page.message || page.status}`),
+        text: "These are probably scanned images. Run OCR on the file, then run Update.",
+      });
+    }
+
+    const identity = section(target, "Sidecar ID");
+    const field = add(identity, "div", "id-field");
+    add(field, "code", "", sidecar.id).title = sidecar.id;
+    const copyId = button(field, "btn-icon btn-icon-sm", "", { iconName: "copy", ariaLabel: "Copy sidecar ID", focusKey: "detail:copy-id" });
+    copyId.addEventListener("click", () => copyText(sidecar.id, copyId, "Sidecar ID copied."));
+  }
+
+  function renderSetup() {
+    const provider = model.provider;
+    const state = byId("provider-state");
+    state.className = `badge${!provider.configured ? "" : provider.credential_available ? " badge-success" : " badge-warning"}`;
+    state.textContent = !provider.configured ? "Not configured" : provider.credential_available ? "Configured" : "Credential missing";
+    byId("provider-description").textContent = !provider.configured
+      ? "Keyword search runs locally. Add an OpenAI-compatible embeddings endpoint for semantic search."
+      : provider.credential_available
+        ? "Updates embed passages with this endpoint, and searches rank by meaning."
+        : `Set ${provider.api_key_env} in the environment that runs the dashboard, then restart it.`;
+    const summary = byId("provider-summary");
+    summary.hidden = !provider.configured;
+    summary.replaceChildren();
+    if (provider.configured) {
+      for (const [label, value] of [["Endpoint", provider.base_url], ["Model", provider.model], ["Key variable", provider.api_key_env || "None"]]) {
+        add(summary, "dt", "", label);
+        add(summary, "dd", "", value);
+      }
+    }
+    byId("provider-button").textContent = provider.configured ? "Edit" : "Configure provider";
+    byId("clear-provider-button").hidden = !provider.configured;
+    byId("connection-button").disabled = model.sidecars.length === 0;
+    byId("connection-description").textContent = model.sidecars.length
+      ? "Generate a local MCP server entry that gives a coding agent access to selected sidecars only."
+      : "Create a sidecar first. Then generate an MCP server entry limited to the sidecars you choose.";
+  }
+
+  // JSON preview
+
+  function highlightJson(target, value) {
+    target.replaceChildren();
+    const text = JSON.stringify(value, null, 2);
+    const pattern = /("(?:\\.|[^"\\])*")(\s*:)?|([{}[\],:])|(\s+)|([^\s{}[\],:"]+)/g;
+    let match;
+    while ((match = pattern.exec(text))) {
+      if (match[1]) {
+        add(target, "span", match[2] ? "tok-key" : "tok-string", match[1]);
+        if (match[2]) add(target, "span", "tok-punct", match[2]);
+      } else if (match[3]) add(target, "span", "tok-punct", match[3]);
+      else target.append(document.createTextNode(match[4] || match[5]));
     }
   }
 
+  // Dialogs
+
   function formError(id, text, input) {
     const box = byId(id);
-    box.textContent = text;
+    box.replaceChildren();
+    if (text) {
+      box.append(icon("circle-alert"));
+      add(box, "span", "flash-body", text);
+    }
     box.hidden = !text;
     if (input) input.setAttribute("aria-invalid", String(Boolean(text)));
   }
@@ -286,35 +512,8 @@
     try {
       const result = await request(`/api/sidecars/${sidecar.id}/update`, { method: "POST", body: "{}" });
       message(result.message);
-      await refresh();
+      await refresh(false, true);
     } catch (error) { message(error.message, true); }
-  }
-
-  function renderSetup() {
-    const provider = model.provider;
-    const state = byId("provider-state");
-    state.className = `status-pill ${!provider.configured ? "not-indexed" : provider.credential_available ? "current" : "attention"}`;
-    state.textContent = !provider.configured ? "Not configured" : provider.credential_available ? "Configured" : "Credential missing";
-    byId("provider-description").textContent = !provider.configured
-      ? "Lexical search is available. Configure an OpenAI-compatible provider to add semantic ranking."
-      : provider.credential_available
-        ? "Configured for embedding updates. Test the route or edit its settings below."
-        : `Set ${provider.api_key_env} before starting the dashboard, then restart it and test the route.`;
-    const summary = byId("provider-summary");
-    summary.hidden = !provider.configured;
-    summary.replaceChildren();
-    if (provider.configured) {
-      add(summary, "span", "", "Route"); add(summary, "strong", "", provider.base_url);
-      add(summary, "span", "", "Model"); add(summary, "strong", "", provider.model);
-      add(summary, "span", "", "Key variable"); add(summary, "strong", "", provider.api_key_env || "No key required");
-    }
-    byId("provider-button").textContent = provider.configured ? "Edit provider" : "Configure provider";
-    byId("clear-provider-button").hidden = !provider.configured;
-    const count = model.sidecars.length;
-    byId("connection-count").textContent = `${count} sidecar${count === 1 ? "" : "s"}`;
-    byId("connection-description").textContent = count
-      ? "Choose one or more sidecars and prepare a local MCP entry for a project or coding tool."
-      : "Create a sidecar first. Then choose exactly which collections a project or coding tool can access.";
   }
 
   function providerDraft() {
@@ -339,8 +538,8 @@
   }
 
   function updateSelectedCount() {
-    const count = byId("connection-sidecars").querySelectorAll("input:checked").length;
-    byId("selected-count").textContent = `${count} selected`;
+    const selected = byId("connection-sidecars").querySelectorAll("input:checked").length;
+    byId("selected-count").textContent = `${selected} of ${model.sidecars.length} selected`;
   }
 
   function openConnection() {
@@ -351,34 +550,64 @@
     const list = byId("connection-sidecars");
     list.replaceChildren();
     for (const sidecar of model.sidecars) {
-      const option = add(list, "label", "selection-option");
+      const option = add(list, "label", "picker-option");
       const input = add(option, "input");
       input.type = "checkbox";
       input.value = sidecar.id;
       input.name = "sidecar-id";
       input.addEventListener("change", updateSelectedCount);
-      const copy = add(option, "span");
-      add(copy, "strong", "", sidecar.name);
-      add(copy, "small", "", `${sidecar.source_path} · ${sidecar.id}`);
+      const text = add(option, "span", "picker-option-text");
+      add(text, "strong", "", sidecar.name);
+      add(text, "small", "", sidecar.source_path).title = `${sidecar.source_path}\n${sidecar.id}`;
     }
+    list.hidden = model.sidecars.length === 0;
     byId("connection-empty").hidden = model.sidecars.length !== 0;
     updateSelectedCount();
     byId("connection-dialog").showModal();
     byId("connection-name").focus();
   }
 
+  // Events
+
+  byId("create-button").addEventListener("click", openCreate);
+  byId("empty-create-button").addEventListener("click", openCreate);
   byId("provider-button").addEventListener("click", openProvider);
+  byId("connection-button").addEventListener("click", openConnection);
   byId("clear-provider-button").addEventListener("click", () => {
     formError("clear-provider-error", "");
     byId("clear-provider-dialog").showModal();
   });
-  byId("connection-button").addEventListener("click", openConnection);
+  byId("filter-input").addEventListener("input", (event) => { model.filter = event.target.value; renderList(); });
+  byId("status-filters").addEventListener("click", (event) => {
+    const target = event.target.closest("button[data-status]");
+    if (!target) return;
+    model.statusFilter = target.dataset.status;
+    renderCounts();
+    renderList();
+  });
+  byId("clear-filter-button").addEventListener("click", () => {
+    model.filter = "";
+    model.statusFilter = "all";
+    byId("filter-input").value = "";
+    renderCounts();
+    renderList();
+  });
+  document.querySelectorAll("[data-close]").forEach((item) => item.addEventListener("click", () => item.closest("dialog").close()));
+  document.querySelectorAll("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  }));
+  byId("toast").addEventListener("click", () => { byId("toast").hidden = true; });
+
   byId("provider-form").addEventListener("input", () => { byId("provider-test-result").hidden = true; formError("provider-error", ""); });
   byId("connection-form").addEventListener("input", () => { byId("connection-result").hidden = true; model.connectionPreview = null; formError("connection-error", ""); });
+  byId("remove-confirm").addEventListener("input", (event) => {
+    const sidecar = model.sidecars.find((item) => item.id === byId("remove-form").dataset.id);
+    byId("remove-submit").disabled = !sidecar || event.target.value !== sidecar.name;
+  });
 
   byId("provider-test-button").addEventListener("click", async () => {
-    const button = byId("provider-test-button");
-    button.disabled = true;
+    const trigger = byId("provider-test-button");
+    trigger.disabled = true;
     formError("provider-error", "");
     byId("provider-test-result").hidden = true;
     try {
@@ -387,83 +616,70 @@
       box.textContent = `${result.message} Vector dimensions: ${result.dimensions}.`;
       box.hidden = false;
     } catch (error) { formError("provider-error", `${error.message}${error.hint ? ` ${error.hint}` : ""}`); }
-    finally { button.disabled = false; }
+    finally { trigger.disabled = false; }
   });
 
   byId("provider-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = byId("provider-save-button");
-    button.disabled = true;
+    const submit = byId("provider-save-button");
+    submit.disabled = true;
     formError("provider-error", "");
     try {
       const result = await request("/api/provider", { method: "POST", body: JSON.stringify(providerDraft()) });
       byId("provider-dialog").close();
       message(result.message);
-      await refresh();
+      await refresh(false, true);
     } catch (error) { formError("provider-error", `${error.message}${error.hint ? ` ${error.hint}` : ""}`); }
-    finally { button.disabled = false; }
+    finally { submit.disabled = false; }
   });
 
   byId("clear-provider-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = event.target.querySelector('[type="submit"]');
-    button.disabled = true;
+    const submit = event.target.querySelector('[type="submit"]');
+    submit.disabled = true;
     try {
       const result = await request("/api/provider", { method: "DELETE", body: JSON.stringify({ confirm: "clear" }) });
       byId("clear-provider-dialog").close();
       message(result.message);
-      await refresh();
+      await refresh(false, true);
     } catch (error) { formError("clear-provider-error", error.message); }
-    finally { button.disabled = false; }
+    finally { submit.disabled = false; }
   });
 
   byId("connection-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = byId("connection-name").value.trim();
     const sidecarIds = Array.from(byId("connection-sidecars").querySelectorAll("input:checked"), (input) => input.value);
-    if (!name) { formError("connection-error", "Enter a connection name.", byId("connection-name")); byId("connection-name").focus(); return; }
-    if (!sidecarIds.length) { formError("connection-error", "Select at least one sidecar. Create one first if this list is empty."); return; }
-    const button = event.target.querySelector('[type="submit"]');
-    button.disabled = true;
+    if (!name) { formError("connection-error", "Enter a server name.", byId("connection-name")); byId("connection-name").focus(); return; }
+    if (!sidecarIds.length) { formError("connection-error", "Select at least one sidecar."); return; }
+    const submit = event.target.querySelector('[type="submit"]');
+    submit.disabled = true;
     byId("connection-result").hidden = true;
     model.connectionPreview = null;
     try {
       const preview = await request("/api/connections/preview", { method: "POST", body: JSON.stringify({ name, sidecar_ids: sidecarIds }) });
       model.connectionPreview = preview;
       byId("result-name").textContent = preview.name;
-      byId("result-selection").textContent = `Access: ${preview.selected.map((item) => `${item.name} (${item.id})`).join(", ")}.`;
-      byId("connection-json").textContent = JSON.stringify(preview.config, null, 2);
-      byId("result-footnote").textContent = `This entry keeps working after you upgrade Psydcar. If you remove a selected sidecar, this entry refuses to start; generate a new one.${model.provider.api_key_env ? ` To use embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
+      byId("result-selection").textContent = `Limited to ${preview.selected.map((item) => item.name).join(", ")}.`;
+      highlightJson(byId("connection-json"), preview.config);
+      byId("result-footnote").textContent = `Upgrading Psydcar doesn't break this entry. If you remove a selected sidecar, the server won't start until you generate a new entry.${model.provider.api_key_env ? ` For embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
       byId("connection-result").hidden = false;
-      byId("connection-result").scrollIntoView({ block: "nearest" });
+      byId("connection-result").scrollIntoView({ block: "nearest", behavior: "smooth" });
     } catch (error) { formError("connection-error", error.message); }
-    finally { button.disabled = false; }
+    finally { submit.disabled = false; }
   });
 
-  byId("copy-connection-button").addEventListener("click", async () => {
+  byId("copy-connection-button").addEventListener("click", (event) => {
     if (!model.connectionPreview) return;
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(model.connectionPreview.config, null, 2));
-      message("MCP configuration copied. Add it to your client's local server settings.");
-    } catch { message("Copy failed. Select and copy the JSON shown in this dialog.", true); }
-  });
-
-  byId("create-button").addEventListener("click", openCreate);
-  byId("empty-create-button").addEventListener("click", openCreate);
-  byId("refresh-button").addEventListener("click", () => refresh());
-  byId("filter-input").addEventListener("input", (event) => { model.filter = event.target.value; renderList(); });
-  document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", () => button.closest("dialog").close()));
-  byId("remove-confirm").addEventListener("input", (event) => {
-    const sidecar = model.sidecars.find((item) => item.id === byId("remove-form").dataset.id);
-    byId("remove-submit").disabled = !sidecar || event.target.value !== sidecar.name;
+    copyText(JSON.stringify(model.connectionPreview.config, null, 2), event.currentTarget, "Configuration copied.");
   });
 
   byId("create-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = byId("create-name").value.trim();
     const source = byId("create-source").value.trim();
-    if (!name) { formError("create-error", "Enter a sidecar name.", byId("create-name")); byId("create-name").focus(); return; }
-    if (!source) { formError("create-error", "Enter an existing source directory path.", byId("create-source")); byId("create-source").focus(); return; }
+    if (!name) { formError("create-error", "Enter a name for this sidecar.", byId("create-name")); byId("create-name").focus(); return; }
+    if (!source) { formError("create-error", "Enter the path to an existing folder.", byId("create-source")); byId("create-source").focus(); return; }
     const submit = event.target.querySelector('[type="submit"]');
     submit.disabled = true;
     try {
@@ -471,7 +687,7 @@
       model.selectedId = result.id;
       byId("create-dialog").close();
       message(result.message);
-      await refresh();
+      await refresh(false, true);
     } catch (error) { formError("create-error", error.message); }
     finally { submit.disabled = false; }
   });
@@ -479,14 +695,14 @@
   byId("rename-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = byId("rename-name").value.trim();
-    if (!name) { formError("rename-error", "Enter a new sidecar name.", byId("rename-name")); byId("rename-name").focus(); return; }
+    if (!name) { formError("rename-error", "Enter a new name.", byId("rename-name")); byId("rename-name").focus(); return; }
     const submit = event.target.querySelector('[type="submit"]');
     submit.disabled = true;
     try {
       const result = await request(`/api/sidecars/${event.target.dataset.id}/rename`, { method: "POST", body: JSON.stringify({ name }) });
       byId("rename-dialog").close();
       message(result.message);
-      await refresh();
+      await refresh(false, true);
     } catch (error) { formError("rename-error", error.message, byId("rename-name")); }
     finally { submit.disabled = false; }
   });
@@ -502,7 +718,7 @@
       model.selectedId = null;
       byId("remove-dialog").close();
       message(result.message);
-      await refresh();
+      await refresh(false, true);
     } catch (error) { formError("remove-error", error.message); }
     finally { submit.disabled = false; }
   });

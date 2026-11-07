@@ -4,6 +4,11 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard has a new design. Sidecars appear in a table you can filter by status, and the selected sidecar's details stay beside the list. It has a violet and pink color palette that meets WCAG AA text contrast. It uses the Geist and Geist Mono fonts and Lucide icons, both bundled locally, and follows the system light or dark theme.
+- The dashboard footer shows the installed version and the data folder.
+
 ## [0.1.4] - 2026-11-07
 
 ### Added

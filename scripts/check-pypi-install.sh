@@ -5,7 +5,11 @@ tag=$1
 version=${tag#v}
 test "$tag" = "v$version"
 
+# Install the way a user would: pipx's default locations, not the CI image's overrides.
+unset PIPX_HOME PIPX_BIN_DIR PIPX_MAN_DIR
 # PyPI's index can lag a few minutes behind an upload, so retry the pinned install.
+# pip caches index pages for up to 10 minutes, which would hide the new version from retries.
+export PIP_NO_CACHE_DIR=1
 attempt=1
 until python -m pipx install "psydcar==$version"; do
     if [ "$attempt" -ge 30 ]; then
@@ -49,12 +53,15 @@ psydcar search --sidecar "$sidecar_id" 'searchable note' | grep -q 'note.md'
 psydcar dashboard --port 0 --no-open > "$work/dashboard.log" 2>&1 &
 dashboard_pid=$!
 dashboard_url=
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+# A cold runner can take a while to import the dashboard's dependencies.
+for attempt in $(seq 1 60); do
     dashboard_url=$(sed -n 's/^Dashboard: //p' "$work/dashboard.log" | head -1)
     [ -n "$dashboard_url" ] && break
+    kill -0 "$dashboard_pid" 2>/dev/null || break
     sleep 1
 done
 if [ -z "$dashboard_url" ]; then
+    echo "Dashboard did not report its URL. Log:" >&2
     cat "$work/dashboard.log" >&2
     exit 1
 fi

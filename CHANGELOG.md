@@ -7,6 +7,11 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 ### Added
 
 - Markdown links open other files in the sidecar. ⌘-click (Ctrl-click on Linux) a relative link such as `../ideas.md` or `notes/plan#next-steps` to open that file. A link without an extension matches a Markdown file of that name, and a `#heading` part scrolls to that heading. ⌘Enter opens the link under the cursor. Hovering a link shows where it points.
+- Markdown front matter shows as a properties list in live preview. Lists render as chips and tags as `#tag` links. Click a property to edit the YAML. Psydcar never rewrites front matter.
+- Tags from front matter filter the file list. Click a tag, or type `#tag` in the filter, to list the files with that tag. Nested tags such as `#project/q4` also match `#project`.
+- Markdown tables render as tables in live preview. Wide tables can use the space beside the text column on large screens and scroll sideways on small ones. Click a cell to edit the table's source.
+- Images in Markdown render in live preview. Local images, such as `![Chart](images/chart.png)`, load from the sidecar's folder. Images on the web aren't loaded and show their alt text. ⌘-click an image to open its file.
+- The file list shows image files. Open one to view it with its size and dimensions, and rename, move, or delete it like any other file. Images aren't indexed.
 
 ### Changed
 

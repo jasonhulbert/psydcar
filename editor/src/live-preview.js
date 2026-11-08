@@ -5,6 +5,7 @@
 import { syntaxTree } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
+import { blockPreview, imageElement } from "./blocks.js";
 
 const hide = Decoration.replace({});
 const lineClass = (name) => Decoration.line({ class: name });
@@ -61,6 +62,24 @@ class RuleWidget extends WidgetType {
   }
 }
 
+class ImageWidget extends WidgetType {
+  constructor(url, alt, options) { super(); this.url = url; this.alt = alt; this.options = options; }
+  eq(other) { return other.url === this.url && other.alt === this.alt; }
+  toDOM(view) {
+    const wrap = document.createElement("span");
+    wrap.className = "cm-md-img-wrap";
+    wrap.append(imageElement(this.url, this.alt, { ...this.options, onLoad: () => view.requestMeasure() }));
+    // Cmd/Ctrl-click opens the image file. A plain click is left to the editor, which places the cursor.
+    wrap.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      this.options.follow(view, this.url);
+    });
+    return wrap;
+  }
+  ignoreEvent(event) { return event.metaKey || event.ctrlKey; }
+}
+
 const task = { open: Decoration.replace({ widget: new TaskWidget(false) }), done: Decoration.replace({ widget: new TaskWidget(true) }) };
 const bullet = Decoration.replace({ widget: new TextWidget("•", "cm-md-list-mark cm-md-bullet") });
 const rawBullet = mark("cm-md-list-mark cm-md-bullet-raw");
@@ -88,7 +107,7 @@ const listDepth = (node) => {
   return depth;
 };
 
-function build(view) {
+function build(view, options) {
   const { state } = view;
   const doc = state.doc;
   const ranges = [];
@@ -180,19 +199,39 @@ function build(view) {
             return;
           }
 
-          case "Link":
-          case "Image": {
+          case "Link": {
             const marks = children(node).filter((child) => child.name === "LinkMark");
             if (marks.length < 2) return;
             const label = [marks[0].to, marks[1].from];
             const url = node.getChild("URL");
             const target = url ? doc.sliceString(url.from, url.to) : "";
-            if (label[0] < label[1]) ranges.push((name === "Image" ? mark("cm-md-image") : link(target)).range(label[0], label[1]));
+            if (label[0] < label[1]) ranges.push(link(target).range(label[0], label[1]));
             if (!active(from, to)) {
               ranges.push(hide.range(marks[0].from, marks[0].to), hide.range(marks[1].from, to));
             }
             return false;
           }
+
+          case "Image": {
+            // The image replaces its syntax. While the cursor is on its line, the syntax shows with the image below it.
+            const marks = children(node).filter((child) => child.name === "LinkMark");
+            const url = node.getChild("URL");
+            if (marks.length < 2 || !url) return false;
+            // Raw table source keeps its images as text. The rendered table shows them.
+            if (inside(node, "Table")) return false;
+            const widget = new ImageWidget(doc.sliceString(url.from, url.to), doc.sliceString(marks[0].to, marks[1].from), options);
+            if (active(from, to)) {
+              if (marks[0].to < marks[1].from) ranges.push(mark("cm-md-image").range(marks[0].to, marks[1].from));
+              ranges.push(Decoration.widget({ widget, side: 1 }).range(to));
+            } else {
+              ranges.push(Decoration.replace({ widget }).range(from, to));
+            }
+            return false;
+          }
+
+          case "FrontMatter":
+            addLines(from, to, "cm-md-frontmatter");
+            return false;
 
           case "Autolink": {
             const marks = children(node).filter((child) => child.name === "LinkMark");
@@ -300,12 +339,12 @@ function build(view) {
   return Decoration.set(ranges, true);
 }
 
-const plugin = ViewPlugin.fromClass(class {
-  constructor(view) { this.decorations = build(view); }
+const inlinePreview = (options) => ViewPlugin.fromClass(class {
+  constructor(view) { this.decorations = build(view, options); }
   update(update) {
     if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged
       || syntaxTree(update.startState) !== syntaxTree(update.state)) {
-      this.decorations = build(update.view);
+      this.decorations = build(update.view, options);
     }
   }
 }, { decorations: (value) => value.decorations });
@@ -345,7 +384,7 @@ export function revealAnchor(view, fragment) {
 
 function linkAt(state, pos) {
   for (let node = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent) {
-    if (node.name !== "Link" && node.name !== "Autolink" && node.name !== "URL") continue;
+    if (node.name !== "Link" && node.name !== "Image" && node.name !== "Autolink" && node.name !== "URL") continue;
     const urlNode = node.name === "URL" ? node : node.getChild("URL");
     return urlNode ? state.sliceDoc(urlNode.from, urlNode.to) : null;
   }
@@ -366,7 +405,10 @@ function follow(view, url, onOpenLink) {
   return Boolean(onOpenLink);
 }
 
-export function livePreview({ onOpenLink } = {}) {
+// onOpenLink(url) opens a relative link, resolveImage(url) returns a loadable address for a local
+// image or null, and onTag(name) handles a click on a tag in the properties block.
+export function livePreview({ onOpenLink, resolveImage, onTag } = {}) {
+  const options = { resolveImage, onTag, follow: (view, url) => follow(view, url, onOpenLink) };
   const openLinks = EditorView.domEventHandlers({
     mousedown(event, view) {
       if (!(event.metaKey || event.ctrlKey) || event.button !== 0) return false;
@@ -384,5 +426,5 @@ export function livePreview({ onOpenLink } = {}) {
     key: "Mod-Enter",
     run: (view) => follow(view, linkAt(view.state, view.state.selection.main.head), onOpenLink),
   }]));
-  return [plugin, openLinks, openKey, EditorView.editorAttributes.of({ class: "cm-live-preview" })];
+  return [inlinePreview(options), blockPreview(options), openLinks, openKey, EditorView.editorAttributes.of({ class: "cm-live-preview" })];
 }

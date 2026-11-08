@@ -320,6 +320,24 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(sorted(p.relative_to(self.source).as_posix() for p in self.source.rglob("*")),
                          ["drafts", "drafts/notes.md"])
 
+    def test_dashboard_lists_tags_and_shows_and_manages_images(self) -> None:
+        (self.source / "plan.md").write_text("---\ntitle: Plan\ntags: [roadmap, editor]\n---\n\n![Chart](chart.png)\n")
+        (self.source / "chart.png").write_bytes(b"\x89PNG\r\n\x1a\nchart")
+        sidecar_id = self.http("POST", "/api/sidecars", {"name": "Notes", "source": str(self.source)})[1]["id"]
+        base = f"/api/sidecars/{sidecar_id}"
+
+        entries = {item["path"]: item for item in self.http("GET", f"{base}/files")[1]["entries"]}
+        self.assertEqual(entries["plan.md"]["tags"], ["roadmap", "editor"])
+        self.assertTrue(entries["chart.png"]["image"])
+
+        request = Request(self.server.url + f"{base}/image?path=chart.png")
+        with urlopen(request, timeout=3) as response:
+            self.assertEqual((response.headers["Content-Type"], response.read()), ("image/png", b"\x89PNG\r\n\x1a\nchart"))
+
+        self.assertEqual(self.http("POST", f"{base}/files/move", {"from": "chart.png", "to": "art/chart.png"})[0], 200)
+        self.assertEqual(self.http("DELETE", f"{base}/files", {"path": "art/chart.png", "confirm_path": "art/chart.png"})[0], 200)
+        self.assertEqual(sorted(p.relative_to(self.source).as_posix() for p in self.source.rglob("*")), ["art", "plan.md"])
+
     def test_static_assets_and_package_data(self) -> None:
         for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js", "/assets/editor.js",
                      "/assets/Geist-Variable.woff2", "/assets/GeistMono-Variable.woff2"):

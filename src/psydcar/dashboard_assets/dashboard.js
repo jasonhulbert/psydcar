@@ -733,8 +733,40 @@
     return root;
   }
 
+  const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i;
+
   function fileIcon(path) {
+    if (IMAGE_FILE.test(path)) return "image";
     return /\.(md|markdown|txt|rst)$/i.test(path) ? "file-text" : "file-code";
+  }
+
+  // "#name" filters by front matter tag, including nested tags such as "name/child". Other text matches paths.
+  function matchesFilter(entry, query) {
+    if (entry.type !== "file") return false;
+    if (query.startsWith("#") && query.length > 1) {
+      const tag = query.slice(1);
+      return (entry.tags || []).some((name) => {
+        const lower = name.toLocaleLowerCase();
+        return lower === tag || lower.startsWith(`${tag}/`);
+      });
+    }
+    return entry.path.toLocaleLowerCase().includes(query);
+  }
+
+  // Show the files that carry a tag, for example after clicking it in a properties block.
+  function filterByTag(tag) {
+    files.filter = `#${tag}`;
+    byId("file-filter").value = files.filter;
+    renderTree();
+    syncTreeFocus();
+    if (narrow.matches) {
+      files.drawerOpen = true;
+      renderSidebar();
+    } else if (files.collapsed) {
+      files.collapsed = false;
+      writeSetting("psydcar.files-collapsed", "false");
+      renderSidebar();
+    }
   }
 
   function renderTree() {
@@ -745,7 +777,7 @@
     const rows = [];
     if (query) {
       for (const entry of files.entries) {
-        if (entry.type === "file" && entry.path.toLocaleLowerCase().includes(query)) rows.push({ node: { ...entry, name: entry.path }, depth: 0 });
+        if (matchesFilter(entry, query)) rows.push({ node: { ...entry, name: entry.path }, depth: 0 });
       }
     } else {
       const walk = (folder, depth) => {
@@ -764,7 +796,7 @@
     note.hidden = !(files.truncated || (query && rows.length === 0));
     note.textContent = files.truncated
       ? "This folder has more than 5,000 entries. Only the first 5,000 are listed."
-      : hasFiles ? "No files match this filter." : "";
+      : !hasFiles ? "" : query.startsWith("#") ? `No files are tagged ${query}.` : "No files match this filter.";
     if (focusPath) tree.querySelector(`.tree-row[data-path="${CSS.escape(focusPath)}"] .tree-item`)?.focus({ preventScroll: true });
   }
 
@@ -787,10 +819,11 @@
     if (folder) item.append(icon("chevron-right", `tree-chevron${expanded ? " is-open" : ""}`));
     item.append(icon(folder ? (expanded ? "folder-open" : "folder") : fileIcon(node.path), "tree-icon"));
     add(item, "span", "tree-name", node.name).title = node.path;
-    if (!folder && node.editable === false) add(item, "span", "tree-flag", "Too large");
+    const tooLarge = node.image ? node.viewable === false : node.editable === false;
+    if (!folder && tooLarge) add(item, "span", "tree-flag", "Too large");
     item.addEventListener("click", () => {
       if (folder) toggleFolder(node.path);
-      else if (node.editable === false) message(`${node.path} is larger than 2 MiB, so it can't be edited here.`, true);
+      else if (tooLarge) message(node.image ? `${node.path} is larger than 20 MiB, so it can't be shown here.` : `${node.path} is larger than 2 MiB, so it can't be edited here.`, true);
       else {
         closeDrawer();
         location.hash = filesHash(files.sidecarId, node.path);
@@ -861,6 +894,7 @@
   }
 
   async function openFile(path) {
+    if (IMAGE_FILE.test(path)) { openImage(path); return; }
     const sidecarId = files.sidecarId;
     showEditorMessage("loader-circle", "Opening…", path);
     try {
@@ -871,7 +905,7 @@
       files.editor = window.PsydcarEditor.create({
         parent: byId("editor-surface"), doc: file.content, path: file.path, preview: files.preview,
         nonce: document.querySelector('meta[name="psydcar-style-nonce"]')?.content,
-        onChange: renderEditorState, onSave: () => saveFile(), onOpenLink: openLink,
+        onChange: renderEditorState, onSave: () => saveFile(), onOpenLink: openLink, resolveImage, onTag: filterByTag,
       });
       expandTo(file.path);
       renderWorkspace();
@@ -887,31 +921,80 @@
     }
   }
 
-  // Follow a relative link from the open Markdown file, such as "../ideas.md#next-steps".
-  // A link without an extension also matches a Markdown file of that name.
-  function openLink(url) {
-    if (!files.open) return;
+  // Resolve a link or image address from the open file to a path in the sidecar. Returns null
+  // when it points outside the sidecar's folder.
+  function resolveLink(url) {
     const hashAt = url.indexOf("#");
     const fragment = hashAt >= 0 ? url.slice(hashAt + 1) : "";
-    let target = (hashAt >= 0 ? url.slice(0, hashAt) : url).split("?")[0];
+    let target = (hashAt >= 0 ? url.slice(0, hashAt) : url).split("?")[0].replace(/^<(.*)>$/, "$1");
     try { target = decodeURIComponent(target); } catch { /* Use the link as written. */ }
     const parts = target.startsWith("/") ? [] : parentOf(files.open.path).split("/").filter(Boolean);
     for (const part of target.split("/")) {
       if (!part || part === ".") continue;
       if (part !== "..") parts.push(part);
       else if (parts.length) parts.pop();
-      else { message("That link points outside this sidecar's folder.", true); return; }
+      else return null;
     }
-    const path = parts.join("/");
+    return { path: parts.join("/"), target, fragment };
+  }
+
+  const imageUrl = (path, version = "") => `${filesApi("image")}?path=${encodeURIComponent(path)}${version ? `&v=${version}` : ""}`;
+
+  // Markdown images load through the dashboard's image route. Web addresses stay blocked.
+  function resolveImage(url) {
+    if (!files.open || /^[a-z][a-z\d+.-]*:|^\/\//i.test(url)) return null;
+    const resolved = resolveLink(url);
+    return resolved && resolved.path ? imageUrl(resolved.path) : null;
+  }
+
+  // Follow a relative link from the open Markdown file, such as "../ideas.md#next-steps".
+  // A link without an extension also matches a Markdown file of that name.
+  function openLink(url) {
+    if (!files.open) return;
+    const resolved = resolveLink(url);
+    if (!resolved) { message("That link points outside this sidecar's folder.", true); return; }
+    const { path, target, fragment } = resolved;
     const find = (candidate) => files.entries.find((entry) => entry.type === "file" && entry.path === candidate);
     const entry = find(path) || (!/\.[^/]+$/.test(path) ? find(`${path}.md`) : null);
     if (!entry) { message(`${path || target} isn't a file in this sidecar that the editor can open.`, true); return; }
     if (entry.path === files.open.path) {
-      if (fragment) files.editor.revealAnchor(fragment);
+      if (fragment) files.editor?.revealAnchor(fragment);
       return;
     }
     files.pendingAnchor = fragment ? { path: entry.path, fragment } : null;
     location.hash = filesHash(files.sidecarId, entry.path);
+  }
+
+  // Images open in a viewer instead of the editor. They can be renamed, moved, and deleted like other files.
+  function openImage(path) {
+    const entry = files.entries.find((item) => item.type === "file" && item.path === path);
+    if (!entry) {
+      closeFile();
+      showEditorMessage("circle-alert", "This file can't be opened", `${path} isn't an image in this sidecar.`);
+      renderTree();
+      return;
+    }
+    closeFile();
+    files.open = { path, image: true, size: entry.size, mtime_ns: entry.mtime_ns, width: 0, height: 0 };
+    const viewer = add(byId("editor-surface"), "div", "image-viewer");
+    const frame = add(viewer, "div", "image-viewer-frame");
+    const image = add(frame, "img", "image-viewer-img");
+    image.alt = baseName(path);
+    image.addEventListener("load", () => {
+      if (files.open?.image !== true) return;
+      files.open.width = image.naturalWidth;
+      files.open.height = image.naturalHeight;
+      renderEditorState();
+    });
+    image.addEventListener("error", () => {
+      viewer.replaceChildren();
+      const note = add(viewer, "div", "blankslate");
+      note.append(icon("circle-alert", "blankslate-icon"));
+      add(note, "h3", "", "This image can't be shown");
+      add(note, "p", "", "The file may be damaged, or the browser may not support its format.");
+    });
+    image.src = imageUrl(path, entry.mtime_ns);
+    expandTo(path);
   }
 
   function closeFile() {
@@ -977,7 +1060,11 @@
     byId("editor-status").hidden = !open;
     renderTree();
     syncTreeFocus();
-    if (!open) { byId("editor-conflict").hidden = true; return; }
+    if (!open) {
+      byId("editor-conflict").hidden = true;
+      document.title = `${byId("files-title").textContent || "Files"} · Psydcar`;
+      return;
+    }
     byId("editor-path").replaceChildren();
     const parts = open.path.split("/");
     parts.forEach((part, index) => {
@@ -987,8 +1074,14 @@
     byId("editor-path").title = open.path;
     byId("editor-path-icon").setAttribute("href", `#${fileIcon(open.path)}`);
     const toggle = byId("preview-toggle");
-    toggle.hidden = !files.editor.isMarkdown;
-    for (const item of toggle.querySelectorAll("button")) item.setAttribute("aria-pressed", String((item.dataset.preview === "on") === files.editor.preview));
+    toggle.hidden = !files.editor?.isMarkdown;
+    byId("save-button").hidden = Boolean(open.image);
+    if (open.image) {
+      const image = byId("editor-surface").querySelector(".image-viewer-img");
+      if (image) image.alt = baseName(open.path);
+    } else {
+      for (const item of toggle.querySelectorAll("button")) item.setAttribute("aria-pressed", String((item.dataset.preview === "on") === files.editor.preview));
+    }
     renderEditorState();
     renderConflict();
   }
@@ -997,12 +1090,23 @@
     if (!files.open) return;
     const dirty = isDirty();
     const stateLabel = byId("editor-state");
+    const status = byId("editor-status");
+    status.replaceChildren();
+    if (files.open.image) {
+      stateLabel.textContent = "";
+      stateLabel.className = "editor-state";
+      document.title = `${baseName(files.open.path)} · Psydcar`;
+      const type = files.open.path.split(".").pop().toUpperCase();
+      const dimensions = files.open.width ? `${files.open.width} × ${files.open.height} px` : "";
+      for (const value of [`${type} image`, dimensions, formatBytes(files.open.size), files.open.mtime_ns ? `Modified ${relative(new Date(files.open.mtime_ns / 1e6).toISOString())}` : ""]) {
+        if (value) add(status, "span", "", value);
+      }
+      return;
+    }
     stateLabel.textContent = files.saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved";
     stateLabel.className = `editor-state${dirty ? " is-dirty" : ""}`;
     byId("save-button").disabled = !dirty || files.saving;
     document.title = `${dirty ? "● " : ""}${baseName(files.open.path)} · Psydcar`;
-    const status = byId("editor-status");
-    status.replaceChildren();
     for (const value of [files.editor.language, files.open.newline === "\r\n" ? "CRLF" : "LF", "UTF-8", formatBytes(files.open.size), `Modified ${relative(files.open.modified_at)}`]) {
       add(status, "span", "", value);
     }
@@ -1071,12 +1175,28 @@
     const open = files.open;
     if (!open || files.saving) return;
     const entry = files.entries.find((item) => item.path === open.path && item.type === "file");
+    if (!entry && open.image) {
+      // An image has no edits to keep, so close it when it's moved or deleted elsewhere.
+      files.routeHash = filesHash(files.sidecarId);
+      history.replaceState(null, "", files.routeHash);
+      closeFile();
+      renderWorkspace();
+      message(`${baseName(open.path)} was moved or deleted on disk.`);
+      return;
+    }
     if (!entry) {
       if (!files.conflict) { files.conflict = { version: null, deleted: true }; renderConflict(); }
       return;
     }
     if (files.conflict?.deleted) { files.conflict = null; renderConflict(); }
     if (entry.mtime_ns === open.mtime_ns && entry.size === open.size) return;
+    if (open.image) {
+      Object.assign(open, { mtime_ns: entry.mtime_ns, size: entry.size });
+      const image = byId("editor-surface").querySelector(".image-viewer-img");
+      if (image) image.src = imageUrl(open.path, entry.mtime_ns);
+      renderEditorState();
+      return;
+    }
     try {
       const latest = await request(`${filesApi("file")}?path=${encodeURIComponent(open.path)}`);
       if (files.open !== open || files.saving) return;
@@ -1400,6 +1520,8 @@
         files.open.path = result.path + files.open.path.slice(from.length);
         files.routeHash = filesHash(files.sidecarId, files.open.path);
         history.replaceState(null, "", files.routeHash);
+        const image = files.open.image && byId("editor-surface").querySelector(".image-viewer-img");
+        if (image) image.src = imageUrl(files.open.path, files.open.mtime_ns);
         renderWorkspace();
       }
       await loadTree();
@@ -1417,7 +1539,7 @@
       const result = await request(filesApi(), { method: "DELETE", body: JSON.stringify({ path, confirm_path: path }) });
       byId("file-delete-dialog").close();
       if (files.open?.path === path) {
-        files.editor.markSaved();
+        files.editor?.markSaved();
         files.routeHash = filesHash(files.sidecarId);
         history.replaceState(null, "", files.routeHash);
         closeFile();

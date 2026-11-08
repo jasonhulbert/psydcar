@@ -10,6 +10,21 @@
     watching: false, loading: false, toastTimer: null, provider: { configured: false },
     connectionPreview: null, snapshotKey: "", renderedAt: 0,
   };
+  // The files workspace: one sidecar's text files and the file open in the editor.
+  const files = {
+    sidecarId: null, entries: [], treeKey: "", truncated: false, expanded: new Set(), filter: "", loadingTree: false,
+    open: null, editor: null, conflict: null, saving: false, routeHash: "", treeTimer: null,
+    preview: readSetting("psydcar.preview", "on") !== "off",
+  };
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+  function readSetting(key, fallback) {
+    try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+  }
+
+  function writeSetting(key, value) {
+    try { localStorage.setItem(key, value); } catch { /* Settings are a convenience. */ }
+  }
 
   // DOM helpers
 
@@ -146,6 +161,8 @@
     if (!response.ok) {
       const error = new Error(payload.error || `Request failed (${response.status}).`);
       error.hint = payload.hint;
+      error.status = response.status;
+      error.payload = payload;
       throw error;
     }
     return payload;
@@ -190,6 +207,11 @@
   // Rendering
 
   function render() {
+    if (files.sidecarId) {
+      const sidecar = model.sidecars.find((item) => item.id === files.sidecarId);
+      if (sidecar) { byId("header-sidecar").textContent = sidecar.name; byId("files-title").textContent = sidecar.name; }
+      return;
+    }
     const focusKey = document.activeElement?.dataset?.focusKey;
     renderCounts();
     renderSetup();
@@ -359,6 +381,15 @@
     add(add(path, "span"), "bdi", "", sidecar.source_path);
     const copyPath = button(path, "btn-icon btn-icon-sm", "", { iconName: "copy", ariaLabel: "Copy folder path", focusKey: "detail:copy-path" });
     copyPath.addEventListener("click", () => copyText(sidecar.source_path, copyPath, "Folder path copied."));
+
+    const open = add(target, "a", "detail-open");
+    open.href = filesHash(sidecar.id);
+    open.dataset.focusKey = "detail:files";
+    open.append(icon("folder-open"));
+    const openText = add(open, "span", "detail-open-text");
+    add(openText, "strong", "", "Browse and edit files");
+    add(openText, "small", "", `${plural(sidecar.coverage.text_files, "text file")} indexed`);
+    open.append(icon("chevron-right", "detail-open-chevron"));
 
     const actions = add(target, "div", "detail-actions");
     const needsUpdate = state.group === "attention" || sidecar.state === "not_indexed";
@@ -567,6 +598,509 @@
     byId("connection-name").focus();
   }
 
+  // Files workspace: routing
+
+  const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");
+  const filesHash = (sidecarId, path) => `#/files/${sidecarId}${path ? `/${encodePath(path)}` : ""}`;
+  const parentOf = (path) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+  const baseName = (path) => path.slice(path.lastIndexOf("/") + 1);
+  const filesApi = (suffix = "files") => `/api/sidecars/${files.sidecarId}/${suffix}`;
+
+  function parseRoute(hash = location.hash) {
+    const match = hash.match(/^#\/files\/([0-9a-f-]{36})(?:\/(.+))?$/);
+    if (!match) return null;
+    try {
+      return { sidecarId: match[1], path: match[2] ? match[2].split("/").map(decodeURIComponent).join("/") : null };
+    } catch { return { sidecarId: match[1], path: null }; }
+  }
+
+  const isDirty = () => Boolean(files.editor && files.editor.isDirty());
+
+  // Ask before dropping unsaved edits. Resolves true when it's safe to continue.
+  async function settleChanges(nextLabel) {
+    if (!isDirty()) return true;
+    const dialog = byId("discard-dialog");
+    byId("discard-text").textContent = `${baseName(files.open.path)} has changes that aren't saved. Save them before ${nextLabel}?`;
+    dialog.returnValue = "";
+    dialog.showModal();
+    const choice = await new Promise((resolve) => dialog.addEventListener("close", () => resolve(dialog.returnValue), { once: true }));
+    if (choice === "discard") return true;
+    if (choice === "save") return saveFile();
+    return false;
+  }
+
+  async function route() {
+    const next = parseRoute();
+    const leavingFile = files.open && (!next || next.sidecarId !== files.sidecarId || next.path !== files.open.path);
+    if (leavingFile && !(await settleChanges(next?.path ? "opening another file" : "leaving"))) {
+      history.replaceState(null, "", files.routeHash || "#");
+      return;
+    }
+    files.routeHash = location.hash;
+    if (!next) { closeWorkspace(); return; }
+    const sidecar = model.sidecars.find((item) => item.id === next.sidecarId);
+    if (model.token && !sidecar) {
+      message("That sidecar no longer exists.", true);
+      history.replaceState(null, "", "#");
+      files.routeHash = "";
+      closeWorkspace();
+      return;
+    }
+    const switching = files.sidecarId !== next.sidecarId;
+    if (switching) {
+      closeFile();
+      files.sidecarId = next.sidecarId;
+      files.entries = [];
+      files.expanded = new Set();
+      files.filter = "";
+      byId("file-filter").value = "";
+    }
+    model.selectedId = next.sidecarId;
+    showWorkspace(sidecar);
+    if (switching || !files.entries.length) await loadTree();
+    if (next.path) {
+      if (!files.open || files.open.path !== next.path) await openFile(next.path);
+    } else {
+      closeFile();
+    }
+    renderWorkspace();
+  }
+
+  function showWorkspace(sidecar) {
+    document.body.classList.add("is-workspace");
+    byId("main").hidden = true;
+    byId("files-view").hidden = false;
+    byId("header-sidecar-divider").hidden = false;
+    byId("header-sidecar").hidden = false;
+    byId("header-sidecar").textContent = sidecar ? sidecar.name : "";
+    byId("files-title").textContent = sidecar ? sidecar.name : "Files";
+    byId("files-root").textContent = sidecar ? sidecar.source_path : "";
+    byId("files-root").title = sidecar ? sidecar.source_path : "";
+    document.title = `${sidecar ? sidecar.name : "Files"} · Psydcar`;
+    clearInterval(files.treeTimer);
+    files.treeTimer = setInterval(() => { if (!document.hidden) loadTree(true); }, 4000);
+  }
+
+  function closeWorkspace() {
+    clearInterval(files.treeTimer);
+    closeFile();
+    files.sidecarId = null;
+    document.body.classList.remove("is-workspace");
+    byId("files-view").hidden = true;
+    byId("main").hidden = false;
+    byId("header-sidecar-divider").hidden = true;
+    byId("header-sidecar").hidden = true;
+    document.title = "Sidecars · Psydcar";
+    render();
+  }
+
+  // Files workspace: tree
+
+  async function loadTree(quiet = false) {
+    if (!files.sidecarId || files.loadingTree) return;
+    files.loadingTree = true;
+    const sidecarId = files.sidecarId;
+    try {
+      const result = await request(filesApi());
+      if (sidecarId !== files.sidecarId) return;
+      const key = JSON.stringify(result.entries);
+      const changed = key !== files.treeKey;
+      files.treeKey = key;
+      files.entries = result.entries;
+      files.truncated = result.truncated;
+      if (changed || !quiet) renderTree();
+      checkOpenFile();
+    } catch (error) {
+      if (!quiet) message(error.message, true);
+    } finally {
+      files.loadingTree = false;
+    }
+  }
+
+  function buildTree() {
+    const root = { path: "", type: "folder", children: [] };
+    const folders = new Map([["", root]]);
+    for (const entry of files.entries) {
+      const node = { ...entry, name: baseName(entry.path), children: [] };
+      if (entry.type === "folder") folders.set(entry.path, node);
+      (folders.get(parentOf(entry.path)) || root).children.push(node);
+    }
+    const order = (a, b) => (a.type === b.type ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.type === "folder" ? -1 : 1);
+    for (const folder of folders.values()) folder.children.sort(order);
+    return root;
+  }
+
+  function fileIcon(path) {
+    return /\.(md|markdown|txt|rst)$/i.test(path) ? "file-text" : "file-code";
+  }
+
+  function renderTree() {
+    const tree = byId("file-tree");
+    const focusPath = document.activeElement?.closest?.(".tree-row")?.dataset.path;
+    tree.replaceChildren();
+    const query = files.filter.trim().toLocaleLowerCase();
+    const rows = [];
+    if (query) {
+      for (const entry of files.entries) {
+        if (entry.type === "file" && entry.path.toLocaleLowerCase().includes(query)) rows.push({ node: { ...entry, name: entry.path }, depth: 0 });
+      }
+    } else {
+      const walk = (folder, depth) => {
+        for (const node of folder.children) {
+          rows.push({ node, depth });
+          if (node.type === "folder" && files.expanded.has(node.path)) walk(node, depth + 1);
+        }
+      };
+      walk(buildTree(), 0);
+    }
+    for (const { node, depth } of rows) treeRow(tree, node, depth);
+    const hasFiles = files.entries.some((entry) => entry.type === "file");
+    byId("file-tree-empty").hidden = files.entries.length > 0;
+    tree.hidden = files.entries.length === 0;
+    const note = byId("file-tree-note");
+    note.hidden = !(files.truncated || (query && rows.length === 0));
+    note.textContent = files.truncated
+      ? "This folder has more than 5,000 entries. Only the first 5,000 are listed."
+      : hasFiles ? "No files match this filter." : "";
+    if (focusPath) tree.querySelector(`.tree-row[data-path="${CSS.escape(focusPath)}"] .tree-item`)?.focus({ preventScroll: true });
+  }
+
+  function treeRow(tree, node, depth) {
+    const folder = node.type === "folder";
+    const expanded = files.expanded.has(node.path);
+    const active = !folder && files.open?.path === node.path;
+    const row = add(tree, "div", `tree-row${active ? " is-active" : ""}`);
+    row.dataset.path = node.path;
+    row.dataset.type = node.type;
+    row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", String(depth + 1));
+    row.setAttribute("aria-selected", String(active));
+    if (folder) row.setAttribute("aria-expanded", String(expanded));
+    row.style.setProperty("--depth", String(depth));
+
+    const item = add(row, "button", "tree-item");
+    item.type = "button";
+    item.tabIndex = -1;
+    if (folder) item.append(icon("chevron-right", `tree-chevron${expanded ? " is-open" : ""}`));
+    item.append(icon(folder ? (expanded ? "folder-open" : "folder") : fileIcon(node.path), "tree-icon"));
+    add(item, "span", "tree-name", node.name).title = node.path;
+    if (!folder && node.editable === false) add(item, "span", "tree-flag", "Too large");
+    item.addEventListener("click", () => {
+      if (folder) toggleFolder(node.path);
+      else if (node.editable === false) message(`${node.path} is larger than 2 MiB, so it can't be edited here.`, true);
+      else location.hash = filesHash(files.sidecarId, node.path);
+    });
+    item.addEventListener("keydown", (event) => treeKey(event, node));
+
+    const actions = add(row, "span", "tree-actions");
+    if (folder) {
+      button(actions, "btn-icon btn-icon-sm", "", { iconName: "file-plus", ariaLabel: `New file in ${node.path}`, onClick: () => openFileCreate("file", node.path) });
+    }
+    button(actions, "btn-icon btn-icon-sm", "", { iconName: "pencil", ariaLabel: `Rename or move ${node.path}`, onClick: () => openFileMove(node) });
+    button(actions, "btn-icon btn-icon-sm btn-icon-danger", "", { iconName: "trash-2", ariaLabel: `Delete ${node.path}`, onClick: () => openFileDelete(node) });
+    for (const action of actions.querySelectorAll("button")) action.tabIndex = -1;
+  }
+
+  // Roving focus: one tree item is tabbable; arrows move between rows and open or close folders.
+  function syncTreeFocus() {
+    const items = [...byId("file-tree").querySelectorAll(".tree-item")];
+    const current = items.find((item) => item === document.activeElement)
+      || byId("file-tree").querySelector(".tree-row.is-active .tree-item") || items[0];
+    for (const item of items) item.tabIndex = item === current ? 0 : -1;
+  }
+
+  function treeKey(event, node) {
+    const items = [...byId("file-tree").querySelectorAll(".tree-item")];
+    const index = items.indexOf(event.currentTarget);
+    const focus = (target) => { if (target) { target.focus(); syncTreeFocus(); } };
+    if (event.key === "ArrowDown") { event.preventDefault(); focus(items[index + 1]); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); focus(items[index - 1]); }
+    else if (event.key === "Home") { event.preventDefault(); focus(items[0]); }
+    else if (event.key === "End") { event.preventDefault(); focus(items[items.length - 1]); }
+    else if (event.key === "ArrowRight" && node.type === "folder" && !files.expanded.has(node.path)) { event.preventDefault(); toggleFolder(node.path); }
+    else if (event.key === "ArrowLeft" && node.type === "folder" && files.expanded.has(node.path)) { event.preventDefault(); toggleFolder(node.path); }
+    else if (event.key === "ArrowLeft" && parentOf(node.path)) {
+      event.preventDefault();
+      focus(byId("file-tree").querySelector(`.tree-row[data-path="${CSS.escape(parentOf(node.path))}"] .tree-item`));
+    } else if (event.key === "F2") { event.preventDefault(); openFileMove(node); }
+    else if (event.key === "Delete" || (isMac && event.key === "Backspace" && event.metaKey)) { event.preventDefault(); openFileDelete(node); }
+  }
+
+  function toggleFolder(path) {
+    if (files.expanded.has(path)) files.expanded.delete(path);
+    else files.expanded.add(path);
+    renderTree();
+    byId("file-tree").querySelector(`.tree-row[data-path="${CSS.escape(path)}"] .tree-item`)?.focus();
+    syncTreeFocus();
+  }
+
+  function expandTo(path) {
+    let folder = parentOf(path);
+    while (folder) { files.expanded.add(folder); folder = parentOf(folder); }
+  }
+
+  // Files workspace: editor
+
+  let editorScript = null;
+  function loadEditor() {
+    if (window.PsydcarEditor) return Promise.resolve();
+    editorScript ??= new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/assets/editor.js";
+      script.onload = resolve;
+      script.onerror = () => { editorScript = null; reject(new Error("The editor couldn't load. Reload the page and try again.")); };
+      document.head.append(script);
+    });
+    return editorScript;
+  }
+
+  async function openFile(path) {
+    const sidecarId = files.sidecarId;
+    showEditorMessage("loader-circle", "Opening…", path);
+    try {
+      const [file] = await Promise.all([request(`${filesApi("file")}?path=${encodeURIComponent(path)}`), loadEditor()]);
+      if (sidecarId !== files.sidecarId || parseRoute()?.path !== path) return;
+      closeFile();
+      files.open = file;
+      files.editor = window.PsydcarEditor.create({
+        parent: byId("editor-surface"), doc: file.content, path: file.path, preview: files.preview,
+        nonce: document.querySelector('meta[name="psydcar-style-nonce"]')?.content,
+        onChange: renderEditorState, onSave: () => saveFile(),
+      });
+      expandTo(file.path);
+      renderWorkspace();
+      files.editor.focus();
+    } catch (error) {
+      closeFile();
+      showEditorMessage("circle-alert", "This file can't be opened", error.message);
+      renderTree();
+    }
+  }
+
+  function closeFile() {
+    if (files.editor) files.editor.destroy();
+    files.editor = null;
+    files.open = null;
+    files.conflict = null;
+    byId("editor-surface").replaceChildren();
+    showEditorMessage("file-text", "Open a file to edit it",
+      "Saving writes straight to the file in your folder. Psydcar re-indexes it right away, so agents see the change.");
+  }
+
+  function showEditorMessage(iconName, title, text) {
+    byId("editor-empty-icon").setAttribute("href", `#${iconName}`);
+    byId("editor-empty-icon").parentElement.classList.toggle("spin", iconName === "loader-circle");
+    byId("editor-empty-title").textContent = title;
+    byId("editor-empty-text").textContent = text;
+  }
+
+  function renderWorkspace() {
+    const open = files.open;
+    byId("files-view").classList.toggle("has-file", Boolean(open));
+    byId("editor-toolbar").hidden = !open;
+    byId("editor-surface").hidden = !open;
+    byId("editor-empty").hidden = Boolean(open);
+    byId("editor-status").hidden = !open;
+    renderTree();
+    syncTreeFocus();
+    if (!open) { byId("editor-conflict").hidden = true; return; }
+    byId("editor-path").replaceChildren();
+    const parts = open.path.split("/");
+    parts.forEach((part, index) => {
+      if (index) add(byId("editor-path"), "span", "editor-path-sep", "/");
+      add(byId("editor-path"), "span", index === parts.length - 1 ? "editor-path-name" : "", part);
+    });
+    byId("editor-path").title = open.path;
+    byId("editor-path-icon").setAttribute("href", `#${fileIcon(open.path)}`);
+    const toggle = byId("preview-toggle");
+    toggle.hidden = !files.editor.isMarkdown;
+    for (const item of toggle.querySelectorAll("button")) item.setAttribute("aria-pressed", String((item.dataset.preview === "on") === files.editor.preview));
+    renderEditorState();
+    renderConflict();
+  }
+
+  function renderEditorState() {
+    if (!files.open) return;
+    const dirty = isDirty();
+    const stateLabel = byId("editor-state");
+    stateLabel.textContent = files.saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved";
+    stateLabel.className = `editor-state${dirty ? " is-dirty" : ""}`;
+    byId("save-button").disabled = !dirty || files.saving;
+    document.title = `${dirty ? "● " : ""}${baseName(files.open.path)} · Psydcar`;
+    const status = byId("editor-status");
+    status.replaceChildren();
+    for (const value of [files.editor.language, files.open.newline === "\r\n" ? "CRLF" : "LF", "UTF-8", formatBytes(files.open.size), `Modified ${relative(files.open.modified_at)}`]) {
+      add(status, "span", "", value);
+    }
+  }
+
+  function formatBytes(value) {
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  async function saveFile({ overwrite = false } = {}) {
+    if (!files.open || files.saving) return false;
+    if (!isDirty() && !overwrite) return true;
+    if (files.conflict && !overwrite) { renderConflict(); return false; }
+    const open = files.open;
+    const doc = files.editor.snapshot();
+    files.saving = true;
+    renderEditorState();
+    try {
+      if (overwrite && files.conflict?.deleted) {
+        await request(filesApi(), { method: "POST", body: JSON.stringify({ path: open.path, type: "file" }) });
+        files.conflict.version = (await request(`${filesApi("file")}?path=${encodeURIComponent(open.path)}`)).version;
+      }
+      const version = overwrite && files.conflict ? files.conflict.version : open.version;
+      const result = await request(filesApi("file"), {
+        method: "PUT",
+        body: JSON.stringify({ path: open.path, content: doc.toString(), version, newline: open.newline, bom: open.bom }),
+      });
+      if (files.open !== open) return true;
+      Object.assign(open, { version: result.version, size: result.size, mtime_ns: result.mtime_ns, modified_at: result.modified_at });
+      files.editor.markSaved(doc);
+      files.conflict = null;
+      renderConflict();
+      return true;
+    } catch (error) {
+      if (error.status === 409 && files.open === open) {
+        files.conflict = { version: error.payload.version, deleted: error.payload.version === null };
+        renderConflict();
+      } else {
+        message(error.message, true);
+      }
+      return false;
+    } finally {
+      files.saving = false;
+      renderEditorState();
+    }
+  }
+
+  function renderConflict() {
+    const box = byId("editor-conflict");
+    const conflict = files.conflict;
+    box.hidden = !conflict;
+    if (!conflict) return;
+    const name = baseName(files.open.path);
+    byId("conflict-title").textContent = conflict.deleted ? `${name} was moved or deleted on disk` : `${name} changed on disk`;
+    byId("conflict-text").textContent = conflict.deleted
+      ? "Your edits are still here. Recreate the file with your version, or close it."
+      : "Another app changed this file while you were editing. Reload to see the new version and lose your edits, or keep your version and overwrite the file.";
+    byId("conflict-reload-button").textContent = conflict.deleted ? "Close file" : "Reload from disk";
+    byId("conflict-keep-button").textContent = conflict.deleted ? "Recreate with my version" : "Keep my version";
+  }
+
+  // Compare the open file with the latest listing, and react to changes made outside the dashboard.
+  async function checkOpenFile() {
+    const open = files.open;
+    if (!open || files.saving) return;
+    const entry = files.entries.find((item) => item.path === open.path && item.type === "file");
+    if (!entry) {
+      if (!files.conflict) { files.conflict = { version: null, deleted: true }; renderConflict(); }
+      return;
+    }
+    if (files.conflict?.deleted) { files.conflict = null; renderConflict(); }
+    if (entry.mtime_ns === open.mtime_ns && entry.size === open.size) return;
+    try {
+      const latest = await request(`${filesApi("file")}?path=${encodeURIComponent(open.path)}`);
+      if (files.open !== open || files.saving) return;
+      if (latest.version === open.version) {
+        Object.assign(open, { mtime_ns: latest.mtime_ns, size: latest.size, modified_at: latest.modified_at });
+        return;
+      }
+      if (isDirty()) {
+        files.conflict = { version: latest.version, deleted: false };
+        renderConflict();
+        return;
+      }
+      files.open = latest;
+      files.conflict = null;
+      files.editor.load(latest.content);
+      renderWorkspace();
+      message(`Reloaded ${baseName(latest.path)} because it changed on disk.`);
+    } catch { /* The next listing retries. */ }
+  }
+
+  async function reloadFromDisk() {
+    if (!files.open) return;
+    if (files.conflict?.deleted) {
+      files.editor.markSaved();
+      location.hash = filesHash(files.sidecarId);
+      return;
+    }
+    try {
+      const latest = await request(`${filesApi("file")}?path=${encodeURIComponent(files.open.path)}`);
+      files.open = latest;
+      files.conflict = null;
+      files.editor.load(latest.content);
+      renderWorkspace();
+      files.editor.focus();
+    } catch (error) { message(error.message, true); }
+  }
+
+  // Files workspace: create, move, delete
+
+  function openFileCreate(type, folder = "") {
+    if (folder === "" && files.open) folder = parentOf(files.open.path);
+    const form = byId("file-create-form");
+    form.dataset.type = type;
+    byId("file-create-title").textContent = type === "folder" ? "New folder" : "New file";
+    byId("file-create-submit").textContent = type === "folder" ? "Create folder" : "Create file";
+    byId("file-create-hint").textContent = type === "folder"
+      ? "A path inside this sidecar's folder. Use / to nest folders."
+      : "Use a text extension Psydcar indexes, such as .md, .txt, or .py. Missing folders are created.";
+    const prefix = folder ? `${folder}/` : "";
+    const input = byId("file-create-path");
+    input.value = type === "folder" ? prefix : `${prefix}untitled.md`;
+    input.placeholder = type === "folder" ? "notes/drafts" : "notes/ideas.md";
+    formError("file-create-error", "", input);
+    byId("file-create-dialog").showModal();
+    input.focus();
+    // Select the editable part: the name without its extension.
+    const start = prefix.length;
+    const end = type === "folder" ? input.value.length : input.value.lastIndexOf(".");
+    input.setSelectionRange(start, end > start ? end : input.value.length);
+  }
+
+  function openFileMove(node) {
+    const form = byId("file-move-form");
+    form.dataset.path = node.path;
+    form.dataset.type = node.type;
+    byId("file-move-title").textContent = node.type === "folder" ? "Rename or move folder" : "Rename or move file";
+    const input = byId("file-move-path");
+    input.value = node.path;
+    formError("file-move-error", "", input);
+    byId("file-move-dialog").showModal();
+    input.focus();
+    const start = node.path.lastIndexOf("/") + 1;
+    const dot = node.type === "file" ? node.path.lastIndexOf(".") : -1;
+    input.setSelectionRange(start, dot > start ? dot : node.path.length);
+  }
+
+  function openFileDelete(node) {
+    const folder = node.type === "folder";
+    const hasChildren = folder && files.entries.some((entry) => entry.path.startsWith(`${node.path}/`));
+    const form = byId("file-delete-form");
+    form.dataset.path = node.path;
+    byId("file-delete-title").textContent = folder ? "Delete folder" : "Delete file";
+    const text = byId("file-delete-text");
+    text.replaceChildren();
+    if (hasChildren) {
+      text.append(`${node.path} isn't empty. Move or delete what's inside it first. Psydcar only deletes empty folders.`);
+    } else {
+      text.append(`This permanently deletes `);
+      add(text, "strong", "mono", node.path);
+      text.append(` from your folder. It doesn't go to the Trash and can't be undone.`);
+    }
+    byId("file-delete-submit").hidden = hasChildren;
+    byId("file-delete-submit").textContent = folder ? "Delete folder" : "Delete file";
+    formError("file-delete-error", "");
+    byId("file-delete-dialog").showModal();
+    (hasChildren ? byId("file-delete-dialog").querySelector("[data-close]") : byId("file-delete-submit")).focus();
+  }
+
   // Events
 
   byId("create-button").addEventListener("click", openCreate);
@@ -723,6 +1257,105 @@
     finally { submit.disabled = false; }
   });
 
-  refresh(true);
+  byId("new-file-button").addEventListener("click", () => openFileCreate("file"));
+  byId("empty-new-file-button").addEventListener("click", () => openFileCreate("file"));
+  byId("new-folder-button").addEventListener("click", () => openFileCreate("folder"));
+  byId("reload-tree-button").addEventListener("click", () => loadTree());
+  byId("show-files-button").addEventListener("click", () => { location.hash = filesHash(files.sidecarId); });
+  byId("file-filter").addEventListener("input", (event) => { files.filter = event.target.value; renderTree(); syncTreeFocus(); });
+  byId("save-button").addEventListener("click", () => saveFile());
+  byId("save-shortcut").textContent = isMac ? "⌘S" : "Ctrl+S";
+  byId("conflict-reload-button").addEventListener("click", reloadFromDisk);
+  byId("conflict-keep-button").addEventListener("click", () => saveFile({ overwrite: true }));
+  byId("preview-toggle").addEventListener("click", (event) => {
+    const target = event.target.closest("button[data-preview]");
+    if (!target || !files.editor) return;
+    files.preview = target.dataset.preview === "on";
+    writeSetting("psydcar.preview", files.preview ? "on" : "off");
+    files.editor.setPreview(files.preview);
+    renderWorkspace();
+    files.editor.focus();
+  });
+  byId("header-sidecars").addEventListener("click", (event) => {
+    if (!parseRoute()) return;
+    event.preventDefault();
+    location.hash = "";
+  });
+
+  byId("file-create-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const type = event.target.dataset.type;
+    const input = byId("file-create-path");
+    const path = input.value.trim().replace(/^\/+|\/+$/g, "");
+    if (!path) { formError("file-create-error", "Enter a path.", input); return; }
+    const submit = byId("file-create-submit");
+    submit.disabled = true;
+    try {
+      const result = await request(filesApi(), { method: "POST", body: JSON.stringify({ path, type }) });
+      byId("file-create-dialog").close();
+      expandTo(result.path);
+      if (type === "folder") files.expanded.add(result.path);
+      await loadTree();
+      if (type === "file") location.hash = filesHash(files.sidecarId, result.path);
+      else message(result.message);
+    } catch (error) { formError("file-create-error", error.message, input); }
+    finally { submit.disabled = false; }
+  });
+
+  byId("file-move-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const from = event.target.dataset.path;
+    const input = byId("file-move-path");
+    const to = input.value.trim().replace(/^\/+|\/+$/g, "");
+    if (!to) { formError("file-move-error", "Enter a path.", input); return; }
+    if (to === from) { byId("file-move-dialog").close(); return; }
+    const submit = event.target.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      const result = await request(filesApi("files/move"), { method: "POST", body: JSON.stringify({ from, to }) });
+      byId("file-move-dialog").close();
+      if (files.expanded.delete(from)) files.expanded.add(result.path);
+      expandTo(result.path);
+      // Keep the open file (and its unsaved edits) when it or a folder above it moves.
+      if (files.open && (files.open.path === from || files.open.path.startsWith(`${from}/`))) {
+        files.open.path = result.path + files.open.path.slice(from.length);
+        files.routeHash = filesHash(files.sidecarId, files.open.path);
+        history.replaceState(null, "", files.routeHash);
+        renderWorkspace();
+      }
+      await loadTree();
+      message(result.message);
+    } catch (error) { formError("file-move-error", error.message, input); }
+    finally { submit.disabled = false; }
+  });
+
+  byId("file-delete-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const path = event.target.dataset.path;
+    const submit = byId("file-delete-submit");
+    submit.disabled = true;
+    try {
+      const result = await request(filesApi(), { method: "DELETE", body: JSON.stringify({ path, confirm_path: path }) });
+      byId("file-delete-dialog").close();
+      if (files.open?.path === path) {
+        files.editor.markSaved();
+        files.routeHash = filesHash(files.sidecarId);
+        history.replaceState(null, "", files.routeHash);
+        closeFile();
+      }
+      files.expanded.delete(path);
+      await loadTree();
+      renderWorkspace();
+      message(result.message);
+    } catch (error) { formError("file-delete-error", error.message); }
+    finally { submit.disabled = false; }
+  });
+
+  window.addEventListener("hashchange", route);
+  window.addEventListener("beforeunload", (event) => {
+    if (isDirty()) { event.preventDefault(); event.returnValue = ""; }
+  });
+
+  refresh(true).then(route);
   setInterval(() => { if (!document.hidden) refresh(); }, 2500);
 })();

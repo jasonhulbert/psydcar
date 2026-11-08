@@ -44,6 +44,16 @@ npm pack lucide-static && mkdir lucide && tar -xzf lucide-static-*.tgz -C lucide
 python scripts/build-dashboard-icons.py lucide/package
 ```
 
+- **Editor:** `editor.js` is a bundle of [CodeMirror 6](https://codemirror.net) plus Psydcar's Markdown live preview, built from the `editor/` folder. The dashboard loads it only when a file is opened. Its third-party licenses are in `editor-licenses.txt`. Both files are committed, so installing Psydcar never needs Node. After changing `editor/src` or its dependencies, rebuild both files with Node 18 or newer:
+
+```console
+cd editor
+npm ci
+npm run build
+```
+
+CodeMirror adds its base styles in a `<style>` element. The dashboard's content security policy admits that element through a per-page nonce, which the server puts in a `<meta>` tag for the editor.
+
 ## Pull requests
 
 - Keep each pull request focused on one change.

@@ -6,7 +6,7 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ### Added
 
-- The dashboard can edit a sidecar's files. **Browse and edit files** opens a file list and an editor. Markdown opens in live preview: formatting renders as you type, and the raw syntax appears on the line you're editing. Code files open with syntax highlighting. Saving writes the file in place and re-indexes it right away. Line endings are preserved, and you're warned when a file changes on disk while you're editing it.
+- The dashboard can edit a sidecar's files. **Browse and edit files** opens a file list and an editor. Markdown opens in live preview: formatting renders as you type, and the raw syntax appears on the line you're editing. Code files open with syntax highlighting. Saving writes the file in place and re-indexes it right away. Line endings are preserved, and you're warned when a file changes on disk while you're editing it. The file list can be hidden. On narrow screens, it opens as a drawer over the editor.
 - The dashboard can create, rename, move, and delete files and folders inside a sidecar's folder. It only deletes empty folders.
 
 ## [0.2.0] - 2026-11-07

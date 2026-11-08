@@ -95,6 +95,7 @@ Select a sidecar in the dashboard and choose **Browse and edit files**. The file
 - **Code and other text files** open in a code editor with syntax highlighting, line numbers, and search.
 - **Saving.** Press **Save** or ⌘S (Ctrl+S on Linux). The file is written in place, and Psydcar re-indexes it right away. Line endings and a UTF-8 byte order mark are kept as they were.
 - **Changes from other apps.** If a file changes on disk while it's open, the editor reloads it. If you also have unsaved edits, you choose between reloading and keeping your version.
+- **File list.** The panel button in the editor toolbar hides the file list. On narrow screens, the file list opens as a drawer over the editor.
 - **Managing files.** Create files and folders, and rename or move them, from the file list. Press F2 to rename the selected item. Deleting a file is permanent, and only empty folders can be deleted.
 
 The editor works with the same files Psydcar indexes. Hidden files, symbolic links, skipped folders, and files over 2 MiB can't be opened or created there. The CLI and MCP server stay read-only.

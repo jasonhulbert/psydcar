@@ -130,7 +130,7 @@
   </main>
 
   <div class="workspace" id="files-view" hidden>
-    <aside class="file-pane" aria-labelledby="files-title">
+    <aside class="file-pane" id="file-pane" aria-labelledby="files-title">
       <div class="file-pane-head">
         <div class="file-pane-title">
           <h1 id="files-title">Files</h1>
@@ -156,9 +156,11 @@
       <p class="file-pane-note" id="file-tree-note" hidden></p>
     </aside>
 
+    <div class="file-drawer-backdrop" id="file-drawer-backdrop" hidden></div>
+
     <section class="editor-pane" aria-label="Editor">
       <div class="editor-toolbar" id="editor-toolbar" hidden>
-        <button class="btn-icon editor-files-toggle" id="show-files-button" type="button" aria-label="Show files" title="Show files"><svg class="icon" aria-hidden="true"><use href="#panel-left"/></svg></button>
+        <button class="btn-icon editor-files-toggle" id="files-toggle-button" type="button" aria-controls="file-pane" aria-expanded="true" aria-label="Hide files" title="Hide files"><svg class="icon" aria-hidden="true"><use href="#panel-left-close"/></svg></button>
         <div class="editor-path">
           <svg class="icon" aria-hidden="true"><use id="editor-path-icon" href="#file-text"/></svg>
           <span class="editor-path-text" id="editor-path"></span>

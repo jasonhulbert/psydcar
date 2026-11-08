@@ -677,7 +677,7 @@ body.is-workspace { overflow: hidden; }
 body.is-workspace .app-header-inner { max-width: none; }
 
 .workspace {
-  display: grid; grid-template-columns: 288px minmax(0, 1fr);
+  position: relative; display: grid; grid-template-columns: 288px minmax(0, 1fr);
   height: calc(100vh - var(--header-height)); height: calc(100dvh - var(--header-height));
 }
 
@@ -728,10 +728,10 @@ body.is-workspace .app-header-inner { max-width: none; }
 
 .editor-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
 .editor-toolbar {
-  display: flex; align-items: center; gap: 12px; flex: none; height: 48px; padding: 0 12px 0 16px;
+  display: flex; align-items: center; gap: 12px; flex: none; height: 48px; padding: 0 12px;
   border-bottom: 1px solid var(--border);
 }
-.editor-files-toggle { display: none; }
+.editor-files-toggle { margin-left: -6px; }
 .editor-path { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; font-size: 13px; }
 .editor-path > .icon { color: var(--fg-subtle); }
 .editor-path-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
@@ -884,13 +884,25 @@ body.is-workspace .app-header-inner { max-width: none; }
   .settings-section { order: 3; margin-top: 8px; }
 }
 
+/* Wide screens: the toggle collapses the file pane and the editor takes the full width. */
+@media (min-width: 861px) {
+  .workspace.has-file.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .workspace.has-file.is-collapsed .file-pane { display: none; }
+}
+
+/* Narrow screens: the file list fills the screen until a file opens, then becomes a drawer over the editor. */
 @media (max-width: 860px) {
   .workspace { grid-template-columns: minmax(0, 1fr); }
-  .workspace.has-file .file-pane { display: none; }
   .workspace:not(.has-file) .editor-pane { display: none; }
   .file-pane { border-right: 0; }
-  .editor-files-toggle { display: inline-grid; margin-left: -6px; }
-  .editor-toolbar { padding-left: 12px; }
+  .workspace.has-file .file-pane {
+    position: absolute; inset: 0 auto 0 0; z-index: 30; width: min(320px, 86vw);
+    border-right: 1px solid var(--border); box-shadow: var(--shadow-lg);
+    transform: translateX(-100%); visibility: hidden;
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
+  }
+  .workspace.has-file.is-drawer-open .file-pane { transform: none; visibility: visible; transition: transform 0.2s ease; }
+  .file-drawer-backdrop { position: absolute; inset: 0; z-index: 29; background: var(--backdrop); animation: fade-in 0.14s ease-out; }
   .editor-surface .cm-prose .cm-content { padding: 24px 20px 40vh; }
 }
 

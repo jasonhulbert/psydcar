@@ -15,7 +15,10 @@
     sidecarId: null, entries: [], treeKey: "", truncated: false, expanded: new Set(), filter: "", loadingTree: false,
     open: null, editor: null, conflict: null, saving: false, routeHash: "", treeTimer: null,
     preview: readSetting("psydcar.preview", "on") !== "off",
+    // Wide screens remember a collapsed file pane; narrow screens show it as a drawer that starts closed.
+    collapsed: readSetting("psydcar.files-collapsed", "false") === "true", drawerOpen: false,
   };
+  const narrow = window.matchMedia("(max-width: 860px)");
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
   function readSetting(key, fallback) {
@@ -788,7 +791,10 @@
     item.addEventListener("click", () => {
       if (folder) toggleFolder(node.path);
       else if (node.editable === false) message(`${node.path} is larger than 2 MiB, so it can't be edited here.`, true);
-      else location.hash = filesHash(files.sidecarId, node.path);
+      else {
+        closeDrawer();
+        location.hash = filesHash(files.sidecarId, node.path);
+      }
     });
     item.addEventListener("keydown", (event) => treeKey(event, node));
 
@@ -894,9 +900,46 @@
     byId("editor-empty-text").textContent = text;
   }
 
+  // File pane visibility. Without an open file the pane is the whole view, so it can't be hidden.
+  function renderSidebar() {
+    const view = byId("files-view");
+    if (!files.open || !narrow.matches) files.drawerOpen = false;
+    view.classList.toggle("is-collapsed", files.collapsed);
+    view.classList.toggle("is-drawer-open", files.drawerOpen);
+    const shown = narrow.matches ? files.drawerOpen : !files.collapsed;
+    const toggle = byId("files-toggle-button");
+    const label = shown ? "Hide files" : "Show files";
+    toggle.setAttribute("aria-expanded", String(shown));
+    toggle.setAttribute("aria-label", label);
+    toggle.title = label;
+    setIcon(toggle.querySelector("svg"), shown ? "panel-left-close" : "panel-left-open");
+    byId("file-drawer-backdrop").hidden = !files.drawerOpen;
+  }
+
+  function toggleSidebar() {
+    if (!files.open) return;
+    if (narrow.matches) {
+      files.drawerOpen = !files.drawerOpen;
+      renderSidebar();
+      if (files.drawerOpen) (byId("file-tree").querySelector('.tree-item[tabindex="0"]') || byId("file-filter")).focus();
+    } else {
+      files.collapsed = !files.collapsed;
+      writeSetting("psydcar.files-collapsed", String(files.collapsed));
+      renderSidebar();
+    }
+  }
+
+  function closeDrawer(focusToggle = false) {
+    if (!files.drawerOpen) return;
+    files.drawerOpen = false;
+    renderSidebar();
+    if (focusToggle) byId("files-toggle-button").focus();
+  }
+
   function renderWorkspace() {
     const open = files.open;
     byId("files-view").classList.toggle("has-file", Boolean(open));
+    renderSidebar();
     byId("editor-toolbar").hidden = !open;
     byId("editor-surface").hidden = !open;
     byId("editor-empty").hidden = Boolean(open);
@@ -1261,7 +1304,12 @@
   byId("empty-new-file-button").addEventListener("click", () => openFileCreate("file"));
   byId("new-folder-button").addEventListener("click", () => openFileCreate("folder"));
   byId("reload-tree-button").addEventListener("click", () => loadTree());
-  byId("show-files-button").addEventListener("click", () => { location.hash = filesHash(files.sidecarId); });
+  byId("files-toggle-button").addEventListener("click", toggleSidebar);
+  byId("file-drawer-backdrop").addEventListener("click", () => closeDrawer(true));
+  byId("file-pane").addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && files.drawerOpen) { event.preventDefault(); closeDrawer(true); }
+  });
+  narrow.addEventListener("change", renderSidebar);
   byId("file-filter").addEventListener("input", (event) => { files.filter = event.target.value; renderTree(); syncTreeFocus(); });
   byId("save-button").addEventListener("click", () => saveFile());
   byId("save-shortcut").textContent = isMac ? "⌘S" : "Ctrl+S";

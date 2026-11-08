@@ -31,7 +31,7 @@ from .watcher import SidecarWatcher, WatchEvent
 
 _SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update)$")
 _SIDECAR_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})$")
-_SIDECAR_FILES = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(file|files|files/move)$")
+_SIDECAR_FILES = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(file|files|files/move|image)$")
 _CONNECTION_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 _MAX_BODY = 16384
 # JSON escaping can grow text several times over; the decoded file is still held to MAX_FILE_BYTES.
@@ -280,6 +280,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
         self.end_headers()
 
+    def _image(self, path: Path, content_type: str, etag: str) -> None:
+        """Send an image that only this dashboard can embed, with scripts disabled when opened directly."""
+        # The browser revalidates each time, so an unchanged image costs a 304 instead of a download.
+        unchanged = self.headers.get("If-None-Match") == etag
+        body = b"" if unchanged else path.read_bytes()
+        self.send_response(HTTPStatus.NOT_MODIFIED if unchanged else HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        if not unchanged:
+            self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "private, no-cache")
+        self.send_header("ETag", etag)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header("Referrer-Policy", "no-referrer")
+        # An SVG is a document that can carry scripts. The sandbox keeps it inert even when opened in its own tab.
+        self.send_header("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self._headers(status, "application/json; charset=utf-8", len(body))
@@ -335,10 +354,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.snapshot())
                 return
             match = _SIDECAR_FILES.fullmatch(path)
-            if match and match.group(2) in ("file", "files"):
+            if match and match.group(2) in ("file", "files", "image"):
                 sources = self.server.source_files(match.group(1))
                 if match.group(2) == "files":
                     self._json(HTTPStatus.OK, sources.tree())
+                elif match.group(2) == "image":
+                    query = parse_qs(urlsplit(self.path).query)
+                    self._image(*sources.image(query.get("path", [""])[0]))
                 else:
                     query = parse_qs(urlsplit(self.path).query)
                     self._json(HTTPStatus.OK, sources.read(query.get("path", [""])[0]))

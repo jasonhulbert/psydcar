@@ -12,12 +12,13 @@ import {
 } from "@codemirror/view";
 import { classHighlighter, tagHighlighter, tags } from "@lezer/highlight";
 import { fenceLanguages, languageForPath } from "./languages.js";
+import { frontMatter } from "./front-matter.js";
 import { livePreview, revealAnchor } from "./live-preview.js";
 
 const PROSE = new Set(["md", "markdown", "txt", "rst"]);
 const MARKDOWN = new Set(["md", "markdown"]);
 
-function create({ parent, doc = "", path, preview = true, label, nonce, onChange, onSave, onOpenLink }) {
+function create({ parent, doc = "", path, preview = true, label, nonce, onChange, onSave, onOpenLink, resolveImage, onTag }) {
   const extension = path.split(".").pop().toLowerCase();
   const isMarkdown = MARKDOWN.has(extension);
   const isProse = PROSE.has(extension);
@@ -26,7 +27,7 @@ function create({ parent, doc = "", path, preview = true, label, nonce, onChange
   const themeSlot = new Compartment();
   const scheme = window.matchMedia("(prefers-color-scheme: dark)");
   let previewOn = isMarkdown && preview;
-  const previewExtension = isMarkdown ? livePreview({ onOpenLink }) : [];
+  const previewExtension = isMarkdown ? livePreview({ onOpenLink, resolveImage, onTag }) : [];
 
   const extensions = [
     // CodeMirror adds its base styles in a <style> element; the page's CSP admits it by nonce.
@@ -60,7 +61,7 @@ function create({ parent, doc = "", path, preview = true, label, nonce, onChange
     extensions.push(lineNumbers(), highlightActiveLineGutter(), foldGutter(), highlightActiveLine());
   }
   if (isMarkdown) {
-    extensions.push(markdown({ base: markdownLanguage, codeLanguages: fenceLanguages }), previewSlot.of(previewOn ? previewExtension : []));
+    extensions.push(markdown({ base: markdownLanguage, codeLanguages: fenceLanguages, extensions: [frontMatter] }), previewSlot.of(previewOn ? previewExtension : []));
   } else if (code) {
     extensions.push(code.support);
   }

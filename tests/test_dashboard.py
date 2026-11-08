@@ -295,8 +295,33 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(preview["entry"]["command"], str(command.absolute()))
         self.assertEqual(preview["entry"]["args"], ["mcp", "--sidecar-id", one.id])
 
+    def test_dashboard_edits_and_manages_source_files(self) -> None:
+        (self.source / "notes.md").write_text("quiet orchard\r\n")
+        sidecar_id = self.http("POST", "/api/sidecars", {"name": "Notes", "source": str(self.source)})[1]["id"]
+        base = f"/api/sidecars/{sidecar_id}"
+
+        self.assertEqual(self.http("POST", f"{base}/files", {"path": "drafts", "type": "folder"})[0], 201)
+        self.assertEqual(self.http("POST", f"{base}/files", {"path": "drafts/idea.md", "type": "file"})[0], 201)
+        tree = self.http("GET", f"{base}/files")[1]["entries"]
+        self.assertEqual([item["path"] for item in tree], ["drafts", "drafts/idea.md", "notes.md"])
+
+        opened = self.http("GET", f"{base}/file?path=notes.md")[1]
+        self.assertEqual((opened["content"], opened["newline"]), ("quiet orchard\n", "\r\n"))
+        status, saved = self.http("PUT", f"{base}/file", {"path": "notes.md", "content": "lantern meadow\n",
+                                                         "version": opened["version"], "newline": opened["newline"]})
+        self.assertEqual(status, 200)
+        self.assertEqual((self.source / "notes.md").read_bytes(), b"lantern meadow\r\n")
+        self.wait_for(lambda: len(json.loads(self.cli("search", "--sidecar", sidecar_id, "lantern").stdout or "[]")) == 1,
+                      "saved file was not re-indexed")
+
+        moved = self.http("POST", f"{base}/files/move", {"from": "notes.md", "to": "drafts/notes.md"})
+        self.assertEqual(moved[0], 200)
+        self.assertEqual(self.http("DELETE", f"{base}/files", {"path": "drafts/idea.md", "confirm_path": "drafts/idea.md"})[0], 200)
+        self.assertEqual(sorted(p.relative_to(self.source).as_posix() for p in self.source.rglob("*")),
+                         ["drafts", "drafts/notes.md"])
+
     def test_static_assets_and_package_data(self) -> None:
-        for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js",
+        for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js", "/assets/editor.js",
                      "/assets/Geist-Variable.woff2", "/assets/GeistMono-Variable.woff2"):
             request = Request(self.server.url + path)
             with urlopen(request, timeout=3) as response:

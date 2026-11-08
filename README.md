@@ -4,13 +4,14 @@
 
 Psydcar lets your coding agents search your local notes, code, and PDFs.
 
-Point Psydcar at a folder and it builds a local search index called a **sidecar**. Coding agents such as Claude Code, Cursor, or any other [MCP](https://modelcontextprotocol.io) client can then search that sidecar and quote the exact file, line, or PDF page that answers their question. Your files stay where they are. Psydcar never moves or edits them.
+Point Psydcar at a folder and it builds a local search index called a **sidecar**. Coding agents such as Claude Code, Cursor, or any other [MCP](https://modelcontextprotocol.io) client can then search that sidecar and quote the exact file, line, or PDF page that answers their question. Your files stay where they are. Psydcar changes them only when you edit them yourself in the dashboard. Agents get read-only access.
 
 - **Local by default.** Indexing and search run on your machine. Nothing leaves it unless you turn on an embeddings provider.
 - **You choose what each agent sees.** Each MCP connection is limited to the sidecars you select.
 - **Answers come with sources.** Every result names its file and location, and says whether the file has changed since it was indexed.
 - **Stays current.** A built-in watcher re-indexes files as they change.
 - **CLI and browser dashboard.** Manage sidecars whichever way you prefer.
+- **Edit in the browser.** The dashboard includes a Markdown editor with live preview and a code editor. A saved change is searchable by your agents right away.
 
 ## Install
 
@@ -42,7 +43,7 @@ Search prints JSON results. Each result includes the matching text, the file pat
 psydcar retrieve --sidecar "My notes" EVIDENCE_ID
 ```
 
-Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, and prepare agent connections. Press Ctrl-C to stop it.
+Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, edit their files, and prepare agent connections. Press Ctrl-C to stop it.
 
 ## Connect a coding agent
 
@@ -85,6 +86,19 @@ Run `psydcar sidecar update NAME` after files change. It reports what was added,
 To update automatically, leave `psydcar watch` or `psydcar dashboard` running. Both watch every sidecar's folder and catch up on anything that changed while Psydcar was stopped. `psydcar watch --once` catches up once and exits. Psydcar doesn't install a background service, so changes are only picked up while one of these commands is running.
 
 `psydcar sidecar show NAME` reports the last update, any files that need attention, and PDF pages without searchable text.
+
+## Edit files in the dashboard
+
+Select a sidecar in the dashboard and choose **Browse and edit files**. The file list shows the sidecar's indexed text and code files. Open one to edit it.
+
+- **Markdown** opens in live preview. Headings, emphasis, links, lists, task checkboxes, quotes, and code blocks render as you type. The raw Markdown appears on the line you're editing. **Source** shows the plain text. The file on disk is always plain Markdown, and Psydcar never reformats it.
+- **Code and other text files** open in a code editor with syntax highlighting, line numbers, and search.
+- **Saving.** Press **Save** or ⌘S (Ctrl+S on Linux). The file is written in place, and Psydcar re-indexes it right away. Line endings and a UTF-8 byte order mark are kept as they were.
+- **Changes from other apps.** If a file changes on disk while it's open, the editor reloads it. If you also have unsaved edits, you choose between reloading and keeping your version.
+- **File list.** The panel button in the editor toolbar hides the file list. On narrow screens, the file list opens as a drawer over the editor.
+- **Managing files.** Create files and folders, and rename or move them, from the file list. Press F2 to rename the selected item. Deleting a file is permanent, and only empty folders can be deleted.
+
+The editor works with the same files Psydcar indexes. Hidden files, symbolic links, skipped folders, and files over 2 MiB can't be opened or created there. The CLI and MCP server stay read-only.
 
 ## Better results with embeddings (optional)
 

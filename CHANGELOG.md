@@ -4,6 +4,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-07
+
 ### Added
 
 - The dashboard can edit a sidecar's files. **Browse and edit files** opens a file list and an editor. Markdown opens in live preview: formatting renders as you type, and the raw syntax appears on the line you're editing. Code files open with syntax highlighting. Saving writes the file in place and re-indexes it right away. Line endings are preserved, and you're warned when a file changes on disk while you're editing it. The file list can be hidden. On narrow screens, it opens as a drawer over the editor.
@@ -55,7 +57,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 - First release: local sidecars for text, code, and PDFs with lexical and optional embedding search, a file watcher, a browser dashboard, and an MCP server limited to selected sidecars.
 
-[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jasonhulbert/psydcar/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jasonhulbert/psydcar/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/jasonhulbert/psydcar/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jasonhulbert/psydcar/compare/v0.1.2...v0.1.3

@@ -3,19 +3,24 @@
 // edited keeps every character reachable without a separate source mode.
 
 import { syntaxTree } from "@codemirror/language";
-import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
+import { Prec } from "@codemirror/state";
+import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
 
 const hide = Decoration.replace({});
 const lineClass = (name) => Decoration.line({ class: name });
 const mark = (name) => Decoration.mark({ class: name });
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
-const link = Decoration.mark({ class: "cm-md-link", attributes: { title: `${isMac ? "⌘" : "Ctrl"}-click to open web links` } });
+const openHint = `${isMac ? "⌘" : "Ctrl"}-click to open`;
+const link = (url) => Decoration.mark({ class: "cm-md-link", attributes: { title: url ? `${url}\n${openHint}` : openHint } });
+const MAX_LIST_DEPTH = 8;
 
 class TaskWidget extends WidgetType {
   constructor(checked) { super(); this.checked = checked; }
   eq(other) { return other.checked === this.checked; }
   toDOM(view) {
-    const box = document.createElement("input");
+    const wrap = document.createElement("span");
+    wrap.className = "cm-md-list-mark cm-md-task-mark";
+    const box = wrap.appendChild(document.createElement("input"));
     box.type = "checkbox";
     box.className = "cm-md-task";
     box.checked = this.checked;
@@ -23,22 +28,26 @@ class TaskWidget extends WidgetType {
     box.addEventListener("mousedown", (event) => event.preventDefault());
     box.addEventListener("click", (event) => {
       event.preventDefault();
-      const at = view.posAtDOM(box);
-      const marker = view.state.sliceDoc(at, at + 3);
-      if (!/^\[[ xX]\]$/.test(marker)) return;
-      view.dispatch({ changes: { from: at + 1, to: at + 2, insert: marker[1] === " " ? "x" : " " } });
+      // The widget covers the list marker too, for example "- [ ] ", so find the box inside it.
+      const at = view.posAtDOM(wrap);
+      const match = /^(?:[-*+]|\d+[.)])?[ \t]*\[([ xX])\]/.exec(view.state.sliceDoc(at, at + 16));
+      if (!match) return;
+      const pos = at + match[0].length - 2;
+      view.dispatch({ changes: { from: pos, to: pos + 1, insert: match[1] === " " ? "x" : " " } });
     });
-    return box;
+    return wrap;
   }
+  ignoreEvent() { return true; }
 }
 
-class BulletWidget extends WidgetType {
-  eq() { return true; }
+class TextWidget extends WidgetType {
+  constructor(text, className) { super(); this.text = text; this.className = className; }
+  eq(other) { return other.text === this.text && other.className === this.className; }
   toDOM() {
-    const bullet = document.createElement("span");
-    bullet.className = "cm-md-bullet";
-    bullet.textContent = "•";
-    return bullet;
+    const span = document.createElement("span");
+    span.className = this.className;
+    span.textContent = this.text;
+    return span;
   }
 }
 
@@ -53,10 +62,31 @@ class RuleWidget extends WidgetType {
 }
 
 const task = { open: Decoration.replace({ widget: new TaskWidget(false) }), done: Decoration.replace({ widget: new TaskWidget(true) }) };
-const bullet = Decoration.replace({ widget: new BulletWidget() });
+const bullet = Decoration.replace({ widget: new TextWidget("•", "cm-md-list-mark cm-md-bullet") });
+const rawBullet = mark("cm-md-list-mark cm-md-bullet-raw");
+const number = mark("cm-md-list-mark cm-md-list-number");
 const rule = Decoration.replace({ widget: new RuleWidget() });
 
+// Text areas parse their content as plain text, so decoding an entity here can't create elements.
+const decoder = document.createElement("textarea");
+function decodeEntity(text) {
+  if (!/^&(?:#\d{1,7}|#x[\da-f]{1,6}|[a-z][a-z\d]{1,31});$/i.test(text)) return null;
+  decoder.innerHTML = text;
+  const value = decoder.value;
+  return value === text ? null : value;
+}
+
 const HEADINGS = { ATXHeading1: 1, ATXHeading2: 2, ATXHeading3: 3, ATXHeading4: 4, ATXHeading5: 5, ATXHeading6: 6, SetextHeading1: 1, SetextHeading2: 2 };
+
+const inside = (node, name) => {
+  for (let parent = node.parent; parent; parent = parent.parent) if (parent.name === name) return true;
+  return false;
+};
+const listDepth = (node) => {
+  let depth = 0;
+  for (let parent = node.parent; parent; parent = parent.parent) if (parent.name === "BulletList" || parent.name === "OrderedList") depth++;
+  return depth;
+};
 
 function build(view) {
   const { state } = view;
@@ -64,6 +94,9 @@ function build(view) {
   const ranges = [];
   const lines = new Set();
   const focused = view.hasFocus;
+  // Lines inside list items, keyed by line start. Nested items are visited after their parents, so they win.
+  const listLines = new Map();
+  const codeLines = new Set();
 
   // A construct shows its raw syntax while any selection touches one of its lines.
   const active = (from, to) => {
@@ -99,13 +132,17 @@ function build(view) {
 
         if (name in HEADINGS) {
           const level = HEADINGS[name];
-          const textEnd = name.startsWith("Setext") ? doc.lineAt(from).to : to;
+          const setext = name.startsWith("Setext");
+          const textEnd = setext ? doc.lineAt(from).to : to;
           addLines(from, textEnd, `cm-md-heading cm-md-h${level}`);
           if (active(from, to)) return;
           for (const child of children(node)) {
             if (child.name !== "HeaderMark") continue;
-            if (name.startsWith("Setext")) ranges.push(hide.range(child.from, child.to));
-            else if (child.from === from) ranges.push(hide.range(child.from, spaceAfter(child.to)));
+            if (setext) {
+              ranges.push(hide.range(child.from, child.to));
+              // The underline is on a line of its own. Collapse it so it doesn't leave a gap.
+              if (doc.lineAt(child.from).number > doc.lineAt(from).number) addLines(child.from, child.from, "cm-md-setext-mark");
+            } else if (child.from === from) ranges.push(hide.range(child.from, spaceAfter(child.to)));
             else ranges.push(hide.range(doc.sliceString(child.from - 1, child.from) === " " ? child.from - 1 : child.from, child.to));
           }
           return;
@@ -133,12 +170,24 @@ function build(view) {
             return false;
           }
 
+          case "Escape":
+            if (!active(from, to)) ranges.push(hide.range(from, from + 1));
+            return;
+
+          case "Entity": {
+            const value = active(from, to) ? null : decodeEntity(doc.sliceString(from, to));
+            if (value) ranges.push(Decoration.replace({ widget: new TextWidget(value, "cm-md-entity") }).range(from, to));
+            return;
+          }
+
           case "Link":
           case "Image": {
             const marks = children(node).filter((child) => child.name === "LinkMark");
             if (marks.length < 2) return;
             const label = [marks[0].to, marks[1].from];
-            if (label[0] < label[1]) ranges.push((name === "Image" ? mark("cm-md-image") : link).range(label[0], label[1]));
+            const url = node.getChild("URL");
+            const target = url ? doc.sliceString(url.from, url.to) : "";
+            if (label[0] < label[1]) ranges.push((name === "Image" ? mark("cm-md-image") : link(target)).range(label[0], label[1]));
             if (!active(from, to)) {
               ranges.push(hide.range(marks[0].from, marks[0].to), hide.range(marks[1].from, to));
             }
@@ -147,13 +196,13 @@ function build(view) {
 
           case "Autolink": {
             const marks = children(node).filter((child) => child.name === "LinkMark");
-            if (marks.length === 2 && marks[0].to < marks[1].from) ranges.push(link.range(marks[0].to, marks[1].from));
+            if (marks.length === 2 && marks[0].to < marks[1].from) ranges.push(link(doc.sliceString(marks[0].to, marks[1].from)).range(marks[0].to, marks[1].from));
             if (marks.length === 2 && !active(from, to)) ranges.push(hide.range(marks[0].from, marks[0].to), hide.range(marks[1].from, marks[1].to));
             return false;
           }
 
           case "URL":
-            ranges.push(link.range(from, to));
+            ranges.push(link(doc.sliceString(from, to)).range(from, to));
             return;
 
           case "Blockquote":
@@ -164,22 +213,46 @@ function build(view) {
             if (!active(from, from)) ranges.push(hide.range(from, spaceAfter(to)));
             return;
 
+          case "ListItem": {
+            // Lists inside quotes keep the quote's own indentation.
+            if (inside(node, "Blockquote")) return;
+            const depth = Math.min(listDepth(node), MAX_LIST_DEPTH);
+            const first = doc.lineAt(from).number;
+            const start = Math.max(first, doc.lineAt(visible.from).number);
+            const end = Math.min(doc.lineAt(to).number, doc.lineAt(visible.to).number);
+            for (let number = start; number <= end; number++) listLines.set(doc.line(number).from, { depth, first: number === first });
+            return;
+          }
+
           case "ListMark": {
             const item = node.parent;
-            const isTask = item?.getChild("Task");
-            if (item?.parent?.name === "BulletList" && !active(from, from)) {
-              ranges.push(isTask ? hide.range(from, spaceAfter(to)) : bullet.range(from, to));
-            } else if (item?.parent?.name === "OrderedList") {
-              ranges.push(mark("cm-md-list-number").range(from, to));
+            const zone = spaceAfter(to);
+            if (item?.parent?.name === "OrderedList") {
+              ranges.push(number.range(from, zone));
+              return;
             }
+            if (item?.parent?.name !== "BulletList") return;
+            const marker = item.getChild("Task")?.getChild("TaskMarker");
+            if (marker) {
+              // The checkbox stands in for the bullet, and both reveal together when the cursor reaches them.
+              const end = spaceAfter(marker.to);
+              if (!touching(from, marker.to)) {
+                const checked = /x/i.test(doc.sliceString(marker.from, marker.to));
+                ranges.push((checked ? task.done : task.open).range(from, end));
+              }
+              return;
+            }
+            // Raw and rendered bullets share one width, so text doesn't move when the cursor arrives.
+            ranges.push((active(from, from) ? rawBullet : bullet).range(from, zone));
             return;
           }
 
           case "TaskMarker": {
             const checked = /x/i.test(doc.sliceString(from, to));
-            if (!touching(from, to)) ranges.push((checked ? task.done : task.open).range(from, to));
-            const item = node.parent;
-            if (checked && item && spaceAfter(to) < item.to) ranges.push(mark("cm-md-task-done").range(spaceAfter(to), item.to));
+            const taskNode = node.parent;
+            const inBullets = taskNode?.parent?.parent?.name === "BulletList";
+            if (!inBullets && !touching(from, to)) ranges.push((checked ? task.done : task.open).range(from, to));
+            if (checked && taskNode && spaceAfter(to) < taskNode.to) ranges.push(mark("cm-md-task-done").range(spaceAfter(to), taskNode.to));
             return;
           }
 
@@ -193,6 +266,7 @@ function build(view) {
             addLines(from, to, "cm-md-codeblock");
             const first = doc.lineAt(from);
             const last = doc.lineAt(to);
+            for (let number = first.number; number <= last.number; number++) codeLines.add(doc.line(number).from);
             ranges.push(lineClass("cm-md-codeblock-first").range(first.from));
             ranges.push(lineClass("cm-md-codeblock-last").range(last.from));
             if (name === "FencedCode") {
@@ -213,6 +287,16 @@ function build(view) {
       },
     });
   }
+
+  // List layout: indentation becomes padding by nesting depth, with guides for each parent level.
+  // The first line of an item hangs its marker, so wrapped text lines up with the text above it.
+  for (const [from, { depth, first }] of listLines) {
+    if (codeLines.has(from)) continue;
+    const line = doc.lineAt(from);
+    const indent = /^[ \t]*/.exec(line.text)[0].length;
+    if (indent && indent < line.length) ranges.push(hide.range(line.from, line.from + indent));
+    ranges.push(lineClass(`cm-md-li cm-md-li-${depth}${first ? "" : " cm-md-li-cont"}`).range(line.from));
+  }
   return Decoration.set(ranges, true);
 }
 
@@ -226,23 +310,79 @@ const plugin = ViewPlugin.fromClass(class {
   }
 }, { decorations: (value) => value.decorations });
 
-// Cmd/Ctrl-click opens web links in a new tab. Local relative links stay plain text.
-const openLinks = EditorView.domEventHandlers({
-  mousedown(event, view) {
-    if (!(event.metaKey || event.ctrlKey) || event.button !== 0) return false;
-    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-    if (pos == null) return false;
-    for (let node = syntaxTree(view.state).resolveInner(pos, 1); node; node = node.parent) {
-      if (node.name !== "Link" && node.name !== "Autolink" && node.name !== "URL") continue;
-      const urlNode = node.name === "URL" ? node : node.getChild("URL");
-      const url = urlNode ? view.state.sliceDoc(urlNode.from, urlNode.to) : "";
-      if (!/^https?:\/\//i.test(url)) return false;
-      event.preventDefault();
-      window.open(url, "_blank", "noopener,noreferrer");
-      return true;
-    }
-    return false;
-  },
-});
+// Heading anchors follow GitHub's rules: lowercase, punctuation removed, spaces become hyphens.
+export function slug(text) {
+  return text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
+}
 
-export const livePreview = [plugin, openLinks, EditorView.editorAttributes.of({ class: "cm-live-preview" })];
+function headingText(state, node) {
+  const text = state.sliceDoc(node.from, node.name.startsWith("Setext") ? state.doc.lineAt(node.from).to : node.to);
+  return text.replace(/^#{1,6}[ \t]*/, "").replace(/[ \t]+#+[ \t]*$/, "").replace(/[*_~`]/g, "");
+}
+
+// Scroll a heading into view by its anchor, without moving the cursor. Returns false when no heading matches.
+export function revealAnchor(view, fragment) {
+  let wanted;
+  try { wanted = decodeURIComponent(fragment).toLowerCase(); } catch { wanted = fragment.toLowerCase(); }
+  const seen = new Map();
+  let found = null;
+  syntaxTree(view.state).iterate({
+    enter(ref) {
+      if (found !== null) return false;
+      if (!(ref.name in HEADINGS)) return;
+      // Repeated headings get -1, -2 suffixes, as on GitHub.
+      const base = slug(headingText(view.state, ref.node));
+      const count = seen.get(base) || 0;
+      seen.set(base, count + 1);
+      if ((count ? `${base}-${count}` : base) === wanted) found = ref.from;
+      return false;
+    },
+  });
+  if (found === null) return false;
+  view.dispatch({ effects: EditorView.scrollIntoView(found, { y: "start", yMargin: 24 }) });
+  return true;
+}
+
+function linkAt(state, pos) {
+  for (let node = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent) {
+    if (node.name !== "Link" && node.name !== "Autolink" && node.name !== "URL") continue;
+    const urlNode = node.name === "URL" ? node : node.getChild("URL");
+    return urlNode ? state.sliceDoc(urlNode.from, urlNode.to) : null;
+  }
+  return null;
+}
+
+// Web and mail links open in a new tab, "#heading" links scroll within the file,
+// and anything else is a path the host resolves against the open file.
+function follow(view, url, onOpenLink) {
+  if (!url) return false;
+  if (/^(https?:|mailto:)/i.test(url)) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return true;
+  }
+  if (url.startsWith("#")) return revealAnchor(view, url.slice(1));
+  if (/^[a-z][a-z\d+.-]*:/i.test(url) || url.startsWith("//")) return false;
+  onOpenLink?.(url);
+  return Boolean(onOpenLink);
+}
+
+export function livePreview({ onOpenLink } = {}) {
+  const openLinks = EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (!(event.metaKey || event.ctrlKey) || event.button !== 0) return false;
+      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (pos == null) return false;
+      const url = linkAt(view.state, pos);
+      if (url === null) return false;
+      event.preventDefault();
+      follow(view, url, onOpenLink);
+      return true;
+    },
+  });
+  // Mod-Enter opens the link under the cursor, for keyboard users.
+  const openKey = Prec.high(keymap.of([{
+    key: "Mod-Enter",
+    run: (view) => follow(view, linkAt(view.state, view.state.selection.main.head), onOpenLink),
+  }]));
+  return [plugin, openLinks, openKey, EditorView.editorAttributes.of({ class: "cm-live-preview" })];
+}

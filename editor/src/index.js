@@ -12,12 +12,12 @@ import {
 } from "@codemirror/view";
 import { classHighlighter, tagHighlighter, tags } from "@lezer/highlight";
 import { fenceLanguages, languageForPath } from "./languages.js";
-import { livePreview } from "./live-preview.js";
+import { livePreview, revealAnchor } from "./live-preview.js";
 
 const PROSE = new Set(["md", "markdown", "txt", "rst"]);
 const MARKDOWN = new Set(["md", "markdown"]);
 
-function create({ parent, doc = "", path, preview = true, label, nonce, onChange, onSave }) {
+function create({ parent, doc = "", path, preview = true, label, nonce, onChange, onSave, onOpenLink }) {
   const extension = path.split(".").pop().toLowerCase();
   const isMarkdown = MARKDOWN.has(extension);
   const isProse = PROSE.has(extension);
@@ -26,6 +26,7 @@ function create({ parent, doc = "", path, preview = true, label, nonce, onChange
   const themeSlot = new Compartment();
   const scheme = window.matchMedia("(prefers-color-scheme: dark)");
   let previewOn = isMarkdown && preview;
+  const previewExtension = isMarkdown ? livePreview({ onOpenLink }) : [];
 
   const extensions = [
     // CodeMirror adds its base styles in a <style> element; the page's CSP admits it by nonce.
@@ -59,7 +60,7 @@ function create({ parent, doc = "", path, preview = true, label, nonce, onChange
     extensions.push(lineNumbers(), highlightActiveLineGutter(), foldGutter(), highlightActiveLine());
   }
   if (isMarkdown) {
-    extensions.push(markdown({ base: markdownLanguage, codeLanguages: fenceLanguages }), previewSlot.of(previewOn ? livePreview : []));
+    extensions.push(markdown({ base: markdownLanguage, codeLanguages: fenceLanguages }), previewSlot.of(previewOn ? previewExtension : []));
   } else if (code) {
     extensions.push(code.support);
   }
@@ -84,15 +85,17 @@ function create({ parent, doc = "", path, preview = true, label, nonce, onChange
     load(text) {
       view.setState(makeState(text));
       view.dispatch({ effects: [themeSlot.reconfigure(EditorView.darkTheme.of(scheme.matches)),
-        ...(isMarkdown ? [previewSlot.reconfigure(previewOn ? livePreview : [])] : [])] });
+        ...(isMarkdown ? [previewSlot.reconfigure(previewOn ? previewExtension : [])] : [])] });
       saved = view.state.doc;
     },
     get preview() { return previewOn; },
     setPreview(on) {
       if (!isMarkdown) return;
       previewOn = Boolean(on);
-      view.dispatch({ effects: previewSlot.reconfigure(previewOn ? livePreview : []) });
+      view.dispatch({ effects: previewSlot.reconfigure(previewOn ? previewExtension : []) });
     },
+    // Scroll to the heading a "#fragment" names. Returns false when there's no such heading.
+    revealAnchor: (fragment) => isMarkdown && revealAnchor(view, fragment),
     focus: () => view.focus(),
     destroy: () => { scheme.removeEventListener("change", followScheme); view.destroy(); },
   };

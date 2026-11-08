@@ -13,7 +13,7 @@
   // The files workspace: one sidecar's text files and the file open in the editor.
   const files = {
     sidecarId: null, entries: [], treeKey: "", truncated: false, expanded: new Set(), filter: "", loadingTree: false,
-    open: null, editor: null, conflict: null, saving: false, routeHash: "", treeTimer: null,
+    open: null, editor: null, conflict: null, saving: false, routeHash: "", treeTimer: null, pendingAnchor: null,
     preview: readSetting("psydcar.preview", "on") !== "off",
     // Wide screens remember a collapsed file pane; narrow screens show it as a drawer that starts closed.
     collapsed: readSetting("psydcar.files-collapsed", "false") === "true", drawerOpen: false,
@@ -871,16 +871,47 @@
       files.editor = window.PsydcarEditor.create({
         parent: byId("editor-surface"), doc: file.content, path: file.path, preview: files.preview,
         nonce: document.querySelector('meta[name="psydcar-style-nonce"]')?.content,
-        onChange: renderEditorState, onSave: () => saveFile(),
+        onChange: renderEditorState, onSave: () => saveFile(), onOpenLink: openLink,
       });
       expandTo(file.path);
       renderWorkspace();
-      files.editor.focus();
+      const anchor = files.pendingAnchor?.path === path ? files.pendingAnchor.fragment : "";
+      files.pendingAnchor = null;
+      if (anchor) files.editor.revealAnchor(anchor);
+      // Live preview opens fully rendered. Focusing it would reveal the first line's raw syntax.
+      if (!(files.editor.isMarkdown && files.editor.preview)) files.editor.focus();
     } catch (error) {
       closeFile();
       showEditorMessage("circle-alert", "This file can't be opened", error.message);
       renderTree();
     }
+  }
+
+  // Follow a relative link from the open Markdown file, such as "../ideas.md#next-steps".
+  // A link without an extension also matches a Markdown file of that name.
+  function openLink(url) {
+    if (!files.open) return;
+    const hashAt = url.indexOf("#");
+    const fragment = hashAt >= 0 ? url.slice(hashAt + 1) : "";
+    let target = (hashAt >= 0 ? url.slice(0, hashAt) : url).split("?")[0];
+    try { target = decodeURIComponent(target); } catch { /* Use the link as written. */ }
+    const parts = target.startsWith("/") ? [] : parentOf(files.open.path).split("/").filter(Boolean);
+    for (const part of target.split("/")) {
+      if (!part || part === ".") continue;
+      if (part !== "..") parts.push(part);
+      else if (parts.length) parts.pop();
+      else { message("That link points outside this sidecar's folder.", true); return; }
+    }
+    const path = parts.join("/");
+    const find = (candidate) => files.entries.find((entry) => entry.type === "file" && entry.path === candidate);
+    const entry = find(path) || (!/\.[^/]+$/.test(path) ? find(`${path}.md`) : null);
+    if (!entry) { message(`${path || target} isn't a file in this sidecar that the editor can open.`, true); return; }
+    if (entry.path === files.open.path) {
+      if (fragment) files.editor.revealAnchor(fragment);
+      return;
+    }
+    files.pendingAnchor = fragment ? { path: entry.path, fragment } : null;
+    location.hash = filesHash(files.sidecarId, entry.path);
   }
 
   function closeFile() {

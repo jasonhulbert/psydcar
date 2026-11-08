@@ -167,9 +167,11 @@
           <span class="editor-state" id="editor-state" role="status"></span>
         </div>
         <div class="editor-tools">
+          <button class="btn-icon outline-toggle" id="outline-button" type="button" aria-controls="outline-pane" aria-expanded="false" aria-label="Show outline" title="Show outline" hidden><svg class="icon" aria-hidden="true"><use href="#table-of-contents"/></svg></button>
           <div class="segmented segmented-sm" id="preview-toggle" role="group" aria-label="Markdown view">
-            <button type="button" data-preview="on" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#eye"/></svg>Live preview</button>
-            <button type="button" data-preview="off" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#code"/></svg>Source</button>
+            <button type="button" data-mode="reading" aria-pressed="false" title="Reading: rendered and read-only. Click a link to open it."><svg class="icon" aria-hidden="true"><use href="#book-open"/></svg>Reading</button>
+            <button type="button" data-mode="live" aria-pressed="true" title="Live preview: rendered, with syntax shown where you edit"><svg class="icon" aria-hidden="true"><use href="#eye"/></svg>Live preview</button>
+            <button type="button" data-mode="source" aria-pressed="false" title="Source: the Markdown as written"><svg class="icon" aria-hidden="true"><use href="#code"/></svg>Source</button>
           </div>
           <button class="btn btn-sm btn-primary" id="save-button" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#save"/></svg>Save<kbd class="kbd" id="save-shortcut">⌘S</kbd></button>
         </div>
@@ -182,7 +184,17 @@
           <button class="btn btn-sm" id="conflict-keep-button" type="button">Keep my version</button>
         </div>
       </div>
-      <div class="editor-surface" id="editor-surface" hidden></div>
+      <div class="editor-body" id="editor-body" hidden>
+        <div class="editor-surface" id="editor-surface"></div>
+        <nav class="outline-pane" id="outline-pane" aria-labelledby="outline-title" hidden>
+          <div class="outline-header">
+            <h2 class="outline-title" id="outline-title">Outline</h2>
+            <button class="btn-icon btn-icon-sm" id="outline-close-button" type="button" aria-label="Close outline" title="Close outline"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button>
+          </div>
+          <ol class="outline-list" id="outline-list"></ol>
+          <p class="outline-empty" id="outline-empty" hidden>No headings in this file.</p>
+        </nav>
+      </div>
       <div class="editor-empty" id="editor-empty">
         <div class="blankslate">
           <svg class="icon blankslate-icon" aria-hidden="true"><use id="editor-empty-icon" href="#file-text"/></svg>

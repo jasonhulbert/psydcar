@@ -2,22 +2,30 @@
 // rendered as formatting until the cursor reaches them. Revealing marks on the lines being
 // edited keeps every character reachable without a separate source mode.
 
-import { syntaxTree } from "@codemirror/language";
+import { foldEffect, foldable, foldedRanges, syntaxTree, unfoldEffect } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
-import { blockPreview, imageElement } from "./blocks.js";
+import { blockPreview, iconElement, imageElement, readingMode, showsHtml } from "./blocks.js";
+import { HEADINGS, revealAnchor, revealPosition, slug } from "./outline.js";
+import { CALLOUT, CALLOUT_ICONS, calloutFamily } from "./syntax.js";
 
 const hide = Decoration.replace({});
 const lineClass = (name) => Decoration.line({ class: name });
 const mark = (name) => Decoration.mark({ class: name });
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const openHint = `${isMac ? "⌘" : "Ctrl"}-click to open`;
-const link = (url) => Decoration.mark({ class: "cm-md-link", attributes: { title: url ? `${url}\n${openHint}` : openHint } });
+const link = (url, reading) => {
+  const hint = reading ? "" : openHint;
+  return Decoration.mark({ class: "cm-md-link", attributes: { title: [url, hint].filter(Boolean).join("\n") } });
+};
+const IMAGE_PATH = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i;
+// In Reading mode a plain click follows links. Otherwise it takes Cmd or Ctrl.
+const followsClick = (event) => event.metaKey || event.ctrlKey || Boolean(event.target.closest?.(".cm-reading"));
 const MAX_LIST_DEPTH = 8;
 
 class TaskWidget extends WidgetType {
-  constructor(checked) { super(); this.checked = checked; }
-  eq(other) { return other.checked === this.checked; }
+  constructor(checked, readOnly) { super(); this.checked = checked; this.readOnly = readOnly; }
+  eq(other) { return other.checked === this.checked && other.readOnly === this.readOnly; }
   toDOM(view) {
     const wrap = document.createElement("span");
     wrap.className = "cm-md-list-mark cm-md-task-mark";
@@ -25,6 +33,7 @@ class TaskWidget extends WidgetType {
     box.type = "checkbox";
     box.className = "cm-md-task";
     box.checked = this.checked;
+    box.disabled = this.readOnly;
     box.setAttribute("aria-label", this.checked ? "Mark task as open" : "Mark task as done");
     box.addEventListener("mousedown", (event) => event.preventDefault());
     box.addEventListener("click", (event) => {
@@ -63,24 +72,99 @@ class RuleWidget extends WidgetType {
 }
 
 class ImageWidget extends WidgetType {
-  constructor(url, alt, options) { super(); this.url = url; this.alt = alt; this.options = options; }
-  eq(other) { return other.url === this.url && other.alt === this.alt; }
+  constructor(url, alt, options, { wiki = false, width = 0 } = {}) {
+    super();
+    Object.assign(this, { url, alt, options, wiki, width });
+  }
+  eq(other) { return other.url === this.url && other.alt === this.alt && other.wiki === this.wiki && other.width === this.width; }
   toDOM(view) {
     const wrap = document.createElement("span");
     wrap.className = "cm-md-img-wrap";
-    wrap.append(imageElement(this.url, this.alt, { ...this.options, onLoad: () => view.requestMeasure() }));
+    wrap.append(imageElement(this.url, this.alt, { ...this.options, wiki: this.wiki, width: this.width, onLoad: () => view.requestMeasure() }));
     // Cmd/Ctrl-click opens the image file. A plain click is left to the editor, which places the cursor.
     wrap.addEventListener("mousedown", (event) => {
-      if (event.button !== 0 || !(event.metaKey || event.ctrlKey)) return;
+      if (event.button !== 0 || !followsClick(event)) return;
       event.preventDefault();
-      this.options.follow(view, this.url);
+      this.options.go(view, this.wiki ? { wiki: this.url } : { url: this.url });
     });
     return wrap;
   }
-  ignoreEvent(event) { return event.metaKey || event.ctrlKey; }
+  ignoreEvent(event) { return followsClick(event); }
 }
 
-const task = { open: Decoration.replace({ widget: new TaskWidget(false) }), done: Decoration.replace({ widget: new TaskWidget(true) }) };
+// The chevron beside a top-level heading folds the section under it.
+class FoldWidget extends WidgetType {
+  constructor(folded) { super(); this.folded = folded; }
+  eq(other) { return other.folded === this.folded; }
+  toDOM(view) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.tabIndex = -1;
+    button.className = `cm-md-fold${this.folded ? " is-folded" : ""}`;
+    const label = this.folded ? "Expand section" : "Collapse section";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-expanded", String(!this.folded));
+    button.append(iconElement("chevron-right"));
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      toggleSection(view, view.state.doc.lineAt(view.posAtDOM(button)));
+    });
+    return button;
+  }
+  ignoreEvent() { return true; }
+}
+
+function sectionFold(state, line) {
+  let folded = null;
+  foldedRanges(state).between(line.to, line.to, (from, to) => { if (from === line.to) folded = { from, to }; });
+  return folded;
+}
+
+function toggleSection(view, line) {
+  const folded = sectionFold(view.state, line);
+  if (folded) { view.dispatch({ effects: unfoldEffect.of(folded) }); return; }
+  const range = foldable(view.state, line.from, line.to);
+  if (range) view.dispatch({ effects: foldEffect.of(range) });
+}
+
+class CalloutWidget extends WidgetType {
+  constructor(family, label) { super(); this.family = family; this.label = label; }
+  eq(other) { return other.family === this.family && other.label === this.label; }
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-md-callout-mark";
+    span.append(iconElement(CALLOUT_ICONS[this.family]));
+    if (this.label) span.append(this.label);
+    return span;
+  }
+}
+
+// A footnote reference shows as its number. Following it scrolls to the definition, and following
+// the number on a definition scrolls back to the first reference.
+class FootnoteWidget extends WidgetType {
+  constructor(text, label, definition, options) { super(); Object.assign(this, { text, label, definition, options }); }
+  eq(other) { return other.text === this.text && other.label === this.label && other.definition === this.definition; }
+  toDOM(view) {
+    const item = document.createElement(this.definition ? "span" : "sup");
+    item.className = this.definition ? "cm-md-footnote-label" : "cm-md-footnote-ref";
+    item.textContent = this.definition ? `${this.text}.` : this.text;
+    item.title = this.definition ? `Footnote ${this.label}. Follow to go back to the text.` : `Footnote ${this.label}. Follow to read it.`;
+    item.addEventListener("mousedown", (event) => {
+      if (event.button !== 0 || !followsClick(event)) return;
+      event.preventDefault();
+      this.options.go(view, { footnote: this.label, definition: !this.definition });
+    });
+    return item;
+  }
+  ignoreEvent(event) { return followsClick(event); }
+}
+
+const tasks = [false, true].map((readOnly) => ({
+  open: Decoration.replace({ widget: new TaskWidget(false, readOnly) }),
+  done: Decoration.replace({ widget: new TaskWidget(true, readOnly) }),
+}));
 const bullet = Decoration.replace({ widget: new TextWidget("•", "cm-md-list-mark cm-md-bullet") });
 const rawBullet = mark("cm-md-list-mark cm-md-bullet-raw");
 const number = mark("cm-md-list-mark cm-md-list-number");
@@ -95,7 +179,42 @@ function decodeEntity(text) {
   return value === text ? null : value;
 }
 
-const HEADINGS = { ATXHeading1: 1, ATXHeading2: 2, ATXHeading3: 3, ATXHeading4: 4, ATXHeading5: 5, ATXHeading6: 6, SetextHeading1: 1, SetextHeading2: 2 };
+// Footnotes are numbered in the order they're first referenced. The numbers are cached per syntax tree.
+const footnoteCache = new WeakMap();
+const SKIP_FOR_FOOTNOTES = new Set(["FencedCode", "CodeBlock", "FrontMatter", "HTMLBlock", "CommentBlock", "Table", "FootnoteDefinition"]);
+function footnoteNumbers(state) {
+  const tree = syntaxTree(state);
+  let numbers = footnoteCache.get(tree);
+  if (numbers) return numbers;
+  numbers = new Map();
+  tree.iterate({
+    enter(ref) {
+      if (SKIP_FOR_FOOTNOTES.has(ref.name)) return false;
+      if (ref.name !== "FootnoteReference") return undefined;
+      const label = state.sliceDoc(ref.from + 2, ref.to - 1);
+      if (!numbers.has(label)) numbers.set(label, numbers.size + 1);
+      return false;
+    },
+  });
+  footnoteCache.set(tree, numbers);
+  return numbers;
+}
+
+function findFootnote(state, label, definition) {
+  const wanted = definition ? "FootnoteDefinition" : "FootnoteReference";
+  let found = null;
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (found !== null) return false;
+      if (ref.name === "FencedCode" || ref.name === "CodeBlock") return false;
+      if (ref.name !== wanted) return undefined;
+      const node = ref.node.getChild("FootnoteLabel");
+      if (node && state.sliceDoc(node.from, node.to) === label) found = ref.from;
+      return false;
+    },
+  });
+  return found;
+}
 
 const inside = (node, name) => {
   for (let parent = node.parent; parent; parent = parent.parent) if (parent.name === name) return true;
@@ -112,7 +231,11 @@ function build(view, options) {
   const doc = state.doc;
   const ranges = [];
   const lines = new Set();
-  const focused = view.hasFocus;
+  const reading = state.facet(readingMode);
+  // Reading mode renders everything. Otherwise the construct under the cursor shows its syntax.
+  const focused = view.hasFocus && !reading;
+  // Callout markers such as "[!note]", which the parser may also read as a link.
+  const calloutMarks = new Set();
   // Lines inside list items, keyed by line start. Nested items are visited after their parents, so they win.
   const listLines = new Map();
   const codeLines = new Set();
@@ -140,6 +263,7 @@ function build(view, options) {
     return list;
   };
   const spaceAfter = (pos) => (doc.sliceString(pos, pos + 1) === " " ? pos + 1 : pos);
+  const slice = (node) => doc.sliceString(node.from, node.to);
 
   for (const visible of view.visibleRanges) {
     syntaxTree(state).iterate({
@@ -154,6 +278,12 @@ function build(view, options) {
           const setext = name.startsWith("Setext");
           const textEnd = setext ? doc.lineAt(from).to : to;
           addLines(from, textEnd, `cm-md-heading cm-md-h${level}`);
+          if (node.parent?.name === "Document") {
+            const line = doc.lineAt(from);
+            if (foldable(state, line.from, line.to)) {
+              ranges.push(Decoration.widget({ widget: new FoldWidget(Boolean(sectionFold(state, line))), side: -1 }).range(line.from));
+            }
+          }
           if (active(from, to)) return;
           for (const child of children(node)) {
             if (child.name !== "HeaderMark") continue;
@@ -200,12 +330,13 @@ function build(view, options) {
           }
 
           case "Link": {
+            if (calloutMarks.has(from)) return false;
             const marks = children(node).filter((child) => child.name === "LinkMark");
             if (marks.length < 2) return;
             const label = [marks[0].to, marks[1].from];
             const url = node.getChild("URL");
             const target = url ? doc.sliceString(url.from, url.to) : "";
-            if (label[0] < label[1]) ranges.push(link(target).range(label[0], label[1]));
+            if (label[0] < label[1]) ranges.push(link(target, reading).range(label[0], label[1]));
             if (!active(from, to)) {
               ranges.push(hide.range(marks[0].from, marks[0].to), hide.range(marks[1].from, to));
             }
@@ -233,20 +364,86 @@ function build(view, options) {
             addLines(from, to, "cm-md-frontmatter");
             return false;
 
+          case "WikiLink":
+          case "WikiEmbed": {
+            const target = node.getChild("WikiLinkTarget");
+            if (!target) return false;
+            const address = slice(target).trim();
+            const label = node.getChild("WikiLinkLabel");
+            if (name === "WikiEmbed" && IMAGE_PATH.test(address)) {
+              // "![[photo.png|300]]" sets the width. Any other label is the alt text.
+              const caption = label ? slice(label).trim() : "";
+              const width = /^\d+(x\d+)?$/.test(caption) ? parseInt(caption, 10) : 0;
+              const widget = new ImageWidget(address, width ? "" : caption, options, { wiki: true, width });
+              if (active(from, to)) {
+                ranges.push(mark("cm-md-image").range(target.from, target.to));
+                ranges.push(Decoration.widget({ widget, side: 1 }).range(to));
+              } else {
+                ranges.push(Decoration.replace({ widget }).range(from, to));
+              }
+              return false;
+            }
+            const shown = label || target;
+            ranges.push(link(address, reading).range(shown.from, shown.to));
+            if (!active(from, to)) ranges.push(hide.range(from, shown.from), hide.range(shown.to, to));
+            return false;
+          }
+
+          case "FootnoteReference": {
+            const label = doc.sliceString(from + 2, to - 1);
+            if (active(from, to)) {
+              ranges.push(mark("cm-md-footnote-ref-raw").range(from, to));
+            } else {
+              const number = footnoteNumbers(state).get(label) ?? label;
+              ranges.push(Decoration.replace({ widget: new FootnoteWidget(String(number), label, false, options) }).range(from, to));
+            }
+            return false;
+          }
+
+          case "FootnoteDefinition": {
+            addLines(from, to, "cm-md-footnote");
+            const label = node.getChild("FootnoteLabel");
+            if (!label || active(from, to)) return;
+            const text = slice(label);
+            const number = footnoteNumbers(state).get(text) ?? text;
+            ranges.push(Decoration.replace({ widget: new FootnoteWidget(String(number), text, true, options) }).range(from, spaceAfter(label.to + 2)));
+            return;
+          }
+
           case "Autolink": {
             const marks = children(node).filter((child) => child.name === "LinkMark");
-            if (marks.length === 2 && marks[0].to < marks[1].from) ranges.push(link(doc.sliceString(marks[0].to, marks[1].from)).range(marks[0].to, marks[1].from));
+            if (marks.length === 2 && marks[0].to < marks[1].from) ranges.push(link(doc.sliceString(marks[0].to, marks[1].from), reading).range(marks[0].to, marks[1].from));
             if (marks.length === 2 && !active(from, to)) ranges.push(hide.range(marks[0].from, marks[0].to), hide.range(marks[1].from, marks[1].to));
             return false;
           }
 
           case "URL":
-            ranges.push(link(doc.sliceString(from, to)).range(from, to));
+            ranges.push(link(doc.sliceString(from, to), reading).range(from, to));
             return;
 
-          case "Blockquote":
-            addLines(from, to, "cm-md-quote");
+          case "Blockquote": {
+            const first = doc.lineAt(from);
+            const markerStart = from + /^>[ \t]?/.exec(doc.sliceString(from, first.to))[0].length;
+            const callout = CALLOUT.exec(doc.sliceString(markerStart, first.to));
+            if (!callout) {
+              addLines(from, to, "cm-md-quote");
+              return;
+            }
+            // "> [!warning] Title": the marker becomes an icon, followed by the title or the type's name.
+            const family = calloutFamily(callout[1]);
+            addLines(from, to, `cm-md-callout cm-md-callout-${family}`);
+            addLines(from, from, "cm-md-callout-title");
+            addLines(to, to, "cm-md-callout-end");
+            calloutMarks.add(markerStart);
+            const markerEnd = markerStart + callout[0].length;
+            if (active(first.from, first.to)) {
+              ranges.push(mark("cm-md-callout-raw").range(markerStart, markerStart + callout[0].trimEnd().length));
+            } else {
+              const name = markerEnd < first.to ? "" : callout[1][0].toUpperCase() + callout[1].slice(1).toLowerCase();
+              ranges.push(Decoration.replace({ widget: new CalloutWidget(family, name) }).range(markerStart, markerEnd));
+            }
             return;
+          }
 
           case "QuoteMark":
             if (!active(from, from)) ranges.push(hide.range(from, spaceAfter(to)));
@@ -277,7 +474,7 @@ function build(view, options) {
               const end = spaceAfter(marker.to);
               if (!touching(from, marker.to)) {
                 const checked = /x/i.test(doc.sliceString(marker.from, marker.to));
-                ranges.push((checked ? task.done : task.open).range(from, end));
+                ranges.push((checked ? tasks[+reading].done : tasks[+reading].open).range(from, end));
               }
               return;
             }
@@ -290,7 +487,7 @@ function build(view, options) {
             const checked = /x/i.test(doc.sliceString(from, to));
             const taskNode = node.parent;
             const inBullets = taskNode?.parent?.parent?.name === "BulletList";
-            if (!inBullets && !touching(from, to)) ranges.push((checked ? task.done : task.open).range(from, to));
+            if (!inBullets && !touching(from, to)) ranges.push((checked ? tasks[+reading].done : tasks[+reading].open).range(from, to));
             if (checked && taskNode && spaceAfter(to) < taskNode.to) ranges.push(mark("cm-md-task-done").range(spaceAfter(to), taskNode.to));
             return;
           }
@@ -320,6 +517,12 @@ function build(view, options) {
             addLines(from, to, "cm-md-table");
             return;
 
+          // HTML that renders nothing, such as a closing tag on its own line, stays as quiet source.
+          case "HTMLBlock":
+          case "CommentBlock":
+            if (name === "CommentBlock" || !showsHtml(doc.sliceString(doc.lineAt(from).from, doc.lineAt(to).to))) addLines(from, to, "cm-md-html-raw");
+            return false;
+
           default:
             return;
         }
@@ -343,50 +546,32 @@ const inlinePreview = (options) => ViewPlugin.fromClass(class {
   constructor(view) { this.decorations = build(view, options); }
   update(update) {
     if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged
-      || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+      || syntaxTree(update.startState) !== syntaxTree(update.state) || foldedRanges(update.startState) !== foldedRanges(update.state)
+      || update.startState.facet(readingMode) !== update.state.facet(readingMode)) {
       this.decorations = build(update.view, options);
     }
   }
 }, { decorations: (value) => value.decorations });
 
-// Heading anchors follow GitHub's rules: lowercase, punctuation removed, spaces become hyphens.
-export function slug(text) {
-  return text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
-}
-
-function headingText(state, node) {
-  const text = state.sliceDoc(node.from, node.name.startsWith("Setext") ? state.doc.lineAt(node.from).to : node.to);
-  return text.replace(/^#{1,6}[ \t]*/, "").replace(/[ \t]+#+[ \t]*$/, "").replace(/[*_~`]/g, "");
-}
-
-// Scroll a heading into view by its anchor, without moving the cursor. Returns false when no heading matches.
-export function revealAnchor(view, fragment) {
-  let wanted;
-  try { wanted = decodeURIComponent(fragment).toLowerCase(); } catch { wanted = fragment.toLowerCase(); }
-  const seen = new Map();
-  let found = null;
-  syntaxTree(view.state).iterate({
-    enter(ref) {
-      if (found !== null) return false;
-      if (!(ref.name in HEADINGS)) return;
-      // Repeated headings get -1, -2 suffixes, as on GitHub.
-      const base = slug(headingText(view.state, ref.node));
-      const count = seen.get(base) || 0;
-      seen.set(base, count + 1);
-      if ((count ? `${base}-${count}` : base) === wanted) found = ref.from;
-      return false;
-    },
-  });
-  if (found === null) return false;
-  view.dispatch({ effects: EditorView.scrollIntoView(found, { y: "start", yMargin: 24 }) });
-  return true;
-}
-
-function linkAt(state, pos) {
+// What a position links to: { url }, { wiki } for "[[target]]", or { footnote, definition }.
+function targetAt(state, pos) {
   for (let node = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent) {
-    if (node.name !== "Link" && node.name !== "Image" && node.name !== "Autolink" && node.name !== "URL") continue;
-    const urlNode = node.name === "URL" ? node : node.getChild("URL");
-    return urlNode ? state.sliceDoc(urlNode.from, urlNode.to) : null;
+    switch (node.name) {
+      case "Link": case "Image": case "Autolink": case "URL": {
+        const urlNode = node.name === "URL" ? node : node.getChild("URL");
+        return urlNode ? { url: state.sliceDoc(urlNode.from, urlNode.to) } : null;
+      }
+      case "WikiLink": case "WikiEmbed": {
+        const target = node.getChild("WikiLinkTarget");
+        return target ? { wiki: state.sliceDoc(target.from, target.to).trim() } : null;
+      }
+      case "FootnoteReference": return { footnote: state.sliceDoc(node.from + 2, node.to - 1), definition: true };
+      case "FootnoteDefinition": {
+        const label = node.getChild("FootnoteLabel");
+        return label && pos <= label.to + 2 ? { footnote: state.sliceDoc(label.from, label.to), definition: false } : null;
+      }
+      default:
+    }
   }
   return null;
 }
@@ -405,26 +590,55 @@ function follow(view, url, onOpenLink) {
   return Boolean(onOpenLink);
 }
 
-// onOpenLink(url) opens a relative link, resolveImage(url) returns a loadable address for a local
-// image or null, and onTag(name) handles a click on a tag in the properties block.
+// "[[Note#Heading]]" opens Note at that heading. "[[#Heading]]" scrolls within the file. The host
+// finds the note by name, so the editor passes the heading as an anchor.
+function followWiki(view, target, onOpenLink) {
+  const hash = target.indexOf("#");
+  const file = (hash >= 0 ? target.slice(0, hash) : target).trim();
+  const heading = hash >= 0 ? target.slice(hash + 1).split("#").pop().trim() : "";
+  const fragment = heading && !heading.startsWith("^") ? slug(heading) : "";
+  if (!file) return fragment ? revealAnchor(view, fragment) : false;
+  onOpenLink?.(fragment ? `${file}#${fragment}` : file, { wiki: true });
+  return Boolean(onOpenLink);
+}
+
+function go(view, target, onOpenLink) {
+  if (!target) return false;
+  if (target.url !== undefined) return follow(view, target.url, onOpenLink);
+  if (target.wiki !== undefined) return followWiki(view, target.wiki, onOpenLink);
+  const pos = findFootnote(view.state, target.footnote, target.definition);
+  if (pos === null) return false;
+  revealPosition(view, pos, "center");
+  return true;
+}
+
+// onOpenLink(url, { wiki }) opens a relative link or a wiki link, resolveImage(url, { wiki }) returns
+// a loadable address for a local image or null, and onTag(name) handles a click on a tag in the properties block.
 export function livePreview({ onOpenLink, resolveImage, onTag } = {}) {
-  const options = { resolveImage, onTag, follow: (view, url) => follow(view, url, onOpenLink) };
+  const options = {
+    resolveImage, onTag,
+    follow: (view, url) => follow(view, url, onOpenLink),
+    go: (view, target) => go(view, target, onOpenLink),
+  };
   const openLinks = EditorView.domEventHandlers({
     mousedown(event, view) {
-      if (!(event.metaKey || event.ctrlKey) || event.button !== 0) return false;
-      const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (event.button !== 0 || !followsClick(event)) return false;
+      // A plain click in Reading mode follows only the link text itself.
+      const linkText = event.metaKey || event.ctrlKey ? null : event.target.closest?.(".cm-md-link");
+      if (!(event.metaKey || event.ctrlKey) && !linkText) return false;
+      const pos = linkText ? view.posAtDOM(linkText) : view.posAtCoords({ x: event.clientX, y: event.clientY });
       if (pos == null) return false;
-      const url = linkAt(view.state, pos);
-      if (url === null) return false;
+      const target = targetAt(view.state, pos);
+      if (!target) return false;
       event.preventDefault();
-      follow(view, url, onOpenLink);
+      go(view, target, onOpenLink);
       return true;
     },
   });
   // Mod-Enter opens the link under the cursor, for keyboard users.
   const openKey = Prec.high(keymap.of([{
     key: "Mod-Enter",
-    run: (view) => follow(view, linkAt(view.state, view.state.selection.main.head), onOpenLink),
+    run: (view) => go(view, targetAt(view.state, view.state.selection.main.head), onOpenLink),
   }]));
   return [inlinePreview(options), blockPreview(options), openLinks, openKey, EditorView.editorAttributes.of({ class: "cm-live-preview" })];
 }

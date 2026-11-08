@@ -14,7 +14,10 @@
   const files = {
     sidecarId: null, entries: [], treeKey: "", truncated: false, expanded: new Set(), filter: "", loadingTree: false,
     open: null, editor: null, conflict: null, saving: false, routeHash: "", treeTimer: null, pendingAnchor: null,
-    preview: readSetting("psydcar.preview", "on") !== "off",
+    // Markdown view: "live", "reading", or "source". Stored as on, reading, or off, which earlier versions read.
+    mode: { off: "source", reading: "reading" }[readSetting("psydcar.preview", "on")] || "live",
+    // The outline of the open Markdown file. Wide screens remember whether it's open; narrow screens show it as a drawer.
+    outline: null, outlineKey: "", outlineOpen: readSetting("psydcar.outline", "closed") === "open", outlineDrawer: false,
     // Wide screens remember a collapsed file pane; narrow screens show it as a drawer that starts closed.
     collapsed: readSetting("psydcar.files-collapsed", "false") === "true", drawerOpen: false,
   };
@@ -903,9 +906,9 @@
       closeFile();
       files.open = file;
       files.editor = window.PsydcarEditor.create({
-        parent: byId("editor-surface"), doc: file.content, path: file.path, preview: files.preview,
+        parent: byId("editor-surface"), doc: file.content, path: file.path, mode: files.mode,
         nonce: document.querySelector('meta[name="psydcar-style-nonce"]')?.content,
-        onChange: renderEditorState, onSave: () => saveFile(), onOpenLink: openLink, resolveImage, onTag: filterByTag,
+        onChange: renderEditorState, onSave: () => saveFile(), onOpenLink: openLink, resolveImage, onTag: filterByTag, onOutline: renderOutline,
       });
       expandTo(file.path);
       renderWorkspace();
@@ -913,7 +916,7 @@
       files.pendingAnchor = null;
       if (anchor) files.editor.revealAnchor(anchor);
       // Live preview opens fully rendered. Focusing it would reveal the first line's raw syntax.
-      if (!(files.editor.isMarkdown && files.editor.preview)) files.editor.focus();
+      if (files.editor.mode === "source") files.editor.focus();
     } catch (error) {
       closeFile();
       showEditorMessage("circle-alert", "This file can't be opened", error.message);
@@ -940,23 +943,61 @@
 
   const imageUrl = (path, version = "") => `${filesApi("image")}?path=${encodeURIComponent(path)}${version ? `&v=${version}` : ""}`;
 
+  // Wiki links name a file instead of giving a path, as in "[[Project plan]]". A path from the sidecar's
+  // root wins, then a file of that name in the open file's folder, then the match with the shortest path.
+  // Names match without regard to case, and ".md" is optional.
+  function findWikiTarget(name) {
+    const fileEntries = files.entries.filter((entry) => entry.type === "file");
+    let wanted = name.trim().replace(/^\/+/, "");
+    if (/^\.\.?\//.test(wanted)) wanted = resolveLink(wanted)?.path || "";
+    wanted = wanted.toLowerCase();
+    if (!wanted) return null;
+    const candidates = [wanted, `${wanted}.md`];
+    const folder = parentOf(files.open.path).toLowerCase();
+    const byPath = (path) => fileEntries.find((entry) => entry.path.toLowerCase() === path);
+    for (const path of [...candidates, ...candidates.map((candidate) => (folder ? `${folder}/${candidate}` : candidate))]) {
+      const entry = byPath(path);
+      if (entry) return entry;
+    }
+    const matches = fileEntries.filter((entry) => candidates.some((candidate) => entry.path.toLowerCase().endsWith(`/${candidate}`)));
+    matches.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path));
+    return matches[0] || null;
+  }
+
   // Markdown images load through the dashboard's image route. Web addresses stay blocked.
-  function resolveImage(url) {
-    if (!files.open || /^[a-z][a-z\d+.-]*:|^\/\//i.test(url)) return null;
+  function resolveImage(url, { wiki = false } = {}) {
+    if (!files.open) return null;
+    if (wiki) {
+      const entry = findWikiTarget(url);
+      return entry?.image ? imageUrl(entry.path) : null;
+    }
+    if (/^[a-z][a-z\d+.-]*:|^\/\//i.test(url)) return null;
     const resolved = resolveLink(url);
     return resolved && resolved.path ? imageUrl(resolved.path) : null;
   }
 
   // Follow a relative link from the open Markdown file, such as "../ideas.md#next-steps".
-  // A link without an extension also matches a Markdown file of that name.
-  function openLink(url) {
+  // A link without an extension also matches a Markdown file of that name. A wiki link such as
+  // "Project plan#goals" is found by name. Its fragment is already a heading anchor.
+  function openLink(url, { wiki = false } = {}) {
     if (!files.open) return;
-    const resolved = resolveLink(url);
-    if (!resolved) { message("That link points outside this sidecar's folder.", true); return; }
-    const { path, target, fragment } = resolved;
-    const find = (candidate) => files.entries.find((entry) => entry.type === "file" && entry.path === candidate);
-    const entry = find(path) || (!/\.[^/]+$/.test(path) ? find(`${path}.md`) : null);
-    if (!entry) { message(`${path || target} isn't a file in this sidecar that the editor can open.`, true); return; }
+    let entry;
+    let fragment;
+    if (wiki) {
+      const hashAt = url.indexOf("#");
+      const name = hashAt >= 0 ? url.slice(0, hashAt) : url;
+      fragment = hashAt >= 0 ? url.slice(hashAt + 1) : "";
+      entry = findWikiTarget(name);
+      if (!entry) { message(`There's no file named ${name} in this sidecar.`, true); return; }
+    } else {
+      const resolved = resolveLink(url);
+      if (!resolved) { message("That link points outside this sidecar's folder.", true); return; }
+      const { path, target } = resolved;
+      fragment = resolved.fragment;
+      const find = (candidate) => files.entries.find((item) => item.type === "file" && item.path === candidate);
+      entry = find(path) || (!/\.[^/]+$/.test(path) ? find(`${path}.md`) : null);
+      if (!entry) { message(`${path || target} isn't a file in this sidecar that the editor can open.`, true); return; }
+    }
     if (entry.path === files.open.path) {
       if (fragment) files.editor?.revealAnchor(fragment);
       return;
@@ -1000,6 +1041,7 @@
   function closeFile() {
     if (files.editor) files.editor.destroy();
     files.editor = null;
+    renderOutline(null);
     files.open = null;
     files.conflict = null;
     byId("editor-surface").replaceChildren();
@@ -1050,12 +1092,71 @@
     if (focusToggle) byId("files-toggle-button").focus();
   }
 
+  // Outline: the open Markdown file's headings. Clicking one scrolls to it. The heading at the top of
+  // the editor is marked as current.
+  function renderOutline(outline) {
+    files.outline = outline;
+    const list = byId("outline-list");
+    const headings = outline?.headings || [];
+    const key = headings.map((heading) => `${heading.level}:${heading.text}`).join("\n");
+    if (key !== files.outlineKey) {
+      files.outlineKey = key;
+      list.replaceChildren();
+      const top = Math.min(...headings.map((heading) => heading.level));
+      headings.forEach((heading, index) => {
+        const item = add(list, "li", `outline-item outline-depth-${heading.level - top + 1}`);
+        const button = add(item, "button", "outline-link", heading.text || "Untitled heading");
+        button.type = "button";
+        button.dataset.index = String(index);
+        button.title = heading.text;
+      });
+    }
+    byId("outline-empty").hidden = headings.length > 0;
+    let current = null;
+    for (const button of list.querySelectorAll(".outline-link")) {
+      const isCurrent = Number(button.dataset.index) === outline?.current;
+      button.classList.toggle("is-current", isCurrent);
+      if (isCurrent) { button.setAttribute("aria-current", "location"); current = button; } else button.removeAttribute("aria-current");
+    }
+    if (current && !byId("outline-pane").hidden) {
+      const pane = list.getBoundingClientRect();
+      const row = current.getBoundingClientRect();
+      if (row.top < pane.top || row.bottom > pane.bottom) current.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function renderOutlinePane() {
+    const markdown = Boolean(files.editor?.isMarkdown);
+    if (!markdown || !narrow.matches) files.outlineDrawer = false;
+    const shown = markdown && (narrow.matches ? files.outlineDrawer : files.outlineOpen);
+    byId("outline-pane").hidden = !shown;
+    byId("editor-body").classList.toggle("has-outline", shown);
+    const button = byId("outline-button");
+    button.hidden = !markdown;
+    const label = shown ? "Hide outline" : "Show outline";
+    button.setAttribute("aria-expanded", String(shown));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
+  function toggleOutline(show) {
+    if (narrow.matches) {
+      files.outlineDrawer = show;
+    } else {
+      files.outlineOpen = show;
+      writeSetting("psydcar.outline", show ? "open" : "closed");
+    }
+    renderOutlinePane();
+    if (show) renderOutline(files.outline);
+    if (show && narrow.matches) (byId("outline-list").querySelector(".is-current") || byId("outline-list").querySelector("button") || byId("outline-close-button")).focus();
+  }
+
   function renderWorkspace() {
     const open = files.open;
     byId("files-view").classList.toggle("has-file", Boolean(open));
     renderSidebar();
     byId("editor-toolbar").hidden = !open;
-    byId("editor-surface").hidden = !open;
+    byId("editor-body").hidden = !open;
     byId("editor-empty").hidden = Boolean(open);
     byId("editor-status").hidden = !open;
     renderTree();
@@ -1080,8 +1181,9 @@
       const image = byId("editor-surface").querySelector(".image-viewer-img");
       if (image) image.alt = baseName(open.path);
     } else {
-      for (const item of toggle.querySelectorAll("button")) item.setAttribute("aria-pressed", String((item.dataset.preview === "on") === files.editor.preview));
+      for (const item of toggle.querySelectorAll("button")) item.setAttribute("aria-pressed", String(item.dataset.mode === files.editor.mode));
     }
+    renderOutlinePane();
     renderEditorState();
     renderConflict();
   }
@@ -1467,14 +1569,28 @@
   byId("conflict-reload-button").addEventListener("click", reloadFromDisk);
   byId("conflict-keep-button").addEventListener("click", () => saveFile({ overwrite: true }));
   byId("preview-toggle").addEventListener("click", (event) => {
-    const target = event.target.closest("button[data-preview]");
+    const target = event.target.closest("button[data-mode]");
     if (!target || !files.editor) return;
-    files.preview = target.dataset.preview === "on";
-    writeSetting("psydcar.preview", files.preview ? "on" : "off");
-    files.editor.setPreview(files.preview);
+    files.mode = target.dataset.mode;
+    writeSetting("psydcar.preview", { live: "on", reading: "reading", source: "off" }[files.mode]);
+    files.editor.setMode(files.mode);
     renderWorkspace();
-    files.editor.focus();
+    // Focusing a rendered view would reveal the syntax at the cursor, so only Source takes focus.
+    if (files.mode === "source") files.editor.focus();
   });
+  byId("outline-button").addEventListener("click", () => toggleOutline(byId("outline-pane").hidden));
+  byId("outline-close-button").addEventListener("click", () => { toggleOutline(false); byId("outline-button").focus(); });
+  byId("outline-list").addEventListener("click", (event) => {
+    const button = event.target.closest(".outline-link");
+    const heading = button && files.outline?.headings[Number(button.dataset.index)];
+    if (!heading || !files.editor) return;
+    files.editor.revealPosition(heading.from);
+    if (narrow.matches) { toggleOutline(false); files.editor.focus(); }
+  });
+  byId("outline-pane").addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && narrow.matches) { event.preventDefault(); toggleOutline(false); byId("outline-button").focus(); }
+  });
+  narrow.addEventListener("change", renderOutlinePane);
   byId("header-sidecars").addEventListener("click", (event) => {
     if (!parseRoute()) return;
     event.preventDefault();

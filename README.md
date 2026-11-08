@@ -91,11 +91,14 @@ To update automatically, leave `psydcar watch` or `psydcar dashboard` running. B
 
 Select a sidecar in the dashboard and choose **Browse and edit files**. The file list shows the sidecar's indexed text and code files, plus its images. Open a file to edit it.
 
-- **Markdown** opens in live preview. Headings, emphasis, links, lists, task checkboxes, quotes, and code blocks render as you type. The raw Markdown appears on the line you're editing. **Source** shows the plain text. The file on disk is always plain Markdown, and Psydcar never reformats it.
+- **Markdown** opens in live preview. Headings, emphasis, links, lists, task checkboxes, quotes, and code blocks render as you type. The raw Markdown appears on the line you're editing. **Reading** renders the whole file and makes it read-only. **Source** shows the plain text. The file on disk is always plain Markdown, and Psydcar never reformats it.
+- **Outline and folding.** The outline button in the editor toolbar lists the file's headings. Click one to scroll to it. In live preview and Reading mode, click the arrow beside a top-level heading to fold its section.
 - **Properties and tags.** YAML front matter at the top of a Markdown file shows as a list of properties. Click a property to edit the YAML. Click a tag, or type `#tag` in the file filter, to list the files with that tag.
 - **Tables** render as tables. Wide tables can use the space beside the text, and scroll sideways on small screens. Click a cell to edit the table's Markdown.
-- **Images** in Markdown render when they're files in the sidecar's folder, such as `![Chart](images/chart.png)`. Images on the web aren't loaded.
-- **Links.** ⌘-click (Ctrl-click on Linux) a link or image to open it, or press ⌘Enter with the cursor on it. Web links open in a new tab. Relative links, such as `../ideas.md#next-steps`, open that file in the editor and scroll to the heading. A link without an extension matches a Markdown file of that name.
+- **Images** in Markdown render when they're files in the sidecar's folder, such as `![Chart](images/chart.png)` or `![[chart.png]]`. Images on the web aren't loaded.
+- **Callouts, footnotes, and HTML.** Callouts such as `> [!tip] Title` render as colored boxes. Footnote references such as `[^1]` show as numbers that link to the footnote. HTML blocks render with scripts, styles, and forms removed.
+- **Links.** ⌘-click (Ctrl-click on Linux) a link or image to open it, or press ⌘Enter with the cursor on it. In Reading mode, a plain click opens it. Web links open in a new tab. Relative links, such as `../ideas.md#next-steps`, open that file in the editor and scroll to the heading. A link without an extension matches a Markdown file of that name.
+- **Wiki links** such as `[[Project plan]]`, `[[Project plan|the plan]]`, or `[[Project plan#Goals]]` find the file by name. A path from the sidecar's folder wins, then a file in the same folder, then the match with the shortest path. Names match without regard to case, and `.md` is optional.
 - **Code and other text files** open in a code editor with syntax highlighting, line numbers, and search.
 - **Image files** open in a viewer that shows their size and dimensions. PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, and ICO files up to 20 MiB are supported. Images aren't indexed.
 - **Saving.** Press **Save** or ⌘S (Ctrl+S on Linux). The file is written in place, and Psydcar re-indexes it right away. Line endings and a UTF-8 byte order mark are kept as they were.

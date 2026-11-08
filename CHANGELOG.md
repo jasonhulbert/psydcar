@@ -12,6 +12,13 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 - Markdown tables render as tables in live preview. Wide tables can use the space beside the text column on large screens and scroll sideways on small ones. Click a cell to edit the table's source.
 - Images in Markdown render in live preview. Local images, such as `![Chart](images/chart.png)`, load from the sidecar's folder. Images on the web aren't loaded and show their alt text. ⌘-click an image to open its file.
 - The file list shows image files. Open one to view it with its size and dimensions, and rename, move, or delete it like any other file. Images aren't indexed.
+- Reading mode joins Live preview and Source in the Markdown view switcher. It renders the whole file, keeps it read-only, and follows links on a plain click.
+- An outline lists the open Markdown file's headings. Click a heading to scroll to it. The section you're reading is highlighted. Open it with the outline button in the editor toolbar.
+- Sections under top-level headings fold in live preview and Reading mode. Click the arrow beside a heading to fold or unfold it.
+- Callouts such as `> [!note]` and `> [!warning] Title` render as colored boxes with an icon. GitHub's five alert types and Obsidian's callout types are recognized.
+- Footnotes render in live preview. A reference such as `[^1]` shows as a number. Following it scrolls to the footnote, and following the footnote's number scrolls back.
+- Wiki links such as `[[Project plan]]`, `[[Project plan|the plan]]`, and `[[Project plan#Goals]]` open the file of that name anywhere in the sidecar. `![[photo.png]]` embeds an image, and `![[photo.png|300]]` sets its width.
+- HTML blocks render in live preview through an allowlist of safe elements. Scripts, styles, forms, and embedded content are removed.
 
 ### Changed
 

@@ -3,7 +3,7 @@
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { bracketMatching, codeFolding, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
 import {
@@ -12,22 +12,35 @@ import {
 } from "@codemirror/view";
 import { classHighlighter, tagHighlighter, tags } from "@lezer/highlight";
 import { fenceLanguages, languageForPath } from "./languages.js";
+import { readingMode } from "./blocks.js";
 import { frontMatter } from "./front-matter.js";
-import { livePreview, revealAnchor } from "./live-preview.js";
+import { livePreview } from "./live-preview.js";
+import { outline, revealAnchor, revealPosition } from "./outline.js";
+import { footnotes, wikiLinks } from "./syntax.js";
 
 const PROSE = new Set(["md", "markdown", "txt", "rst"]);
 const MARKDOWN = new Set(["md", "markdown"]);
+const MODES = new Set(["live", "reading", "source"]);
 
-function create({ parent, doc = "", path, preview = true, label, nonce, onChange, onSave, onOpenLink, resolveImage, onTag }) {
+// mode is "live", "reading", or "source", and applies to Markdown files. onOutline({ headings, current })
+// reports a Markdown file's headings and the one at the top of the editor whenever either changes.
+function create({ parent, doc = "", path, mode = "live", label, nonce, onChange, onSave, onOpenLink, resolveImage, onTag, onOutline }) {
   const extension = path.split(".").pop().toLowerCase();
   const isMarkdown = MARKDOWN.has(extension);
   const isProse = PROSE.has(extension);
   const code = isMarkdown ? null : languageForPath(path);
-  const previewSlot = new Compartment();
+  const modeSlot = new Compartment();
   const themeSlot = new Compartment();
   const scheme = window.matchMedia("(prefers-color-scheme: dark)");
-  let previewOn = isMarkdown && preview;
+  let currentMode = MODES.has(mode) ? mode : "live";
   const previewExtension = isMarkdown ? livePreview({ onOpenLink, resolveImage, onTag }) : [];
+  // Reading mode keeps the live preview rendered and makes the document read-only. The content
+  // stays focusable, so the keyboard can scroll it and open links with Mod-Enter.
+  const readingExtension = [
+    previewExtension, readingMode.of(true), EditorState.readOnly.of(true), EditorView.editable.of(false),
+    EditorView.contentAttributes.of({ tabindex: "0" }), EditorView.editorAttributes.of({ class: "cm-reading" }),
+  ];
+  const modeExtension = () => (!isMarkdown || currentMode === "source" ? [] : currentMode === "reading" ? readingExtension : previewExtension);
 
   const extensions = [
     // CodeMirror adds its base styles in a <style> element; the page's CSP admits it by nonce.
@@ -61,7 +74,10 @@ function create({ parent, doc = "", path, preview = true, label, nonce, onChange
     extensions.push(lineNumbers(), highlightActiveLineGutter(), foldGutter(), highlightActiveLine());
   }
   if (isMarkdown) {
-    extensions.push(markdown({ base: markdownLanguage, codeLanguages: fenceLanguages, extensions: [frontMatter] }), previewSlot.of(previewOn ? previewExtension : []));
+    extensions.push(
+      markdown({ base: markdownLanguage, codeLanguages: fenceLanguages, extensions: [frontMatter, footnotes, wikiLinks] }),
+      codeFolding(), onOutline ? outline(onOutline) : [], modeSlot.of(modeExtension()),
+    );
   } else if (code) {
     extensions.push(code.support);
   }
@@ -86,17 +102,19 @@ function create({ parent, doc = "", path, preview = true, label, nonce, onChange
     load(text) {
       view.setState(makeState(text));
       view.dispatch({ effects: [themeSlot.reconfigure(EditorView.darkTheme.of(scheme.matches)),
-        ...(isMarkdown ? [previewSlot.reconfigure(previewOn ? previewExtension : [])] : [])] });
+        ...(isMarkdown ? [modeSlot.reconfigure(modeExtension())] : [])] });
       saved = view.state.doc;
     },
-    get preview() { return previewOn; },
-    setPreview(on) {
-      if (!isMarkdown) return;
-      previewOn = Boolean(on);
-      view.dispatch({ effects: previewSlot.reconfigure(previewOn ? previewExtension : []) });
+    get mode() { return isMarkdown ? currentMode : "source"; },
+    setMode(next) {
+      if (!isMarkdown || !MODES.has(next)) return;
+      currentMode = next;
+      view.dispatch({ effects: modeSlot.reconfigure(modeExtension()) });
     },
     // Scroll to the heading a "#fragment" names. Returns false when there's no such heading.
     revealAnchor: (fragment) => isMarkdown && revealAnchor(view, fragment),
+    // Scroll to a position from the outline, opening a folded section if it hides it.
+    revealPosition: (pos) => revealPosition(view, Math.min(pos, view.state.doc.length)),
     focus: () => view.focus(),
     destroy: () => { scheme.removeEventListener("change", followScheme); view.destroy(); },
   };

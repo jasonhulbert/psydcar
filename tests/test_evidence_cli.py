@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -147,6 +148,28 @@ class EvidenceCliTests(unittest.TestCase):
         self.assertIn("Status: Index error", self.cli("sidecar", "show", "A").stdout)
         good_hits = json.loads(self.cli("search", "--sidecar", "A", "comet").stdout)
         self.assertTrue(good_hits)
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_evidence_from_a_repository_reports_its_commit_and_uncommitted_changes(self) -> None:
+        (self.source_b / "draft.md").write_text("A red comet draft.\n")
+        git = ("git", "-c", "user.name=Owner", "-c", "user.email=owner@example.com", "-c", "commit.gpgsign=false")
+        subprocess.run([*git, "init", "-q"], cwd=self.source_b, check=True)
+        subprocess.run([*git, "add", "."], cwd=self.source_b, check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "Notes"], cwd=self.source_b, check=True)
+        commit = subprocess.run([*git, "rev-parse", "HEAD"], cwd=self.source_b, check=True,
+                                capture_output=True, text=True).stdout.strip()
+        (self.source_b / "draft.md").write_text("A red comet draft, revised.\n")
+        self.assertEqual(self.cli("sidecar", "update", "B").returncode, 0)
+
+        hits = json.loads(self.cli("search", "--sidecar", "B", "comet").stdout)
+        self.assertEqual(
+            {hit["source"]["relative_path"]: hit["git"] for hit in hits},
+            {"guide.md": {"commit": commit, "uncommitted": False, "tracked": True},
+             "draft.md": {"commit": commit, "uncommitted": True, "tracked": True}},
+        )
+        draft = next(hit for hit in hits if hit["source"]["relative_path"] == "draft.md")
+        retrieved = json.loads(self.cli("retrieve", "--sidecar", "B", draft["evidence_id"]).stdout)
+        self.assertEqual(retrieved["git"], draft["git"])
 
 
 if __name__ == "__main__":

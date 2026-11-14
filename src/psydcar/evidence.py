@@ -16,6 +16,7 @@ from .embeddings import (
     EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore,
     normalize_vector,
 )
+from .git_state import observe
 from .index_tables import open_search, remove_outdated
 from .pdf_text import PdfTextError, extract_pdf_page, extract_pdf_pages
 from .registry import Sidecar, SidecarStore, StoreError
@@ -691,12 +692,25 @@ class EvidenceStore:
             if self.last_search_warning:
                 evidence["search"]["notice"] = self.last_search_warning
             results.append(evidence)
-        return results
+        return self._with_git(results, selected_by_id)
 
     def retrieve(self, references: list[str], evidence_id: str, *, exact_ids: bool = False) -> dict[str, Any]:
         selected = self._select(references, exact_ids)
         selected_by_id = {item.id: item for item in selected}
-        placeholders = ", ".join("?" for _ in selected)
+        return self._with_git([self._read_source(selected_by_id, evidence_id)], selected_by_id)[0]
+
+    @staticmethod
+    def _with_git(results: list[dict[str, Any]], selected_by_id: dict[str, IndexedSidecar]) -> list[dict[str, Any]]:
+        """Add git provenance to evidence from folders in a repository. Other evidence is unchanged."""
+        files = [(selected_by_id[item["sidecar"]["id"]].source_path, item["source"]["relative_path"]) for item in results]
+        observed = observe(files)
+        for item, file in zip(results, files):
+            if file in observed:
+                item["git"] = dict(observed[file])
+        return results
+
+    def _read_source(self, selected_by_id: dict[str, IndexedSidecar], evidence_id: str) -> dict[str, Any]:
+        placeholders = ", ".join("?" for _ in selected_by_id)
         try:
             with open_search(self.sidecars) as connection:
                 row = connection.execute(

@@ -8,7 +8,7 @@ Point Psydcar at a folder and it builds a local search index called a **sidecar*
 
 - **Local by default.** Indexing and search run on your machine. Nothing leaves it unless you turn on an embeddings provider.
 - **You choose what each agent sees.** Each MCP connection is limited to the sidecars you select.
-- **Answers come with sources.** Every result names its file and location, and says whether the file has changed since it was indexed.
+- **Answers come with sources.** Every result names its file and location, and says whether the file has changed since it was indexed. In a git repository, it also names the commit and says whether the file has uncommitted changes.
 - **Stays current.** A built-in watcher re-indexes files as they change.
 - **CLI and browser dashboard.** Manage sidecars whichever way you prefer.
 
@@ -161,6 +161,11 @@ Text and code are split into passages of up to 40 lines that overlap by 5 lines.
 | `context`, `context_origin` | The matching text. Search returns the indexed copy (`index`). `retrieve` reads the file again (`source`). |
 | `freshness` | `current` means the file hasn't changed since indexing. `changed`, `missing`, and `unreadable` mean the indexed text may be out of date. |
 | `index_freshness`, `processing.state` | Whether the sidecar has an update pending or a problem that needs attention. |
+| `git.commit` | The commit the repository is at when you search or retrieve. It's `null` in a repository with no commits yet. |
+| `git.uncommitted` | `true` when the file differs from that commit, staged or not, or isn't tracked by git. |
+| `git.tracked` | `false` when git doesn't track the file, for example a new or ignored file. |
+
+The `git` fields appear only when the sidecar's folder is in a git repository, including a folder inside a larger repository. Psydcar reads them with your installed `git` and never changes the repository. In other folders, or without git installed, results don't include `git`. When `freshness` is `current` and `git.uncommitted` is `false`, the evidence matches the file as committed at `git.commit`.
 
 If a file has changed or disappeared, `retrieve` returns `context: null` instead of outdated text. After an update, changed passages get new evidence IDs.
 

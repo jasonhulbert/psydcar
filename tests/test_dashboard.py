@@ -22,7 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from git_sandbox import git, use_sandbox
 from psydcar.dashboard import DashboardServer
-from psydcar.proposal_files import Workspace
+from psydcar.proposal_files import ProposalFiles
 from psydcar.proposals import Proposals
 from psydcar.registry import SidecarStore
 
@@ -264,7 +264,7 @@ class DashboardTests(unittest.TestCase):
         (self.source / "notes.md").write_text("quiet orchard\n")
         store = self.server.store
         sidecar = store.create("Research", self.source)
-        base = Workspace(store).files(sidecar.id).read("notes.md")
+        base = ProposalFiles(store).files(sidecar.id).read("notes.md")
         proposals = Proposals(store)
         approve = proposals.submit(sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n",
                                    "Add the meadow.", "Review assistant")
@@ -292,7 +292,7 @@ class DashboardTests(unittest.TestCase):
         git(self.source, "commit", "-q", "-m", "Start")
         store = self.server.store
         sidecar = store.create("Research", self.source)
-        base = Workspace(store).files(sidecar.id).read("notes.md")
+        base = ProposalFiles(store).files(sidecar.id).read("notes.md")
         proposal = Proposals(store).submit(sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n",
                                            "Add the meadow.", "Review assistant")
         base_path = f"/api/sidecars/{sidecar.id}"

@@ -70,7 +70,7 @@ curl -fsS "$dashboard_url/assets/dashboard.js" > "$work/dashboard.js"
 curl -fsS "$dashboard_url/assets/dashboard.css" > "$work/dashboard.css"
 grep -q '<title>Sidecars' "$work/dashboard.html"
 grep -q 'sidecar' "$work/dashboard.js"
-grep -q 'app-header' "$work/dashboard.css"
+grep -q 'page-head' "$work/dashboard.css"
 
 python scripts/check-release-mcp.py save \
     "$dashboard_url" "$HOME" "$store" "$sidecar_id" "$work/connection.json"

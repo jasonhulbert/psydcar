@@ -8,7 +8,7 @@ from pydantic import Field
 
 from .access import AgentAccess
 from .evidence import EvidenceStore
-from .proposal_files import MAX_PATH_LENGTH, Workspace
+from .proposal_files import MAX_PATH_LENGTH, ProposalFiles
 from .proposals import MAX_SUMMARY_LENGTH, Proposals
 from .registry import SidecarStore, StoreError
 from .source_scope import MAX_FILE_BYTES
@@ -38,7 +38,7 @@ def create_server(store: SidecarStore, access: AgentAccess):
     if access.grants:
         from mcp.server.mcpserver.exceptions import ToolError
 
-        workspace = Workspace(store)
+        sources = ProposalFiles(store)
         proposals = Proposals(store)
 
         def require_grant(sidecar_id: str) -> None:
@@ -54,7 +54,7 @@ def create_server(store: SidecarStore, access: AgentAccess):
             """Read the full text and version of an existing file in a sidecar granted for proposals."""
             require_grant(sidecar_id)
             try:
-                file = workspace.files(sidecar_id).read(path)
+                file = sources.files(sidecar_id).read(path)
             except StoreError as exc:
                 raise ToolError(str(exc)) from exc
             return {key: file[key] for key in ("path", "content", "version")}
@@ -66,7 +66,7 @@ def create_server(store: SidecarStore, access: AgentAccess):
             content: Annotated[str, Field(max_length=MAX_FILE_BYTES)],
             summary: Annotated[str, Field(min_length=1, max_length=MAX_SUMMARY_LENGTH)],
         ) -> dict[str, Any]:
-            """Queue replacement text and a one-line reason for human review. Use the version from read_editable_file. This tool does not write the file."""
+            """Queue complete replacement text and a one-line reason for the owner to review. Use the version from read_editable_file. This tool does not write the file. If the owner approves, Psydcar writes it, and the reason may become the subject of a git commit."""
             require_grant(sidecar_id)
             try:
                 return proposals.submit(sidecar_id, path, version, content, summary, access.agent_name)

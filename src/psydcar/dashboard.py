@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from . import access
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
-from .evidence import EvidenceStore
+from .evidence import EvidenceStore, UpdateSuperseded
 from .freshness import SidecarWatcher, WatchEvent
 from .git_record import GitRecord
 from .proposal_files import FileConflict
@@ -178,6 +178,15 @@ class DashboardServer(ThreadingHTTPServer):
             with self._pending_lock:
                 self._errors.pop(event.sidecar_id, None)
 
+    def follow_approval(self, sidecar_id: str) -> None:
+        """Let the watcher see the approved write now, so the sidecar doesn't read as changed until its next pass."""
+        try:
+            event = self.watcher.catch_up(sidecar_id)
+        except StoreError:
+            return
+        if event is not None:
+            self._watch_event(event)
+
     def schedule_update(self, sidecar_id: str) -> bool:
         sidecar = self.store.get(sidecar_id)
         if sidecar.id != sidecar_id:
@@ -194,6 +203,8 @@ class DashboardServer(ThreadingHTTPServer):
                     self.evidence.update(sidecar_id)
                 with self._pending_lock:
                     self._errors.pop(sidecar_id, None)
+            except UpdateSuperseded:
+                pass  # A newer update from another process indexes everything this one would have.
             except StoreError as exc:
                 with self._pending_lock:
                     self._errors[sidecar_id] = str(exc)
@@ -416,6 +427,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except FileConflict as exc:
                     self._json(HTTPStatus.CONFLICT, {"error": str(exc), "stale": True})
                     return
+                if "index_notice" in result:
+                    self.server.follow_approval(match.group(1))
                 self._json(HTTPStatus.OK, result)
                 return
             match = _SIDECAR_ACTION.fullmatch(path)

@@ -2,7 +2,6 @@
   "use strict";
 
   const SVG = "http://www.w3.org/2000/svg";
-  const ICONS = "";
   const byId = (id) => document.getElementById(id);
   const stacked = window.matchMedia("(max-width: 1120px)");
   const model = {
@@ -33,7 +32,7 @@
     svg.setAttribute("class", `icon ${className}`.trim());
     svg.setAttribute("aria-hidden", "true");
     const use = document.createElementNS(SVG, "use");
-    use.setAttribute("href", `${ICONS}#${name}`);
+    use.setAttribute("href", `#${name}`);
     svg.append(use);
     return svg;
   }
@@ -50,7 +49,7 @@
   }
 
   function setIcon(svg, name) {
-    svg.querySelector("use").setAttribute("href", `${ICONS}#${name}`);
+    svg.querySelector("use").setAttribute("href", `#${name}`);
   }
 
   async function copyText(value, trigger, confirmation) {
@@ -122,7 +121,7 @@
   function message(text, error = false) {
     const toast = byId("toast");
     byId("toast-text").textContent = text;
-    byId("toast-icon").setAttribute("href", `${ICONS}#${error ? "circle-alert" : "circle-check"}`);
+    byId("toast-icon").setAttribute("href", `#${error ? "circle-alert" : "circle-check"}`);
     toast.classList.toggle("is-error", error);
     hideToast();
     void toast.offsetWidth;
@@ -330,9 +329,7 @@
   }
 
   function issuesFor(sidecar) {
-    const issues = Array.isArray(sidecar.update.issues)
-      ? sidecar.update.issues.map((issue) => typeof issue === "string" ? issue : [issue.source || issue.path, issue.error || issue.message].filter(Boolean).join(": "))
-      : [];
+    const issues = [...(sidecar.update.issues || [])];
     if (sidecar.error && !issues.includes(sidecar.error)) issues.unshift(sidecar.error);
     return issues;
   }
@@ -898,7 +895,7 @@
     byline.title = date(detail.created_at);
     add(head, "p", "review-reason", detail.summary);
     const record = model.proposals.sidecarId === review.sidecarId ? model.proposals.gitRecord : null;
-    if (detail.status === "pending" && record?.enabled && record.available) {
+    if (detail.status === "pending" && !detail.stale && record?.enabled && record.available) {
       const note = add(head, "p", "review-commit");
       note.append(icon("git-commit-horizontal"));
       add(note, "span", "", `Approving also records a commit on ${branchText(record)}.`);

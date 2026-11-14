@@ -78,6 +78,14 @@ def _source_path(sidecar: Sidecar, relative_path: str) -> Path:
     return root / relative
 
 
+def _processing_state(status: str) -> str:
+    if status in {"update_pending", "embedding_pending"}:
+        return "pending"
+    if status in {"index_error", "embedding_error", "source_attention"}:
+        return "attention"
+    return "current" if status == "indexed" else "not_indexed"
+
+
 def _chunks(text: str) -> list[tuple[int, int, str]]:
     lines = text.splitlines()
     if not lines:
@@ -428,7 +436,7 @@ class EvidenceStore:
         return {
             "sidecar_id": sidecar.id,
             "status": sidecar.status,
-            "state": self._processing_state(sidecar.status),
+            "state": _processing_state(sidecar.status),
             "started_at": row["started_at"] if row else None,
             "completed_at": row["completed_at"] if row else None,
             "last_success_at": row["last_success_at"] if row else None,
@@ -463,14 +471,6 @@ class EvidenceStore:
             "files": row["files"], "text_files": row["text_files"], "pdfs": row["pdfs"],
             "passages": passages, "latest_indexed_at": row["latest_indexed_at"],
         }
-
-    @staticmethod
-    def _processing_state(status: str) -> str:
-        if status in {"update_pending", "embedding_pending"}:
-            return "pending"
-        if status in {"index_error", "embedding_error", "source_attention"}:
-            return "attention"
-        return "current" if status == "indexed" else "not_indexed"
 
     def _build_embeddings(self, sidecar_id: str, provider: ProviderConfig, run_id: str) -> tuple[int, str | None]:
         try:
@@ -758,7 +758,7 @@ class EvidenceStore:
 
     @staticmethod
     def _evidence(row: sqlite3.Row, sidecar: IndexedSidecar, context: str | None, freshness: str, origin: str | None) -> dict[str, Any]:
-        processing_state = EvidenceStore._processing_state(sidecar.status)
+        processing_state = _processing_state(sidecar.status)
         return {
             "evidence_id": row["id"],
             "sidecar": {"id": sidecar.id, "name": sidecar.name},

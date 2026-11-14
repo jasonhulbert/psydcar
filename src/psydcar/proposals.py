@@ -9,12 +9,11 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from difflib import SequenceMatcher
 from typing import Any, Literal
 
 from .evidence import EvidenceStore, UpdateSuperseded
 from .git_record import CommitPlan, GitRecord
-from .proposal_files import FileConflict, Workspace, text_bytes
+from .proposal_files import FileConflict, LineMatcher, ProposalFiles, text_bytes
 from .registry import SidecarStore, StoreError
 from .storage import Tables, connect
 
@@ -55,47 +54,6 @@ def _now() -> str:
 
 
 _DIFF_CONTEXT = 3
-_DIFF_MATCH_LIMIT = 2500
-
-
-class _TrimmedMatcher(SequenceMatcher):
-    """Match only the lines between the identical start and end of two texts.
-
-    An edit in a long file then costs little, and a rewrite too long to match line by
-    line is shown as one replaced region.
-    """
-
-    def __init__(self, old: list[str], new: list[str]):
-        limit = min(len(old), len(new))
-        prefix = 0
-        while prefix < limit and old[prefix] == new[prefix]:
-            prefix += 1
-        suffix = 0
-        while suffix < limit - prefix and old[-1 - suffix] == new[-1 - suffix]:
-            suffix += 1
-        self.edges = (prefix, len(old) - suffix, len(new) - suffix)
-        super().__init__(None, old[prefix:len(old) - suffix], new[prefix:len(new) - suffix])
-        self.full = (old, new)
-
-    def get_opcodes(self) -> list[tuple[str, int, int, int, int]]:
-        prefix, old_end, new_end = self.edges
-        old, new = self.full
-        if len(self.a) + len(self.b) > _DIFF_MATCH_LIMIT:
-            middle = [("replace", 0, len(self.a), 0, len(self.b))]
-        else:
-            middle = super().get_opcodes()
-        codes = [("equal", 0, prefix, 0, prefix)]
-        codes += [(tag, i1 + prefix, i2 + prefix, j1 + prefix, j2 + prefix) for tag, i1, i2, j1, j2 in middle]
-        codes.append(("equal", old_end, len(old), new_end, len(new)))
-        merged: list[tuple[str, int, int, int, int]] = []
-        for code in codes:
-            if code[1] == code[2] and code[3] == code[4]:
-                continue
-            if merged and code[0] == "equal" == merged[-1][0]:
-                merged[-1] = ("equal", merged[-1][1], code[2], merged[-1][3], code[4])
-            else:
-                merged.append(code)
-        return merged
 
 
 def _unified_range(start: int, stop: int) -> str:
@@ -110,7 +68,7 @@ def text_diff(before: str, proposed: str, path: str) -> str:
     old = before.splitlines(keepends=True)
     new = proposed.splitlines(keepends=True)
     lines = [f"--- a/{path}\n", f"+++ b/{path}\n"]
-    for group in _TrimmedMatcher(old, new).get_grouped_opcodes(_DIFF_CONTEXT):
+    for group in LineMatcher(old, new).get_grouped_opcodes(_DIFF_CONTEXT):
         lines.append(f"@@ -{_unified_range(group[0][1], group[-1][2])} +{_unified_range(group[0][3], group[-1][4])} @@\n")
         for tag, i1, i2, j1, j2 in group:
             if tag == "equal":
@@ -138,7 +96,7 @@ def _summary(row: sqlite3.Row) -> dict[str, Any]:
 class Proposals:
     def __init__(self, store: SidecarStore):
         self.store = store
-        self.workspace = Workspace(store)
+        self.sources = ProposalFiles(store)
         self.record = GitRecord(store)
 
     @contextmanager
@@ -158,11 +116,11 @@ class Proposals:
         if "\0" in content:
             raise StoreError("A proposed edit must be UTF-8 text.")
         content = content.replace("\r\n", "\n")
-        with self.workspace.edit(sidecar_id) as source:
+        with self.sources.locked(sidecar_id) as source:
             base = source.read(path)
             if base["version"] != version:
                 raise FileConflict("The file changed. Read its current text before proposing an edit.", base["version"])
-            result_version = hashlib.sha256(text_bytes(content, base["newline"], base["bom"])).hexdigest()
+            result_version = hashlib.sha256(text_bytes(content, base["newline"], base["bom"], base["data"])).hexdigest()
             if content == base["content"] or result_version == version:
                 raise StoreError("The proposal must change the file.")
             with self._state() as state:
@@ -234,7 +192,7 @@ class Proposals:
 
     def _current_version(self, row: sqlite3.Row) -> str | None:
         try:
-            return self.workspace.files(row["sidecar_id"]).read(row["path"])["version"]
+            return self.sources.files(row["sidecar_id"]).read(row["path"])["version"]
         except (StoreError, OSError):
             return None
 
@@ -307,8 +265,7 @@ class Proposals:
             if row["status"] == "pending":
                 if decision == "approved":
                     plan = self._plan_commit(row)
-                    self._write(row)
-                    approval = (plan, text_bytes(row["proposed_text"], row["newline"], bool(row["bom"])))
+                    approval = (plan, self._write(row))
                 row = self._finish(row, decision)
         result = _summary(row)
         if approval is not None:
@@ -323,21 +280,22 @@ class Proposals:
         except StoreError as exc:
             return CommitPlan(reason=f"{str(exc).rstrip('.')}.")
         try:
-            files = self.workspace.files(row["sidecar_id"])
+            files = self.sources.files(row["sidecar_id"])
             base = files.read_bytes(row["path"])
         except (StoreError, OSError) as exc:
             # The write that follows refuses the same unreadable file, so this reason is rarely shown.
             return CommitPlan(reason=f"Psydcar couldn't read {row['path']} to check it against git: {str(exc).rstrip('.')}.")
         return self.record.prepare(files.sidecar.source_path, row["path"], base)
 
-    def _write(self, row: sqlite3.Row) -> None:
+    def _write(self, row: sqlite3.Row) -> bytes:
+        """Write the approved text and return the file's new bytes."""
         current = self._current_version(row)
         if current != row["base_version"]:
             raise _conflict(row, current)
         with self._state() as state:
             state.execute("UPDATE file_proposals SET status = 'applying' WHERE id = ?", (row["id"],))
         try:
-            self.workspace.files(row["sidecar_id"]).write(
+            written = self.sources.files(row["sidecar_id"]).write(
                 row["path"], row["proposed_text"], row["base_version"], row["newline"], bool(row["bom"]),
             )
         except Exception as exc:
@@ -352,6 +310,7 @@ class Proposals:
                     "The file was not changed, and the proposal is still pending."
                 ) from exc
             raise
+        return written["data"]
 
     def _after_approval(self, row: sqlite3.Row, plan: CommitPlan | None = None, approved: bytes = b"") -> dict[str, Any]:
         """Run the steps that follow an approved write. The approval stands whatever they report.

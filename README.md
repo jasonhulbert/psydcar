@@ -2,15 +2,16 @@
 
 [![PyPI](https://img.shields.io/pypi/v/psydcar)](https://pypi.org/project/psydcar/) [![Python](https://img.shields.io/pypi/pyversions/psydcar)](https://pypi.org/project/psydcar/) [![Tests](https://github.com/jasonhulbert/psydcar/actions/workflows/test.yml/badge.svg)](https://github.com/jasonhulbert/psydcar/actions/workflows/test.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Psydcar lets your coding agents search your local notes, code, and PDFs.
+Psydcar gives your coding agents verifiable evidence from folders you own, and lets you control what each agent sees and changes.
 
-Point Psydcar at a folder and it builds a local search index called a **sidecar**. Coding agents such as Claude Code, Cursor, or any other [MCP](https://modelcontextprotocol.io) client can then search that sidecar and quote the exact file, line, or PDF page that answers their question. Your working files stay in their source folders. Agents get read access by default, and you can let selected connections propose edits for review.
+Point Psydcar at a folder of notes, code, or PDFs and it builds a local search index called a **sidecar**. Coding agents such as Claude Code, Cursor, or any other [MCP](https://modelcontextprotocol.io) client can then search that sidecar and quote the exact file, line, or PDF page that answers their question. Your files stay in their folders. Agents get read access by default. You can let selected connections propose edits, and nothing changes until you approve them.
 
 - **Local by default.** Indexing and search run on your machine. Nothing leaves it unless you turn on an embeddings provider.
 - **You choose what each agent sees.** Each MCP connection is limited to the sidecars you select.
 - **Answers come with sources.** Every result names its file and location, and says whether the file has changed since it was indexed. In a git repository, it also names the commit and says whether the file has uncommitted changes.
+- **You approve every change.** An agent you allow to propose edits queues them for your review. In a git repository, each approval can become a commit that names the agent and its reason.
 - **Stays current.** A built-in watcher re-indexes files as they change.
-- **CLI and browser dashboard.** Manage sidecars whichever way you prefer.
+- **CLI and browser dashboard.** Manage sidecars and review proposed edits whichever way you prefer.
 
 ## Install
 
@@ -42,13 +43,13 @@ Search prints JSON results. Each result includes the matching text, the file pat
 psydcar retrieve --sidecar "My notes" EVIDENCE_ID
 ```
 
-Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, set up embeddings, and prepare agent connections. Press Ctrl-C to stop it.
+Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, set up embeddings, prepare agent connections, and review proposed edits. Press Ctrl-C to stop it.
 
 ## Connect a coding agent
 
 Agents reach Psydcar through an MCP server that runs on your machine over stdio. Each server serves only the sidecars you pass to it. Find a sidecar's ID with `psydcar sidecar list`.
 
-The easiest way to get a ready-made configuration is the dashboard. Open **MCP connections** → **Prepare connection**, select sidecars, and choose **Copy JSON**.
+The easiest way to get a ready-made configuration is the dashboard. Open **MCP connections** → **Prepare connection**, select sidecars, choose **Generate configuration**, and then choose **Copy**.
 
 **Claude Code:**
 
@@ -197,7 +198,7 @@ Psydcar keeps its index in one per-user folder:
 
 To use a different folder, set `PSYDCAR_HOME` to an absolute path. If you do, set the same value for the CLI, the dashboard, and your MCP client.
 
-The data folder contains `state.sqlite3` for sidecar registrations, provider settings, proposed edits, and git record settings and `search.sqlite3` for indexed documents and embeddings. The first run upgrades an existing `psydcar.sqlite3` database automatically and retains it as a pre-upgrade backup. Existing sidecar IDs and indexed evidence IDs carry over. Stop running Psydcar processes before upgrading so all interfaces switch to the new stores together.
+The data folder holds two databases. `state.sqlite3` holds what you own: sidecar registrations, provider settings, proposed edits, and git record settings. `search.sqlite3` holds indexed passages and embeddings, and indexing again rebuilds it if you delete it. Versions 0.3.0 and earlier kept everything in `psydcar.sqlite3`. The first run of a newer version upgrades it automatically and keeps it as a backup. Sidecar IDs and evidence IDs carry over. Stop running Psydcar processes before upgrading so that every interface switches to the new databases together.
 
 ## Upgrade and uninstall
 

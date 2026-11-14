@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -39,15 +41,83 @@ def _version(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def text_bytes(content: str, newline: str, bom: bool) -> bytes:
-    if newline == "\r\n":
-        content = content.replace("\r\n", "\n").replace("\n", "\r\n")
+_DIFF_MATCH_LIMIT = 2500
+_LINE_BREAK = re.compile(r"(\r\n|\n)")
+
+
+class LineMatcher(SequenceMatcher):
+    """Match only the lines between the identical start and end of two texts.
+
+    An edit in a long file then costs little, and a rewrite too long to match line by
+    line is treated as one replaced region.
+    """
+
+    def __init__(self, old: list[str], new: list[str]):
+        limit = min(len(old), len(new))
+        prefix = 0
+        while prefix < limit and old[prefix] == new[prefix]:
+            prefix += 1
+        suffix = 0
+        while suffix < limit - prefix and old[-1 - suffix] == new[-1 - suffix]:
+            suffix += 1
+        self.edges = (prefix, len(old) - suffix, len(new) - suffix)
+        super().__init__(None, old[prefix:len(old) - suffix], new[prefix:len(new) - suffix])
+        self.full = (old, new)
+
+    def get_opcodes(self) -> list[tuple[str, int, int, int, int]]:
+        prefix, old_end, new_end = self.edges
+        old, new = self.full
+        if len(self.a) + len(self.b) > _DIFF_MATCH_LIMIT:
+            middle = [("replace", 0, len(self.a), 0, len(self.b))]
+        else:
+            middle = super().get_opcodes()
+        codes = [("equal", 0, prefix, 0, prefix)]
+        codes += [(tag, i1 + prefix, i2 + prefix, j1 + prefix, j2 + prefix) for tag, i1, i2, j1, j2 in middle]
+        codes.append(("equal", old_end, len(old), new_end, len(new)))
+        merged: list[tuple[str, int, int, int, int]] = []
+        for code in codes:
+            if code[1] == code[2] and code[3] == code[4]:
+                continue
+            if merged and code[0] == "equal" == merged[-1][0]:
+                merged[-1] = ("equal", merged[-1][1], code[2], merged[-1][3], code[4])
+            else:
+                merged.append(code)
+        return merged
+
+
+def _keep_mixed_endings(content: str, base: str, newline: str) -> str:
+    """Give each line the proposal keeps from a file with mixed line endings its original ending."""
+    parts = _LINE_BREAK.split(base)
+    old_lines, old_endings = parts[0::2], [*parts[1::2], ""]
+    new_lines = content.split("\n")
+    endings = [newline] * (len(new_lines) - 1) + [""]
+    for tag, i1, i2, j1, j2 in LineMatcher(old_lines, new_lines).get_opcodes():
+        # A line edited in place keeps its ending too.
+        if tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1):
+            for offset in range(j2 - j1):
+                if j1 + offset < len(new_lines) - 1:
+                    endings[j1 + offset] = old_endings[i1 + offset] or newline
+    return "".join(line + ending for line, ending in zip(new_lines, endings))
+
+
+def text_bytes(content: str, newline: str, bom: bool, base: bytes = b"") -> bytes:
+    """Encode proposed text in the file's form: its byte order mark and its line endings.
+
+    ``base`` is the file as the agent read it. When it mixes LF and CRLF, each line the
+    proposal keeps keeps its own ending, and new lines end with ``newline``.
+    """
+    content = content.replace("\r\n", "\n")
+    base_text = base.decode("utf-8-sig", "replace")
+    if "\r\n" in base_text and "\n" in base_text.replace("\r\n", ""):
+        content = _keep_mixed_endings(content, base_text, newline)
+    elif newline == "\r\n":
+        content = content.replace("\n", "\r\n")
     try:
         data = (b"\xef\xbb\xbf" if bom else b"") + content.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise StoreError("Send valid UTF-8 text.") from exc
     if len(data) > MAX_FILE_BYTES:
-        raise StoreError("The file would be larger than the 2 MiB text limit. Psydcar didn't save it.")
+        raise StoreError("The proposed text would make the file larger than the 2 MiB text limit.")
     return data
 
 
@@ -113,7 +183,7 @@ class SourceFiles:
         newline = "\r\n" if "\r\n" in text else "\n"
         return {
             "path": clean, "content": text.replace("\r\n", "\n"), "version": _version(data),
-            "newline": newline, "bom": bom,
+            "newline": newline, "bom": bom, "data": data,
         }
 
     def read_bytes(self, relative_path: Any) -> bytes:
@@ -139,9 +209,9 @@ class SourceFiles:
             current = stream.read(MAX_FILE_BYTES + 1)
         if _version(current) != version:
             raise FileConflict(f"{clean} changed on disk after it was read.", _version(current))
-        data = text_bytes(content, newline, bom)
+        data = text_bytes(content, newline, bom, current)
         self._replace(path, data)
-        return {"path": clean, "version": _version(data)}
+        return {"path": clean, "version": _version(data), "data": data}
 
     @staticmethod
     def _replace(path: Path, data: bytes) -> None:
@@ -160,7 +230,7 @@ class SourceFiles:
             raise
 
 
-class Workspace:
+class ProposalFiles:
     """Open a sidecar's source files, and serialize proposal writes across local processes."""
 
     def __init__(self, store: SidecarStore):
@@ -170,6 +240,6 @@ class Workspace:
         return SourceFiles(self.store.get(sidecar_id, exact_id=True))
 
     @contextmanager
-    def edit(self, sidecar_id: str) -> Iterator[SourceFiles]:
+    def locked(self, sidecar_id: str) -> Iterator[SourceFiles]:
         with self.store.file_writes():
             yield self.files(sidecar_id)

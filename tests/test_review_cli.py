@@ -11,7 +11,7 @@ from pathlib import Path
 
 from git_sandbox import git, use_sandbox
 from psydcar.evidence import EvidenceStore
-from psydcar.proposal_files import Workspace
+from psydcar.proposal_files import ProposalFiles
 from psydcar.proposals import Proposals
 from psydcar.registry import SidecarStore
 
@@ -34,7 +34,7 @@ class ReviewCliTests(unittest.TestCase):
         EvidenceStore(self.store).update(self.sidecar.id)
 
     def propose(self, content: str, summary: str) -> str:
-        base = Workspace(self.store).files(self.sidecar.id).read("heron.md")
+        base = ProposalFiles(self.store).files(self.sidecar.id).read("heron.md")
         return Proposals(self.store).submit(
             self.sidecar.id, "heron.md", base["version"], content, summary, "Review assistant",
         )["id"]

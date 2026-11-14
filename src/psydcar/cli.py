@@ -38,7 +38,7 @@ def _details(sidecar: IndexedSidecar) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="psydcar", description="Manage local knowledge sidecars.")
+    parser = argparse.ArgumentParser(prog="psydcar", description="Give coding agents evidence from local folders, and review the edits they propose.")
     try:
         installed_version = version("psydcar")
     except PackageNotFoundError:
@@ -270,11 +270,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if not sidecars:
                     print("No sidecars yet. Use 'psydcar sidecar create NAME DIRECTORY' to add one.")
                 else:
-                    headers = ("NAME", "ID", "SOURCE", "STATUS")
-                    rows = [(item.name, item.id, str(item.source_path), _display_status(item.status)) for item in sidecars]
-                    widths = [max(len(str(row[index])) for row in [headers, *rows]) for index in range(4)]
-                    for row in [headers, *rows]:
-                        print("  ".join(str(value).ljust(widths[index]) for index, value in enumerate(row)).rstrip())
+                    _table(("NAME", "ID", "SOURCE", "STATUS"), [
+                        (item.name, item.id, str(item.source_path), _display_status(item.status)) for item in sidecars
+                    ])
             elif args.action == "show":
                 evidence_store = EvidenceStore(store)
                 sidecar = evidence_store.sidecar(args.reference)

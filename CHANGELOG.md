@@ -4,12 +4,17 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
 ### Added
 
 - Grant individual MCP connections permission to propose edits per sidecar. A proposed edit waits in a local queue and doesn't reach disk unless you approve it. Review proposals in the dashboard, which shows each agent's name, reason, and diff and keeps a list of recent decisions, or from the CLI with `psydcar proposal list`, `show`, `approve`, and `reject`. An approved edit is written in one step with its line endings and byte order mark preserved, and it's searchable right away. A proposal for a file that changed after the agent read it is marked out of date and can't be approved.
 - Evidence from a folder in a git repository reports where it came from. Search and retrieve results gain a `git` field with the current commit and whether the file has uncommitted changes. Psydcar only reads git state and never changes the repository. Results from other folders are unchanged.
 - Record approvals as git commits. For a sidecar whose folder is in a git repository, turn on the git record with `psydcar sidecar git-record NAME on` or the **Git record** switch in the dashboard. Each approval then becomes a commit on the checked-out branch whose subject is the agent's reason and whose message names the agent. A commit holds only the approved change to that one file, and your staged and uncommitted work stays out of it. When that can't be guaranteed, or git fails, the approval still stands, no commit is made, and Psydcar says why. The record is off by default. Psydcar never pulls or pushes, so you move commits between devices with your own git commands.
-- Local state and search now live in separate SQLite databases. The upgrade preserves sidecar and evidence IDs and keeps the original database as a backup.
+
+### Changed
+
+- Local state and search now live in separate SQLite databases. The first run upgrades an existing database automatically. Sidecar IDs, evidence IDs, provider settings, and MCP connections carry over, and the original database stays in place as a backup.
 
 ### Removed
 
@@ -68,7 +73,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 - First release: local sidecars for text, code, and PDFs with lexical and optional embedding search, a file watcher, a browser dashboard, and an MCP server limited to selected sidecars.
 
-[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jasonhulbert/psydcar/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jasonhulbert/psydcar/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jasonhulbert/psydcar/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/jasonhulbert/psydcar/compare/v0.1.3...v0.1.4

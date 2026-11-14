@@ -30,7 +30,33 @@ The tests use the standard library's `unittest` and need no extra packages:
 python -m unittest discover -s tests
 ```
 
-CI runs the suite on macOS and Linux for every supported Python version. Some tests start local HTTP servers on `127.0.0.1`, so a sandbox that blocks loopback sockets will skip them.
+CI runs the suite on macOS and Linux for every supported Python version. Some tests start local HTTP servers on `127.0.0.1`, so a sandbox that blocks loopback sockets will skip them. Tests of git provenance and the git record need `git` and are skipped without it.
+
+## How the code is organized
+
+`src/psydcar` is one flat package. Each module belongs to a layer, listed here from the center outward:
+
+| Layer | Modules |
+| --- | --- |
+| Storage helpers | `storage` |
+| Registry | `registry` |
+| Source scope | `source_scope`, with the readers `pdf_text` and `git_state` |
+| Evidence index | `index_tables`, `embeddings`, `evidence` |
+| Freshness | `freshness` |
+| Agent access | `access` |
+| Proposals and the git record | `proposal_files`, `proposals`, `git_record` |
+| Transports | `mcp_server`, `dashboard`, and `cli`, which starts the other two |
+
+Six rules keep the layers apart:
+
+1. Each layer imports only the layers beneath it.
+2. `source_scope` decides which files count as source. Indexing, proposals, and the watcher all ask it.
+3. No module imports another module's private names.
+4. Each layer owns its tables and offers operations on them. No other layer reads or writes them.
+5. Selection and grant rules live in `access`. The MCP server, the CLI, and the dashboard call it.
+6. State and search stay in separate databases. `state.sqlite3` holds what the owner owns. `search.sqlite3` can be deleted and rebuilt by indexing again.
+
+A layer declares its tables as a `storage.Tables` value: an owner name, the first table, and a tuple of upgrade steps. It opens its own connection with `storage.connect(path, tables)`, which creates or upgrades those tables first. To change a layer's tables, append a step. Never edit a step that has shipped.
 
 ## Dashboard assets
 

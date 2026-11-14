@@ -12,10 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .storage import database, exclusive_file_lock, initialize_index, initialize_state
-
-
-INITIAL_STATUS = "not_indexed"
+from .storage import Tables, connect, copy_rows, exclusive_file_lock, read_only
 
 
 class StoreError(Exception):
@@ -27,7 +24,6 @@ class Sidecar:
     id: str
     name: str
     source_path: Path
-    status: str
     created_at: str
     updated_at: str
 
@@ -75,15 +71,33 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _from_row(row: sqlite3.Row, status: str = INITIAL_STATUS, indexed_at: str = "") -> Sidecar:
+def _from_row(row: sqlite3.Row) -> Sidecar:
     return Sidecar(
         id=row["id"],
         name=row["name"],
         source_path=Path(row["source_path"]),
-        status=status,
         created_at=row["created_at"],
-        updated_at=max(row["updated_at"], indexed_at),
+        updated_at=row["updated_at"],
     )
+
+
+def _tables(legacy_path: Path) -> Tables:
+    def create(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE sidecars (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                source_path TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        # Version 0.3.0 kept everything in one database. It stays in place as the backup.
+        if legacy_path.is_file():
+            with read_only(legacy_path) as legacy:
+                copy_rows(legacy, connection, "sidecars", "id, name, source_path, created_at, updated_at")
+
+    return Tables("registry", "sidecars", (create,))
 
 
 class SidecarStore:
@@ -100,25 +114,15 @@ class SidecarStore:
             self.db_path = path.with_name(f"{name}.state.sqlite3")
             self.index_path = path.with_name(f"{name}.search.sqlite3")
             self.legacy_path = path.with_name(name)
+        self._tables = _tables(self.legacy_path)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         try:
-            with database(self.db_path) as connection:
-                initialize_state(connection, self.index_path, self.legacy_path)
-                connection.commit()
+            with connect(self.db_path, self._tables) as connection:
                 yield connection
         except (OSError, KeyError) as exc:
             raise StoreError(f"Cannot open sidecar state at {self.db_path}: {exc}") from exc
-
-    @contextmanager
-    def _index_connect(self) -> Iterator[sqlite3.Connection]:
-        try:
-            with database(self.index_path) as connection:
-                initialize_index(connection)
-                yield connection
-        except OSError as exc:
-            raise StoreError(f"Cannot open search index at {self.index_path}: {exc}") from exc
 
     @contextmanager
     def file_writes(self) -> Iterator[None]:
@@ -128,71 +132,6 @@ class SidecarStore:
                 yield
         except OSError as exc:
             raise StoreError(f"Cannot change sidecar files: {exc}") from exc
-
-    @staticmethod
-    def _mark_index_cleanup(connection: sqlite3.Connection) -> None:
-        connection.execute("INSERT OR REPLACE INTO index_cleanup VALUES (1, ?)", (str(uuid.uuid4()),))
-
-    def cleanup_index(self) -> None:
-        """Retry durable cleanup of removed sidecars and outdated provider revisions."""
-        try:
-            with self._connect() as state:
-                if state.execute("SELECT 1 FROM index_cleanup").fetchone() is None:
-                    return
-            with self._index_connect() as index:
-                index.execute("BEGIN IMMEDIATE")
-                with self._connect() as state:
-                    state.execute("BEGIN")
-                    pending = state.execute("SELECT token FROM index_cleanup").fetchone()
-                    if pending is None:
-                        return
-                    active = {row["id"] for row in state.execute("SELECT id FROM sidecars")}
-                    provider = state.execute("SELECT revision FROM embedding_provider").fetchone()
-                index.executemany(
-                    "DELETE FROM sidecar_index WHERE id = ?",
-                    [(row["id"],) for row in index.execute("SELECT id FROM sidecar_index") if row["id"] not in active],
-                )
-                for table in ("passage_embeddings", "sidecar_embedding_state"):
-                    if provider is None:
-                        index.execute(f"DELETE FROM {table}")
-                    else:
-                        index.execute(f"DELETE FROM {table} WHERE provider_revision != ?", (provider["revision"],))
-            with self._connect() as state:
-                state.execute("DELETE FROM index_cleanup WHERE token = ?", (pending["token"],))
-        except (sqlite3.Error, StoreError):
-            # The state commit already took effect. Retry when indexing resumes.
-            return
-
-    def _with_status(self, rows: list[sqlite3.Row], provider: sqlite3.Row | None) -> list[Sidecar]:
-        if not rows:
-            return []
-        with self._index_connect() as index:
-            if len(rows) == 1:
-                indexed = index.execute(
-                    """SELECT i.*, e.provider_revision FROM sidecar_index i
-                       LEFT JOIN sidecar_embedding_state e ON e.sidecar_id = i.id WHERE i.id = ?""",
-                    (rows[0]["id"],),
-                )
-            else:
-                indexed = index.execute(
-                    """SELECT i.*, e.provider_revision FROM sidecar_index i
-                       LEFT JOIN sidecar_embedding_state e ON e.sidecar_id = i.id"""
-                )
-            by_id = {row["id"]: row for row in indexed}
-        sidecars = []
-        for row in rows:
-            info = by_id.get(row["id"])
-            if info is None:
-                sidecars.append(_from_row(row))
-                continue
-            status = info["status"]
-            if status in {"indexed", "embedding_pending", "embedding_error"}:
-                if provider is None:
-                    status = "indexed"
-                elif provider["revision"] != info["provider_revision"]:
-                    status = "embedding_pending"
-            sidecars.append(_from_row(row, status, info["updated_at"]))
-        return sidecars
 
     def create(self, name: str, source: str | Path) -> Sidecar:
         name = _validate_name(name)
@@ -209,14 +148,21 @@ class SidecarStore:
             raise StoreError(f'A sidecar named "{name}" already exists.') from exc
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot create sidecar: {exc}") from exc
-        return Sidecar(sidecar_id, name, source_path, INITIAL_STATUS, now, now)
+        return Sidecar(sidecar_id, name, source_path, now, now)
 
     def list(self) -> list[Sidecar]:
         try:
             with self._connect() as connection:
                 rows = connection.execute("SELECT * FROM sidecars ORDER BY name COLLATE NOCASE, id").fetchall()
-                provider = connection.execute("SELECT revision FROM embedding_provider").fetchone()
-            return self._with_status(rows, provider)
+        except sqlite3.Error as exc:
+            raise StoreError(f"Cannot list sidecars: {exc}") from exc
+        return [_from_row(row) for row in rows]
+
+    def ids(self) -> set[str]:
+        """Return the IDs of every registered sidecar."""
+        try:
+            with self._connect() as connection:
+                return {row["id"] for row in connection.execute("SELECT id FROM sidecars")}
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot list sidecars: {exc}") from exc
 
@@ -233,9 +179,7 @@ class SidecarStore:
     def get(self, reference: str, *, exact_id: bool = False) -> Sidecar:
         try:
             with self._connect() as connection:
-                row = self._find(connection, reference, exact_id)
-                provider = connection.execute("SELECT revision FROM embedding_provider").fetchone()
-            return self._with_status([row], provider)[0]
+                return _from_row(self._find(connection, reference, exact_id))
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect sidecar: {exc}") from exc
 
@@ -255,12 +199,11 @@ class SidecarStore:
             raise StoreError(f"Cannot rename sidecar: {exc}") from exc
 
     def remove(self, reference: str) -> Sidecar:
+        """Remove the registration. Layers that keep data for a sidecar clean it up from the remaining IDs."""
         try:
             with self.file_writes(), self._connect() as connection:
                 row = self._find(connection, reference)
                 connection.execute("DELETE FROM sidecars WHERE id = ?", (row["id"],))
-                self._mark_index_cleanup(connection)
-            self.cleanup_index()
             return _from_row(row)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot remove sidecar: {exc}") from exc

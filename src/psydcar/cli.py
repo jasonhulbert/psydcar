@@ -10,19 +10,20 @@ import threading
 from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version
 
+from .access import connect_agent
 from .embeddings import ProviderStore
 from .dashboard import run_dashboard
-from .evidence import EvidenceStore
+from .evidence import EvidenceStore, IndexedSidecar
 from .freshness import SidecarWatcher, WatchEvent
 from .mcp_server import run_mcp
-from .registry import Sidecar, SidecarStore, StoreError
+from .registry import SidecarStore, StoreError
 
 
 def _display_status(status: str) -> str:
     return status.replace("_", " ").capitalize()
 
 
-def _details(sidecar: Sidecar) -> str:
+def _details(sidecar: IndexedSidecar) -> str:
     return "\n".join(
         (
             f"Name: {sidecar.name}",
@@ -128,10 +129,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         store = SidecarStore()
         if args.command == "sidecar":
             if args.action == "create":
-                sidecar = store.create(args.name, args.source)
+                sidecar = EvidenceStore(store).sidecar(store.create(args.name, args.source).id, exact_id=True)
                 print(f'Created sidecar "{sidecar.name}".\n{_details(sidecar)}')
             elif args.action == "list":
-                sidecars = store.list()
+                sidecars = EvidenceStore(store).list()
                 if not sidecars:
                     print("No sidecars yet. Use 'psydcar sidecar create NAME DIRECTORY' to add one.")
                 else:
@@ -141,9 +142,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     for row in [headers, *rows]:
                         print("  ".join(str(value).ljust(widths[index]) for index, value in enumerate(row)).rstrip())
             elif args.action == "show":
-                sidecar = store.get(args.reference)
-                print(_details(sidecar))
                 evidence_store = EvidenceStore(store)
+                sidecar = evidence_store.sidecar(args.reference)
+                print(_details(sidecar))
                 update_state = evidence_store.update_state(sidecar.id)
                 state_label = {
                     "current": "Current", "pending": "Pending", "attention": "Needs attention",
@@ -173,10 +174,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for notice in evidence_store.pdf_page_notices(sidecar.id):
                     print(f'PDF page: {notice["source"]}, page {notice["page"]}: {notice["message"]}')
             elif args.action == "rename":
-                sidecar = store.rename(args.reference, args.new_name)
+                sidecar = EvidenceStore(store).sidecar(store.rename(args.reference, args.new_name).id, exact_id=True)
                 print(f'Renamed sidecar to "{sidecar.name}".\n{_details(sidecar)}')
             elif args.action == "remove":
-                sidecar = store.remove(args.reference)
+                sidecar = EvidenceStore(store).remove(args.reference)
                 print(f'Removed sidecar "{sidecar.name}" (ID: {sidecar.id}). Source files were not changed.')
             elif args.action in {"index", "update"}:
                 report = EvidenceStore(store).update(args.reference)
@@ -261,7 +262,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "dashboard":
             run_dashboard(store, args.port, not args.no_open)
         elif args.command == "mcp":
-            run_mcp(store, args.sidecar_id, proposal_ids=args.propose_sidecar_id, agent_name=args.agent_name)
+            access = connect_agent(store, args.sidecar_id, proposal_ids=args.propose_sidecar_id, agent_name=args.agent_name)
+            run_mcp(store, access)
     except StoreError as exc:
         print(f"psydcar: {exc}", file=sys.stderr)
         return 2

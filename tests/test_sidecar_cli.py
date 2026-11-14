@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from psydcar.registry import INITIAL_STATUS, SidecarStore
+from psydcar.evidence import INITIAL_STATUS, EvidenceStore
+from psydcar.registry import SidecarStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +51,7 @@ class SidecarCliTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
 
         store = SidecarStore(self.store_dir / "psydcar.sqlite3")
-        before = store.get("Personal notes")
+        before = EvidenceStore(store).sidecar("Personal notes")
         self.assertEqual(before.status, INITIAL_STATUS)
         self.assertEqual(before.source_path, self.source_one)
 

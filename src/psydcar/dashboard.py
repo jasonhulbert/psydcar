@@ -21,10 +21,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import access
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
 from .evidence import EvidenceStore
 from .freshness import SidecarWatcher, WatchEvent
-from .mcp_server import proposal_scope, selected_ids
 from .registry import SidecarStore, StoreError
 
 
@@ -201,7 +201,7 @@ class DashboardServer(ThreadingHTTPServer):
         return True
 
     def snapshot(self) -> dict[str, Any]:
-        sidecars = self.store.list()
+        sidecars = self.evidence.list()
         provider = _provider_view(self.provider.get())
         provider_configured = provider["configured"]
         with self._pending_lock:
@@ -236,12 +236,12 @@ class DashboardServer(ThreadingHTTPServer):
             raise StoreError("Connection name must start with a letter and use up to 64 letters, numbers, dashes, or underscores.")
         if not isinstance(references, list) or any(not isinstance(item, str) for item in references):
             raise StoreError("Select one or more sidecars for this connection.")
-        ids = selected_ids(self.store, references)
+        ids = access.select(self.store, references)
         if proposal_ids is None:
             proposal_ids = []
         if not isinstance(proposal_ids, list) or any(not isinstance(item, str) for item in proposal_ids):
             raise StoreError("Select the sidecars where this connection can propose edits.")
-        grants = proposal_scope(ids, proposal_ids)
+        grants = access.grant(ids, proposal_ids)
         command, prefix = _mcp_launcher()
         args = [*prefix, "mcp", *(part for sidecar_id in ids for part in ("--sidecar-id", sidecar_id))]
         if grants:
@@ -432,7 +432,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         try:
             with self.server.operation_lock:
-                sidecar = self.server.store.remove(sidecar_id)
+                sidecar = self.server.evidence.remove(sidecar_id)
             self._json(HTTPStatus.OK, {"message": f'Removed "{sidecar.name}". Source files were not changed.'})
         except StoreError as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})

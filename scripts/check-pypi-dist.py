@@ -15,11 +15,13 @@ from pathlib import Path
 REQUIRED_PACKAGE_FILES = {
     "psydcar/__init__.py",
     "psydcar/__main__.py",
+    "psydcar/access.py",
     "psydcar/cli.py",
     "psydcar/dashboard.py",
     "psydcar/embeddings.py",
     "psydcar/evidence.py",
     "psydcar/freshness.py",
+    "psydcar/index_tables.py",
     "psydcar/mcp_server.py",
     "psydcar/pdf_text.py",
     "psydcar/proposal_files.py",

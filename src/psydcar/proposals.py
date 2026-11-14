@@ -5,17 +5,40 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from difflib import unified_diff
 from typing import Any, Literal
 
 from .proposal_files import FileConflict, Workspace, text_bytes
 from .registry import SidecarStore, StoreError
+from .storage import Tables, connect
 
 
 MAX_PENDING = 50
 MAX_SUMMARY_LENGTH = 500
 _FIELDS = "id, path, agent_name, summary, status, created_at, decided_at"
+_TABLES = Tables("proposals", "file_proposals", ((
+    """CREATE TABLE file_proposals (
+        id TEXT PRIMARY KEY,
+        sidecar_id TEXT NOT NULL REFERENCES sidecars(id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        agent_name TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'applying', 'approved', 'rejected')),
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        base_version TEXT NOT NULL,
+        result_version TEXT NOT NULL,
+        newline TEXT NOT NULL,
+        bom INTEGER NOT NULL,
+        before_text TEXT,
+        proposed_text TEXT
+    )""",
+    """CREATE INDEX file_proposals_queue
+       ON file_proposals(sidecar_id, status, created_at DESC, id)""",
+),))
 
 
 def _now() -> str:
@@ -48,6 +71,15 @@ class Proposals:
         self.store = store
         self.workspace = Workspace(store)
 
+    @contextmanager
+    def _state(self) -> Iterator[sqlite3.Connection]:
+        # Removing a sidecar removes its proposals through the foreign key.
+        try:
+            with connect(self.store.db_path, _TABLES) as connection:
+                yield connection
+        except OSError as exc:
+            raise StoreError(f"Cannot open sidecar state at {self.store.db_path}: {exc}") from exc
+
     def submit(self, sidecar_id: str, path: str, version: str, content: str,
                summary: str, agent_name: str) -> dict[str, Any]:
         summary = summary.strip()
@@ -63,7 +95,7 @@ class Proposals:
             result_version = hashlib.sha256(text_bytes(content, base["newline"], base["bom"])).hexdigest()
             if content == base["content"] or result_version == version:
                 raise StoreError("The proposal must change the file.")
-            with self.store._connect() as state:
+            with self._state() as state:
                 existing = state.execute(
                     f"""SELECT {_FIELDS} FROM file_proposals
                         WHERE sidecar_id = ? AND status = 'pending' AND path = ? AND agent_name = ?
@@ -93,8 +125,8 @@ class Proposals:
         ).fetchone()[0]
 
     def list(self, sidecar_id: str, *, reviewed: bool = False) -> dict[str, Any]:
-        with self.store._connect() as state:
-            self.store._find(state, sidecar_id, exact_id=True)
+        self.store.get(sidecar_id, exact_id=True)
+        with self._state() as state:
             if reviewed:
                 rows = state.execute(
                     f"""SELECT {_FIELDS} FROM file_proposals
@@ -124,7 +156,7 @@ class Proposals:
         return row
 
     def _finish(self, row: sqlite3.Row, status: str) -> sqlite3.Row:
-        with self.store._connect() as state:
+        with self._state() as state:
             state.execute(
                 """UPDATE file_proposals
                    SET status = ?, decided_at = ?, before_text = NULL, proposed_text = NULL WHERE id = ?""",
@@ -139,7 +171,7 @@ class Proposals:
             return None
 
     def _load(self, sidecar_id: str, proposal_id: str) -> sqlite3.Row:
-        with self.store._connect() as state:
+        with self._state() as state:
             row = self._find(state, sidecar_id, proposal_id)
         if row["status"] != "applying":
             return row
@@ -147,7 +179,7 @@ class Proposals:
         # the completed write by hash, or leave it pending for another review.
         if self._current_version(row) == row["result_version"]:
             return self._finish(row, "approved")
-        with self.store._connect() as state:
+        with self._state() as state:
             state.execute("UPDATE file_proposals SET status = 'pending' WHERE id = ?", (proposal_id,))
             return self._find(state, sidecar_id, proposal_id)
 
@@ -177,7 +209,7 @@ class Proposals:
             current = self._current_version(row)
             if current != row["base_version"]:
                 raise FileConflict("The file changed or is unavailable. Ask the agent for a new proposal.", current)
-            with self.store._connect() as state:
+            with self._state() as state:
                 state.execute("UPDATE file_proposals SET status = 'applying' WHERE id = ?", (proposal_id,))
             self.workspace.files(sidecar_id).write(
                 row["path"], row["proposed_text"], row["base_version"], row["newline"], bool(row["bom"]),

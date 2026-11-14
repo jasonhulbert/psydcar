@@ -51,7 +51,7 @@ class SidecarWatcher:
         startup = not self._started
         full = force or startup or now - self._last_reconcile >= self.reconcile_interval
         events = []
-        self.sidecars.cleanup_index()
+        self.evidence.cleanup()
         sidecars = self.sidecars.list()
         active_ids = {sidecar.id for sidecar in sidecars}
         with self._snapshot_lock:

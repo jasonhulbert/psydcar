@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
+from .index_tables import mark_cleanup, open_search, open_state, remove_outdated
 from .registry import SidecarStore, StoreError
 
 
@@ -120,7 +121,7 @@ class ProviderStore:
 
     def get(self) -> ProviderConfig | None:
         try:
-            with self.sidecars._connect() as connection:
+            with open_state(self.sidecars) as connection:
                 row = connection.execute("SELECT * FROM embedding_provider WHERE id = 1").fetchone()
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect embedding provider: {exc}") from exc
@@ -140,7 +141,7 @@ class ProviderStore:
         revision = str(uuid.uuid4())
         now = _now()
         try:
-            with self.sidecars._connect() as connection:
+            with open_state(self.sidecars) as connection:
                 connection.execute(
                     """INSERT INTO embedding_provider
                        (id, base_url, model, api_key_env, allow_insecure_http, revision, configured_at)
@@ -150,20 +151,20 @@ class ProviderStore:
                            revision=excluded.revision, configured_at=excluded.configured_at""",
                     (draft.base_url, draft.model, draft.api_key_env, int(draft.allow_insecure_http), revision, now),
                 )
-                self.sidecars._mark_index_cleanup(connection)
+                mark_cleanup(connection)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot save embedding provider: {exc}") from exc
-        self.sidecars.cleanup_index()
+        remove_outdated(self.sidecars)
         return ProviderConfig(draft.base_url, draft.model, draft.api_key_env, draft.allow_insecure_http, revision, now)
 
     def clear(self) -> bool:
         try:
-            with self.sidecars._connect() as connection:
+            with open_state(self.sidecars) as connection:
                 existed = connection.execute("DELETE FROM embedding_provider WHERE id = 1").rowcount > 0
-                self.sidecars._mark_index_cleanup(connection)
+                mark_cleanup(connection)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot clear embedding provider: {exc}") from exc
-        self.sidecars.cleanup_index()
+        remove_outdated(self.sidecars)
         return existed
 
     def sidecar_state(self, sidecar_id: str) -> dict[str, Any] | None:
@@ -171,7 +172,7 @@ class ProviderStore:
         if provider is None:
             return None
         try:
-            with self.sidecars._index_connect() as connection:
+            with open_search(self.sidecars) as connection:
                 row = connection.execute(
                     """SELECT status, embedded_count, expected_count, message FROM sidecar_embedding_state
                        WHERE sidecar_id = ? AND provider_revision = ?""",

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -96,8 +97,8 @@ class WatcherCliTests(unittest.TestCase):
         (self.source / "base.md").write_text("mango plum\n")
         (self.source / "new.md").write_text("restart aurora\n")
         (self.source / "remove.py").unlink()
-        with sqlite3.connect(self.store_dir / "psydcar.sqlite3") as connection:
-            connection.execute("UPDATE sidecars SET status = 'update_pending'")
+        with closing(sqlite3.connect(self.store_dir / "search.sqlite3")) as connection, connection:
+            connection.execute("UPDATE sidecar_index SET status = 'update_pending'")
             connection.execute("UPDATE sidecar_updates SET completed_at = NULL")
         stale = self.hits("pear")[0]
         self.assertEqual(stale["freshness"], "changed")

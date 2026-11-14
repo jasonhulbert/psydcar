@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -193,7 +194,7 @@ class EmbeddingCliTests(unittest.TestCase):
         self.assertEqual(requests[0]["path"], "/gateway/v1/embeddings")
         self.assertEqual(requests[0]["authorization"], f"Bearer {SECRET}")
         self.assertEqual(requests[0]["body"]["model"], "deterministic-test")
-        self.assertNotIn(SECRET.encode(), (self.store / "psydcar.sqlite3").read_bytes())
+        self.assertNotIn(SECRET.encode(), (self.store / "state.sqlite3").read_bytes())
         inputs = requests[0]["body"]["input"]
         self.assertEqual(len(inputs), 3)
         self.assertTrue(any("car engine" in item for item in inputs))
@@ -223,7 +224,7 @@ class EmbeddingCliTests(unittest.TestCase):
 
         cleared = self.cli("provider", "clear")
         self.assertEqual(cleared.returncode, 0, cleared.stderr)
-        with sqlite3.connect(self.store / "psydcar.sqlite3") as connection:
+        with closing(sqlite3.connect(self.store / "search.sqlite3")) as connection, connection:
             self.assertEqual(connection.execute("SELECT count(*) FROM passage_embeddings").fetchone()[0], 0)
         lexical = self.cli("search", "--sidecar", "Library", "car")
         self.assertEqual(json.loads(lexical.stdout)[0]["search"]["mode"], "lexical")

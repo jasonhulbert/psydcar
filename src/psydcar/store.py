@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .core.storage import database, exclusive_file_lock, initialize_index, initialize_state
+
 
 INITIAL_STATUS = "not_indexed"
 
@@ -73,54 +75,124 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _from_row(row: sqlite3.Row) -> Sidecar:
+def _from_row(row: sqlite3.Row, status: str = INITIAL_STATUS, indexed_at: str = "") -> Sidecar:
     return Sidecar(
         id=row["id"],
         name=row["name"],
         source_path=Path(row["source_path"]),
-        status=row["status"],
+        status=status,
         created_at=row["created_at"],
-        updated_at=row["updated_at"],
+        updated_at=max(row["updated_at"], indexed_at),
     )
 
 
 class SidecarStore:
-    """One local SQLite store for sidecar definitions and local search data."""
+    """Sidecar registration and the paths to its local state and search stores."""
 
     def __init__(self, db_path: Path | None = None):
-        self.db_path = Path(db_path) if db_path is not None else default_store_dir() / "psydcar.sqlite3"
+        path = Path(db_path) if db_path is not None else default_store_dir() / "state.sqlite3"
+        if path.name in {"state.sqlite3", "psydcar.sqlite3"}:
+            self.db_path = path.with_name("state.sqlite3")
+            self.index_path = path.with_name("search.sqlite3")
+            self.legacy_path = path.with_name("psydcar.sqlite3")
+        else:
+            name = path.name.removesuffix(".state.sqlite3")
+            self.db_path = path.with_name(f"{name}.state.sqlite3")
+            self.index_path = path.with_name(f"{name}.search.sqlite3")
+            self.legacy_path = path.with_name(name)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = None
         try:
-            self.db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            new_database = not self.db_path.exists()
-            connection = sqlite3.connect(self.db_path, timeout=5)
-            if new_database and os.name != "nt":
-                self.db_path.chmod(0o600)
-            connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 5000")
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS sidecars (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-                    source_path TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )"""
-            )
-        except (OSError, sqlite3.Error) as exc:
-            if connection is not None:
-                connection.close()
-            raise StoreError(f"Cannot open sidecar store at {self.db_path}: {exc}") from exc
-        try:
-            with connection:
+            with database(self.db_path) as connection:
+                initialize_state(connection, self.index_path, self.legacy_path)
+                connection.commit()
                 yield connection
-        finally:
-            connection.close()
+        except (OSError, KeyError) as exc:
+            raise StoreError(f"Cannot open sidecar state at {self.db_path}: {exc}") from exc
+
+    @contextmanager
+    def _index_connect(self) -> Iterator[sqlite3.Connection]:
+        try:
+            with database(self.index_path) as connection:
+                initialize_index(connection)
+                yield connection
+        except OSError as exc:
+            raise StoreError(f"Cannot open search index at {self.index_path}: {exc}") from exc
+
+    @contextmanager
+    def file_writes(self) -> Iterator[None]:
+        """Serialize version checks and file mutations across local processes."""
+        try:
+            with exclusive_file_lock(self.db_path.with_suffix(".files.lock")):
+                yield
+        except OSError as exc:
+            raise StoreError(f"Cannot change sidecar files: {exc}") from exc
+
+    @staticmethod
+    def _mark_index_cleanup(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT OR REPLACE INTO index_cleanup VALUES (1, ?)", (str(uuid.uuid4()),))
+
+    def cleanup_index(self) -> None:
+        """Retry durable cleanup of removed sidecars and outdated provider revisions."""
+        try:
+            with self._connect() as state:
+                if state.execute("SELECT 1 FROM index_cleanup").fetchone() is None:
+                    return
+            with self._index_connect() as index:
+                index.execute("BEGIN IMMEDIATE")
+                with self._connect() as state:
+                    state.execute("BEGIN")
+                    pending = state.execute("SELECT token FROM index_cleanup").fetchone()
+                    if pending is None:
+                        return
+                    active = {row["id"] for row in state.execute("SELECT id FROM sidecars")}
+                    provider = state.execute("SELECT revision FROM embedding_provider").fetchone()
+                index.executemany(
+                    "DELETE FROM sidecar_index WHERE id = ?",
+                    [(row["id"],) for row in index.execute("SELECT id FROM sidecar_index") if row["id"] not in active],
+                )
+                for table in ("passage_embeddings", "sidecar_embedding_state"):
+                    if provider is None:
+                        index.execute(f"DELETE FROM {table}")
+                    else:
+                        index.execute(f"DELETE FROM {table} WHERE provider_revision != ?", (provider["revision"],))
+            with self._connect() as state:
+                state.execute("DELETE FROM index_cleanup WHERE token = ?", (pending["token"],))
+        except (sqlite3.Error, StoreError):
+            # The state commit already took effect. Retry when indexing resumes.
+            return
+
+    def _with_status(self, rows: list[sqlite3.Row], provider: sqlite3.Row | None) -> list[Sidecar]:
+        if not rows:
+            return []
+        with self._index_connect() as index:
+            if len(rows) == 1:
+                indexed = index.execute(
+                    """SELECT i.*, e.provider_revision FROM sidecar_index i
+                       LEFT JOIN sidecar_embedding_state e ON e.sidecar_id = i.id WHERE i.id = ?""",
+                    (rows[0]["id"],),
+                )
+            else:
+                indexed = index.execute(
+                    """SELECT i.*, e.provider_revision FROM sidecar_index i
+                       LEFT JOIN sidecar_embedding_state e ON e.sidecar_id = i.id"""
+                )
+            by_id = {row["id"]: row for row in indexed}
+        sidecars = []
+        for row in rows:
+            info = by_id.get(row["id"])
+            if info is None:
+                sidecars.append(_from_row(row))
+                continue
+            status = info["status"]
+            if status in {"indexed", "embedding_pending", "embedding_error"}:
+                if provider is None:
+                    status = "indexed"
+                elif provider["revision"] != info["provider_revision"]:
+                    status = "embedding_pending"
+            sidecars.append(_from_row(row, status, info["updated_at"]))
+        return sidecars
 
     def create(self, name: str, source: str | Path) -> Sidecar:
         name = _validate_name(name)
@@ -130,8 +202,8 @@ class SidecarStore:
         try:
             with self._connect() as connection:
                 connection.execute(
-                    "INSERT INTO sidecars (id, name, source_path, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (sidecar_id, name, str(source_path), INITIAL_STATUS, now, now),
+                    "INSERT INTO sidecars (id, name, source_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (sidecar_id, name, str(source_path), now, now),
                 )
         except sqlite3.IntegrityError as exc:
             raise StoreError(f'A sidecar named "{name}" already exists.') from exc
@@ -143,24 +215,27 @@ class SidecarStore:
         try:
             with self._connect() as connection:
                 rows = connection.execute("SELECT * FROM sidecars ORDER BY name COLLATE NOCASE, id").fetchall()
+                provider = connection.execute("SELECT revision FROM embedding_provider").fetchone()
+            return self._with_status(rows, provider)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot list sidecars: {exc}") from exc
-        return [_from_row(row) for row in rows]
 
     @staticmethod
-    def _find(connection: sqlite3.Connection, reference: str) -> sqlite3.Row:
+    def _find(connection: sqlite3.Connection, reference: str, exact_id: bool = False) -> sqlite3.Row:
         # Prefer an exact ID if a name ever happens to match another record's ID.
         row = connection.execute("SELECT * FROM sidecars WHERE id = ?", (reference,)).fetchone()
-        if row is None:
+        if row is None and not exact_id:
             row = connection.execute("SELECT * FROM sidecars WHERE name = ? COLLATE NOCASE", (reference,)).fetchone()
         if row is None:
             raise StoreError(f'No sidecar named or identified by "{reference}".')
         return row
 
-    def get(self, reference: str) -> Sidecar:
+    def get(self, reference: str, *, exact_id: bool = False) -> Sidecar:
         try:
             with self._connect() as connection:
-                return _from_row(self._find(connection, reference))
+                row = self._find(connection, reference, exact_id)
+                provider = connection.execute("SELECT revision FROM embedding_provider").fetchone()
+            return self._with_status([row], provider)[0]
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect sidecar: {exc}") from exc
 
@@ -173,7 +248,7 @@ class SidecarStore:
                     "UPDATE sidecars SET name = ?, updated_at = ? WHERE id = ?",
                     (new_name, _now(), row["id"]),
                 )
-                return _from_row(self._find(connection, row["id"]))
+            return self.get(row["id"], exact_id=True)
         except sqlite3.IntegrityError as exc:
             raise StoreError(f'A sidecar named "{new_name}" already exists.') from exc
         except sqlite3.Error as exc:
@@ -181,9 +256,11 @@ class SidecarStore:
 
     def remove(self, reference: str) -> Sidecar:
         try:
-            with self._connect() as connection:
+            with self.file_writes(), self._connect() as connection:
                 row = self._find(connection, reference)
                 connection.execute("DELETE FROM sidecars WHERE id = ?", (row["id"],))
-                return _from_row(row)
+                self._mark_index_cleanup(connection)
+            self.cleanup_index()
+            return _from_row(row)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot remove sidecar: {exc}") from exc

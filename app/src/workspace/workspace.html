@@ -1,0 +1,182 @@
+<main id="main-content" tabindex="-1" class="app-workspace" [class.is-single-pane]="!filePaneVisible() || !editorPaneVisible()"
+  [class.has-feedback]="error() || busy() || notice()">
+  <h1 class="visually-hidden">{{ sidecarName() }}</h1>
+  @if (error() || busy() || notice()) {
+    <div class="workspace-feedback">
+      @if (error()) {
+        <div class="workspace-message flash flash-danger" role="alert">
+          <psydcar-icon name="triangle-alert" />
+          <span>{{ error() }}</span>
+          @if (conflict()) {
+            <button type="button" psButton="secondary" buttonSize="small" (click)="reload()">Reload from disk</button>
+          }
+        </div>
+      }
+      @if (busy() || notice()) {
+        <p class="workspace-notice muted" role="status">
+          {{ loading() ? 'Opening…' : saving() ? 'Saving…' : updating() ? 'Refreshing files…' : notice() }}
+        </p>
+      }
+    </div>
+  }
+  <aside id="workspace-files" class="app-file-list" aria-labelledby="workspace-title" [hidden]="!filePaneVisible()">
+    <div class="file-pane-heading">
+      <div class="file-pane-identity">
+        <p class="eyebrow">Sidecar</p>
+        <h2 id="workspace-title" [title]="sidecarName()">{{ sidecarName() }}</h2>
+        @if (sidecarRoot()) { <p class="file-root mono" [title]="sidecarRoot()">{{ sidecarRoot() }}</p> }
+      </div>
+      @if (selected()) {
+        <button psButton="icon" type="button" aria-label="Hide files" title="Hide files"
+          (click)="toggleFiles(true)"><psydcar-icon name="panel-left-close" /></button>
+      }
+    </div>
+
+    <div class="app-file-actions files-section-heading">
+      <h3>Files <span class="counter">{{ entries().length }}</span></h3>
+      <button psButton="icon" type="button" aria-label="New file" title="New file" (click)="fileAction('file')" [disabled]="busy()">
+        <psydcar-icon name="file-plus" />
+      </button>
+      <button psButton="icon" type="button" aria-label="New folder" title="New folder" (click)="fileAction('folder')" [disabled]="busy()">
+        <psydcar-icon name="folder-plus" />
+      </button>
+    </div>
+
+    <psydcar-file-tree [entries]="entries()" [selected]="selected()?.path" [busy]="busy()" [loading]="treeLoading()"
+      [truncated]="truncated()" [(filter)]="filter" (select)="open($event)" (refresh)="refreshFiles()" />
+
+    <div class="app-file-actions file-pane-footer">
+      <p class="eyebrow">Collaborate</p>
+      <button psButton="navigation" type="button" (click)="proposalQueue.show()" [disabled]="busy()">
+        <psydcar-icon name="eye" />Review proposals
+        @if (proposalQueue.pendingCount()) { <span class="counter">{{ proposalQueue.pendingCount() }}</span> }
+      </button>
+      <psydcar-sync [sidecarId]="sidecarId" [paused]="busy() || dirty()"
+        [draftPath]="dirty() ? file()?.path : undefined" (changed)="filesSynced()" />
+      <button psButton="navigation" type="button" (click)="openPreview()">
+        <psydcar-icon name="code" />Web preview
+      </button>
+    </div>
+  </aside>
+
+  <section class="app-document" aria-label="File workspace" [hidden]="!editorPaneVisible()">
+    @if (selected(); as active) {
+      <header class="app-editor-toolbar">
+        <div class="document-identity">
+          <button #filesButton psButton="icon" class="files-toggle" type="button" aria-controls="workspace-files"
+            [attr.aria-expanded]="filePaneVisible()" [attr.aria-label]="filePaneVisible() ? 'Hide files' : 'Show files'"
+            [title]="filePaneVisible() ? 'Hide files' : 'Show files'" (click)="toggleFiles()">
+            <psydcar-icon [name]="filePaneVisible() ? 'panel-left-close' : 'panel-left-open'" />
+            <span class="compact-files-label">Files</span>
+          </button>
+          <div class="document-path" [title]="active.path">
+            <psydcar-icon [name]="entryIcon()" />
+            <strong>{{ active.path }}</strong>
+          </div>
+        </div>
+
+        <div class="editor-controls">
+          @if (markdown()) {
+            <psydcar-segmented-control class="document-modes" label="Markdown view" [options]="modes" [(value)]="mode" />
+            <button #outlineButton type="button" psButton="icon" class="outline-toggle" aria-label="Outline" title="Outline"
+              aria-controls="markdown-outline" [attr.aria-expanded]="showOutline()"
+              (click)="showOutline.set(!showOutline())"><psydcar-icon name="table-of-contents" /></button>
+          }
+          @if (html()) {
+            <button type="button" psButton="secondary" buttonSize="small" (click)="openPreview()">Preview HTML</button>
+          }
+          <div class="editor-file-actions">
+            <button type="button" psButton="icon" aria-label="Rename or move" title="Rename or move"
+              (click)="fileAction('move')" [disabled]="busy() || dirty()"><psydcar-icon name="pencil" /></button>
+            <button type="button" psButton="icon-danger" aria-label="Delete" title="Delete"
+              (click)="fileAction('delete')" [disabled]="busy() || dirty()"><psydcar-icon name="trash-2" /></button>
+            @if (file()) {
+              <button type="button" psButton="primary" buttonSize="small" (click)="save()"
+                [disabled]="!ready() || !dirty() || busy() || conflict()"><psydcar-icon name="save" />Save</button>
+            }
+          </div>
+        </div>
+      </header>
+    }
+
+    @if (file(); as active) {
+      <div class="app-editor-body">
+        <psydcar-editor [file]="active" [mode]="mode()" [anchor]="anchor()" [image]="resolveImage"
+          (ready)="ready.set($event)" (changed)="dirty.set($event)" (failed)="error.set($event)"
+          (save)="save()" (link)="follow($event.url, $event.options?.wiki)" (tag)="filter.set('#' + $event)"
+          (outline)="outline.set($event)" (status)="editorStatus.set($event)" />
+        @if (markdown() && showOutline()) {
+          <nav class="app-outline" id="markdown-outline" aria-label="Markdown outline">
+            <header>
+              <h2>Outline</h2>
+              <button type="button" psButton="icon" aria-label="Close outline" title="Close outline"
+                (click)="closeOutline()"><psydcar-icon name="x" /></button>
+            </header>
+            <ul>
+              @for (heading of outline()?.headings; track heading.from) {
+                <li [style.padding-inline-start.px]="(heading.level - 1) * 8">
+                  <button type="button" (click)="revealHeading(heading.from)"
+                    [attr.aria-current]="outline()?.current === $index ? 'location' : null">
+                    {{ heading.text || 'Untitled heading' }}
+                  </button>
+                </li>
+              } @empty {
+                <li class="outline-empty muted">No headings in this file.</li>
+              }
+            </ul>
+          </nav>
+        }
+      </div>
+    } @else if (image(); as active) {
+      <div class="app-editor-body">
+        <figure class="image-viewer">
+          <div class="image-viewer-frame">
+            <img class="image-viewer-img" #photo [src]="imageUrl(active.path)" [alt]="active.path"
+              (load)="dimensions.set(photo.naturalWidth + ' × ' + photo.naturalHeight + ' px')"
+              (error)="error.set('This image could not be displayed.')">
+          </div>
+        </figure>
+      </div>
+    } @else if (selected(); as active) {
+      @if (active.type === 'folder') {
+        <psydcar-empty-state class="document-empty" icon="folder-open" heading="Folder selected">
+          Open a file from the sidecar, or create one in this folder.
+        </psydcar-empty-state>
+      } @else {
+        <psydcar-empty-state class="document-empty" [icon]="entryIcon()" heading="File is too large">
+          {{ active.image ? 'This image exceeds the 20 MiB viewing limit.' : 'This file exceeds the 2 MiB editing limit.' }}
+        </psydcar-empty-state>
+      }
+    } @else if (!loading()) {
+      <psydcar-empty-state class="document-empty" icon="file-text" heading="Open a file">
+        Choose a file from the sidebar to start reading or editing.
+      </psydcar-empty-state>
+    }
+
+    @if (selected(); as active) {
+      @if (active.type === 'file') {
+        <footer class="app-file-details" aria-label="File details">
+          @if (file(); as text) {
+            <psydcar-badge [tone]="dirty() ? 'warning' : 'neutral'">{{ dirty() ? 'Unsaved changes' : 'Saved' }}</psydcar-badge>
+            @if (mode() === 'reading') {
+              <span>Read only</span>
+            } @else if (editorStatus(); as status) {
+              <span class="editor-position">Ln {{ status.line }}, Col {{ status.column }}@if (status.selected) { · {{ status.selected }} selected }</span>
+            }
+            <span>UTF-8{{ text.bom ? ' with BOM' : '' }}</span>
+            <span>{{ text.newline.length === 2 ? 'CRLF' : 'LF' }}</span>
+          }
+          @if (dimensions()) { <span>{{ dimensions() }}</span> }
+          @if (size()) { <span>{{ size() }}</span> }
+          @if (active.mtime_ns; as modified) {
+            <span>Modified {{ modified / 1e6 | date:'medium' }}</span>
+          }
+        </footer>
+      }
+    }
+  </section>
+</main>
+<psydcar-file-changes [sidecarId]="sidecarId" (changed)="entryChanged($event.action, $event.entry)" />
+<psydcar-web-preview [sidecarId]="sidecarId" />
+<psydcar-proposals #proposalQueue [sidecarId]="sidecarId" [sidecarName]="sidecarName()"
+  [draftPath]="dirty() ? file()?.path : undefined" (approved)="proposalApproved($event)" />

@@ -14,6 +14,7 @@ import { classHighlighter, tagHighlighter, tags } from "@lezer/highlight";
 import { fenceLanguages, languageForPath } from "./languages.js";
 import { readingMode } from "./blocks.js";
 import { frontMatter } from "./front-matter.js";
+import { formattedEditing } from "./formatted-editing.js";
 import { livePreview } from "./live-preview.js";
 import { outline, revealAnchor, revealPosition } from "./outline.js";
 import { footnotes, wikiLinks } from "./syntax.js";
@@ -24,7 +25,7 @@ const MODES = new Set(["live", "reading", "source"]);
 
 // mode is "live", "reading", or "source", and applies to Markdown files. onOutline({ headings, current })
 // reports a Markdown file's headings and the one at the top of the editor whenever either changes.
-function create({ parent, doc = "", path, mode = "live", label, nonce, onChange, onSave, onOpenLink, resolveImage, onTag, onOutline }) {
+function create({ parent, doc = "", path, mode = "live", label, nonce, onChange, onSave, onOpenLink, resolveImage, onTag, onOutline, onStatus }) {
   const extension = path.split(".").pop().toLowerCase();
   const isMarkdown = MARKDOWN.has(extension);
   const isProse = PROSE.has(extension);
@@ -34,13 +35,18 @@ function create({ parent, doc = "", path, mode = "live", label, nonce, onChange,
   const scheme = window.matchMedia("(prefers-color-scheme: dark)");
   let currentMode = MODES.has(mode) ? mode : "live";
   const previewExtension = isMarkdown ? livePreview({ onOpenLink, resolveImage, onTag }) : [];
-  // Reading mode keeps the live preview rendered and makes the document read-only. The content
+  // Reading mode renders the document without editable replacements. The content
   // stays focusable, so the keyboard can scroll it and open links with Mod-Enter.
   const readingExtension = [
     previewExtension, readingMode.of(true), EditorState.readOnly.of(true), EditorView.editable.of(false),
     EditorView.contentAttributes.of({ tabindex: "0" }), EditorView.editorAttributes.of({ class: "cm-reading" }),
   ];
-  const modeExtension = () => (!isMarkdown || currentMode === "source" ? [] : currentMode === "reading" ? readingExtension : previewExtension);
+  const modeExtension = () => (!isMarkdown || currentMode === "source" ? [] : currentMode === "reading" ? readingExtension : formattedEditing({ onOpenLink }));
+  const reportStatus = (state) => {
+    const selection = state.selection.main;
+    const line = state.doc.lineAt(selection.head);
+    onStatus?.({ line: line.number, column: selection.head - line.from + 1, selected: selection.to - selection.from });
+  };
 
   const extensions = [
     // CodeMirror adds its base styles in a <style> element; the page's CSP admits it by nonce.
@@ -54,19 +60,24 @@ function create({ parent, doc = "", path, mode = "live", label, nonce, onChange,
     syntaxHighlighting(classHighlighter),
     syntaxHighlighting(tagHighlighter([{ tag: tags.strikethrough, class: "tok-strikethrough" }])),
     bracketMatching(),
-    closeBrackets(),
+    // Prose follows text-editor typing conventions. Automatic bracket insertion is for code.
+    isProse ? [] : closeBrackets(),
     rectangularSelection(),
     crosshairCursor(),
     highlightSelectionMatches(),
     search({ top: true }),
     keymap.of([
       { key: "Mod-s", preventDefault: true, run: () => { onSave?.(); return true; } },
-      ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, indentWithTab,
+      ...(isProse ? [] : closeBracketsKeymap), ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap,
+      ...(isProse ? [] : [indentWithTab]),
     ]),
     EditorView.contentAttributes.of({ "aria-label": label || `Edit ${path}`, spellcheck: isProse ? "true" : "false" }),
     EditorView.editorAttributes.of({ class: `${isProse ? "cm-prose" : "cm-code"}${isMarkdown ? " cm-markdown" : ""}` }),
     themeSlot.of(EditorView.darkTheme.of(scheme.matches)),
-    EditorView.updateListener.of((update) => { if (update.docChanged) onChange?.(); }),
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) onChange?.();
+      if (update.docChanged || update.selectionSet) reportStatus(update.state);
+    }),
   ];
   if (isProse) {
     extensions.push(EditorView.lineWrapping, placeholder("Start writing…"));
@@ -76,7 +87,7 @@ function create({ parent, doc = "", path, mode = "live", label, nonce, onChange,
   if (isMarkdown) {
     extensions.push(
       markdown({ base: markdownLanguage, codeLanguages: fenceLanguages, extensions: [frontMatter, footnotes, wikiLinks] }),
-      codeFolding(), onOutline ? outline(onOutline) : [], modeSlot.of(modeExtension()),
+      lineNumbers(), codeFolding(), onOutline ? outline(onOutline) : [], modeSlot.of(modeExtension()),
     );
   } else if (code) {
     extensions.push(code.support);
@@ -84,6 +95,7 @@ function create({ parent, doc = "", path, mode = "live", label, nonce, onChange,
 
   const makeState = (text) => EditorState.create({ doc: text, extensions });
   const view = new EditorView({ parent, state: makeState(doc) });
+  reportStatus(view.state);
   let saved = view.state.doc;
   const followScheme = () => view.dispatch({ effects: themeSlot.reconfigure(EditorView.darkTheme.of(scheme.matches)) });
   scheme.addEventListener("change", followScheme);

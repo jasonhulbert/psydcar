@@ -1,0 +1,81 @@
+<psydcar-dialog #dialog heading="Review proposals" size="workspace"
+  [busy]="working()" (closed)="close()">
+  <button dialog-header-actions psButton="secondary" buttonSize="small" type="button" (click)="dialog.close()" [disabled]="working()">Close</button>
+
+  <div class="proposal-toolbar">
+    <div>
+      <p class="proposal-sidecar">{{ sidecarName() }}</p>
+      <p class="muted">Review agent edits before they are saved to your files.</p>
+    </div>
+    <div class="proposal-controls">
+      <psydcar-segmented-control label="Proposal status" [options]="statusOptions()"
+        [value]="reviewed()" (valueChange)="refresh($event)" [disabled]="working()" />
+      <button psButton="secondary" buttonSize="small" type="button" (click)="refresh()" [disabled]="working()">Refresh</button>
+    </div>
+  </div>
+
+  @if (error()) { <p class="proposal-feedback flash flash-danger" role="alert">{{ error() }}</p> }
+  @if (notice()) { <p class="proposal-feedback flash flash-success" role="status">{{ notice() }}</p> }
+
+  <div class="proposal-body">
+    <ul class="proposal-list" aria-label="Proposals">
+      @for (item of items(); track item.id) {
+        <li>
+          <button class="proposal-item" type="button" [attr.aria-current]="item.id === activeId() ? 'true' : null"
+            (click)="select(item.id)" [disabled]="working()">
+            <strong class="mono">{{ item.path }}</strong>
+            <span>{{ item.agent_name }}</span>
+            <small>{{ item.summary }}</small>
+          </button>
+        </li>
+      }
+    </ul>
+    <section class="proposal-detail" aria-label="Selected proposal">
+      @if (detail(); as proposal) {
+        <div class="proposal-heading">
+          <h3 class="mono">{{ proposal.path }}</h3>
+          @switch (proposal.status) {
+            @case ('approved') { <psydcar-badge tone="success">Approved</psydcar-badge> }
+            @case ('rejected') { <psydcar-badge>Rejected</psydcar-badge> }
+            @default { <psydcar-badge tone="info">Pending</psydcar-badge> }
+          }
+        </div>
+        <p class="muted">
+          {{ proposal.agent_name }} · Proposed {{ proposal.created_at | date:'medium' }}
+          @if (proposal.decided_at) { · Reviewed {{ proposal.decided_at | date:'medium' }} }
+        </p>
+        <p class="proposal-summary">{{ proposal.summary }}</p>
+
+        @if (proposal.stale) {
+          <p class="flash flash-warning" role="alert">The file changed or is unavailable. Ask the agent to propose a new edit.</p>
+        } @else if (blocked() && proposal.status === 'pending') {
+          <p class="flash flash-warning" role="status">Save or discard your open draft before approving this edit.</p>
+        }
+
+        @if (proposal.diff !== null) {
+          <psydcar-diff [diff]="proposal.diff" />
+        } @else if (proposal.before !== null && proposal.proposed !== null) {
+          <p class="muted">This edit is too large for a line-by-line diff. Compare the full versions below.</p>
+          <div class="proposal-versions">
+            <div><h4>Original</h4><pre tabindex="0" aria-label="Original text">{{ proposal.before }}</pre></div>
+            <div><h4>Proposed</h4><pre tabindex="0" aria-label="Proposed text">{{ proposal.proposed }}</pre></div>
+          </div>
+        }
+      } @else if (loading()) {
+        <p class="proposal-empty muted" role="status">Loading proposals…</p>
+      } @else if (!error() && !items().length) {
+        <psydcar-empty-state class="proposal-empty" icon="eye" [heading]="reviewed() ? 'No reviewed proposals' : 'No pending proposals'">
+          {{ reviewed() ? 'Your approvals and rejections appear here.' : 'Agents with proposal access can send edits here.' }}
+        </psydcar-empty-state>
+      }
+    </section>
+  </div>
+
+  @if (detail()?.status === 'pending') {
+    <footer class="dialog-footer">
+      <button psButton="secondary" type="button" (click)="decide('rejected')" [disabled]="working()">Reject</button>
+      <button psButton="primary" type="button" (click)="decide('approved')"
+        [disabled]="working() || detail()?.stale || blocked()">Approve and save</button>
+    </footer>
+  }
+</psydcar-dialog>

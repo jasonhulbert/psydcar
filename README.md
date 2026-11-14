@@ -4,14 +4,14 @@
 
 Psydcar lets your coding agents search your local notes, code, and PDFs.
 
-Point Psydcar at a folder and it builds a local search index called a **sidecar**. Coding agents such as Claude Code, Cursor, or any other [MCP](https://modelcontextprotocol.io) client can then search that sidecar and quote the exact file, line, or PDF page that answers their question. Your files stay where they are. Psydcar changes them only when you edit them yourself in the dashboard. Agents get read-only access.
+Point Psydcar at a folder and it builds a local search index called a **sidecar**. Coding agents such as Claude Code, Cursor, or any other [MCP](https://modelcontextprotocol.io) client can then search that sidecar and quote the exact file, line, or PDF page that answers their question. Your working files stay in their source folders. Agents get read access by default, and you can let selected connections propose edits for review.
 
-- **Local by default.** Indexing and search run on your machine. Nothing leaves it unless you turn on an embeddings provider.
+- **Local by default.** Indexing and search run on your machine. You can opt in to hosted sync for individual sidecars or send text to an embeddings provider.
 - **You choose what each agent sees.** Each MCP connection is limited to the sidecars you select.
 - **Answers come with sources.** Every result names its file and location, and says whether the file has changed since it was indexed.
 - **Stays current.** A built-in watcher re-indexes files as they change.
 - **CLI and browser dashboard.** Manage sidecars whichever way you prefer.
-- **Edit in the browser.** The dashboard includes a Markdown editor with live preview and a code editor. A saved change is searchable by your agents right away.
+- **Edit in the browser.** The app and dashboard include formatted Markdown editing, a rendered reading view, and a code editor. A saved change is searchable by your agents right away.
 
 ## Install
 
@@ -45,6 +45,16 @@ psydcar retrieve --sidecar "My notes" EVIDENCE_ID
 
 Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, edit their files, and prepare agent connections. Press Ctrl-C to stop it.
 
+## Open the Psydcar app
+
+Run `psydcar app` to browse your registered sidecars, edit text and Markdown files, and view images in your browser. Use **New file** or **New folder** to add an entry, and select an entry to move, rename, or delete it. Deletion is permanent and folders must be empty. Markdown has **Edit**, **Reading**, and **Source** modes, plus a heading outline. Edit styles the text while keeping Markdown markers visible and the layout stable. Reading renders properties, tables, images, and other Markdown content. Source uses monospace text and line numbers. The status bar shows your line, column, and selection. Use Tab to move focus out of prose; in code files, Tab indents. The app watches your source folders so agents can find the latest indexed text. If a file changes on disk before you save, Psydcar keeps your draft open and offers to reload the current file.
+
+Filter the sidecar list by name or source folder. In the workspace, use the file pane button in the editor toolbar to hide or show the file list. On narrow screens, **Files** switches back to the browser while keeping the open document and any unsaved edits.
+
+Choose **Web preview** and enter an HTML path within the sidecar, such as `demo/index.html` or `dist/index.html`. Psydcar serves the page and supported web assets from the entry point’s folder and its subfolders, in a sandboxed frame on a separate local origin. Build sites before previewing them and configure the build to use relative asset URLs such as `./assets/main.js`. Use **Reload preview** to pick up changes from disk or renew an expired preview.
+
+Use `psydcar dashboard` for sidecar and provider setup and MCP connection configuration. To run both browser interfaces at once, give one a different port with `--port`.
+
 ## Connect a coding agent
 
 Agents reach Psydcar through an MCP server that runs on your machine over stdio. Each server serves only the sidecars you pass to it. Find a sidecar's ID with `psydcar sidecar list`.
@@ -72,12 +82,28 @@ claude mcp add my-notes -- psydcar mcp --sidecar-id SIDECAR_ID
 
 Use the output of `command -v psydcar` as the `command` value. Desktop apps often don't inherit your shell's `PATH`, so an absolute path is the reliable choice. Repeat `--sidecar-id` to serve several sidecars, and restart the client after changing its settings.
 
-The server gives the agent two tools:
+The server gives the agent two tools by default:
 
 - `search` takes a `query` and an optional `limit`.
 - `retrieve` takes an `evidence_id` and returns the current text from disk.
 
 The agent can't widen its selection. Psydcar returns evidence, not answers, so the agent reads the sources and draws its own conclusions.
+
+## Review proposed edits
+
+In the dashboard's **Prepare an MCP connection** dialog, select a sidecar and check **Allow proposals** beside it. Generate the configuration, add it to the MCP client, and restart the client. The connection name appears on its proposals in the app. To configure a connection by hand, add `--propose-sidecar-id SIDECAR_ID --agent-name "My agent"` to its arguments. Each proposal grant must also have a corresponding `--sidecar-id` argument. Repeat the grant for each sidecar where the agent can propose edits.
+
+For those sidecars the agent can call `read_editable_file` to get an existing text file and its version, then call `propose_edit` with the complete replacement text and a one-line reason. Proposals wait in the local queue until you decide.
+
+In `psydcar app`, open the sidecar and choose **Review proposals**. Compare the changes and choose **Approve and save** or **Reject**. Approval preserves the file's line ending format and UTF-8 BOM. If the file changed after the agent read it, ask the agent for a new proposal. The **Reviewed** view shows recent decisions.
+
+## Sync a sidecar between two devices
+
+In the app, open a sidecar and choose **Sync**. Enable sync on the first device, then choose **Pair another device**. On the second device, register a local folder as a sidecar, open **Sync**, and enter the pairing code. Use an empty folder to start with the cloud copy, or use an existing folder to reconcile its contents. The development service requires a configured URL and an enrollment key for the first device. See the [sync service setup](cloud/sync/README.md).
+
+Files are saved to disk immediately, including when you're offline. The app retries automatically while the sidecar workspace is open and visible. Use **Sync now** to check immediately. Supported text, images, and PDFs sync as files. Hidden files, generated folders, symbolic links, and empty folders stay local. Settings, search indexes, embeddings, and the agent proposal queue stay on each device. Approved edits are shared through the files they change.
+
+If the two devices edit the same file before syncing, open **Sync** and select the file under **Conflicts to review**. The diff highlights changes between this device and the cloud. Switch to **Full files** to read or download either copy, then keep one version or merge supported text. You can resolve a detected conflict offline. The app shares your resolution the next time it syncs.
 
 ## Keep sidecars up to date
 
@@ -91,12 +117,12 @@ To update automatically, leave `psydcar watch` or `psydcar dashboard` running. B
 
 Select a sidecar in the dashboard and choose **Browse and edit files**. The file list shows the sidecar's indexed text and code files, plus its images. Open a file to edit it.
 
-- **Markdown** opens in live preview. Headings, emphasis, links, lists, task checkboxes, quotes, and code blocks render as you type. The raw Markdown appears on the line you're editing. **Reading** renders the whole file and makes it read-only. **Source** shows the plain text. The file on disk is always plain Markdown, and Psydcar never reformats it.
-- **Outline and folding.** The outline button in the editor toolbar lists the file's headings. Click one to scroll to it. In live preview and Reading mode, click the arrow beside a top-level heading to fold its section.
-- **Properties and tags.** YAML front matter at the top of a Markdown file shows as a list of properties. Click a property to edit the YAML. Click a tag, or type `#tag` in the file filter, to list the files with that tag.
-- **Tables** render as tables. Wide tables can use the space beside the text, and scroll sideways on small screens. Click a cell to edit the table's Markdown.
-- **Images** in Markdown render when they're files in the sidecar's folder, such as `![Chart](images/chart.png)` or `![[chart.png]]`. Images on the web aren't loaded.
-- **Callouts, footnotes, and HTML.** Callouts such as `> [!tip] Title` render as colored boxes. Footnote references such as `[^1]` show as numbers that link to the footnote. HTML blocks render with scripts, styles, and forms removed.
+- **Markdown** opens in **Edit**, with styled headings and emphasis and visible Markdown markers. Moving the caret or selecting text keeps the document layout stable. **Reading** renders the whole file and makes it read-only. **Source** shows monospace text and line numbers. The file on disk is always plain Markdown, and Psydcar never reformats it.
+- **Outline and folding.** The outline button in the editor toolbar lists the file's headings. Click one to scroll to it. In Reading mode, click the arrow beside a top-level heading to fold its section.
+- **Properties and tags.** In Reading mode, YAML front matter at the top of a Markdown file shows as a list of properties. Switch to Edit or Source to change the YAML. Click a tag, or type `#tag` in the file filter, to list the files with that tag.
+- **Tables** render as tables in Reading mode. Wide tables can use the space beside the text, and scroll sideways on small screens. Switch to Edit or Source to change the table's Markdown.
+- **Images** in Reading mode render when they're files in the sidecar's folder, such as `![Chart](images/chart.png)` or `![[chart.png]]`. Images on the web aren't loaded.
+- **Callouts, footnotes, and HTML.** In Reading mode, callouts such as `> [!tip] Title` render as colored boxes. Footnote references such as `[^1]` show as numbers that link to the footnote. HTML blocks render with scripts, styles, and forms removed.
 - **Links.** ⌘-click (Ctrl-click on Linux) a link or image to open it, or press ⌘Enter with the cursor on it. In Reading mode, a plain click opens it. Web links open in a new tab. Relative links, such as `../ideas.md#next-steps`, open that file in the editor and scroll to the heading. A link without an extension matches a Markdown file of that name.
 - **Wiki links** such as `[[Project plan]]`, `[[Project plan|the plan]]`, or `[[Project plan#Goals]]` find the file by name. A path from the sidecar's folder wins, then a file in the same folder, then the match with the shortest path. Names match without regard to case, and `.md` is optional.
 - **Code and other text files** open in a code editor with syntax highlighting, line numbers, and search.
@@ -166,7 +192,9 @@ Psydcar keeps its index in one per-user folder:
 - **macOS:** `~/Library/Application Support/psydcar`
 - **Linux:** `$XDG_DATA_HOME/psydcar`, which defaults to `~/.local/share/psydcar`
 
-To use a different folder, set `PSYDCAR_HOME` to an absolute path. If you do, set the same value for the CLI, the dashboard, and your MCP client.
+To use a different folder, set `PSYDCAR_HOME` to an absolute path. If you do, set the same value for the CLI, app, dashboard, and MCP client.
+
+The data folder contains `state.sqlite3` for sidecar registrations and provider settings and `search.sqlite3` for indexed documents and embeddings. The first run upgrades an existing `psydcar.sqlite3` database automatically and retains it as a pre-upgrade backup. Existing sidecar IDs and indexed evidence IDs carry over. Stop running Psydcar processes before upgrading so all interfaces switch to the new stores together.
 
 ## Upgrade and uninstall
 

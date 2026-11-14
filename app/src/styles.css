@@ -1,0 +1,28 @@
+psydcar-app:has(.app-workspace) .app-header-inner { max-width: none; }
+psydcar-app { display: block; min-height: 100dvh; }
+main:focus { outline: none; }
+
+.skip-link {
+  position: fixed; top: 8px; left: 8px; z-index: 100;
+  padding: var(--space-2) var(--space-4); border-radius: var(--radius);
+  background: var(--primary); color: var(--primary-fg); transform: translateY(-160%);
+}
+.skip-link:focus { transform: none; }
+
+.eyebrow {
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 550;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.muted { color: var(--fg-muted); }
+.btn-sm psydcar-icon { --icon-size: 14px; }
+.header-local-short { display: none; }
+
+@media (max-width: 360px) {
+  .header-local-full { display: none; }
+  .header-local-short { display: inline; }
+}

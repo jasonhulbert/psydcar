@@ -46,13 +46,25 @@ def _version(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def text_bytes(content: str, newline: str, bom: bool) -> bytes:
+    if newline == "\r\n":
+        content = content.replace("\r\n", "\n").replace("\n", "\r\n")
+    try:
+        data = (b"\xef\xbb\xbf" if bom else b"") + content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise StoreError("Send valid UTF-8 text.") from exc
+    if len(data) > MAX_FILE_BYTES:
+        raise StoreError("The file would be larger than the 2 MiB text limit. Psydcar didn't save it.")
+    return data
+
+
 def _stamp(path: Path) -> dict[str, Any]:
     info = path.stat()
     return {"size": info.st_size, "mtime_ns": info.st_mtime_ns,
             "modified_at": datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat(timespec="seconds")}
 
 
-def _parts(relative_path: Any) -> list[str]:
+def _parts(relative_path: Any, *, allowed_ignored: frozenset[str] = frozenset()) -> list[str]:
     if not isinstance(relative_path, str) or not relative_path.strip("/"):
         raise StoreError("Enter a path inside the sidecar folder.")
     if len(relative_path) > MAX_PATH_LENGTH or "\0" in relative_path or "\\" in relative_path:
@@ -66,7 +78,7 @@ def _parts(relative_path: Any) -> list[str]:
         if len(part.encode("utf-8")) > 255:
             raise StoreError(f'"{part[:40]}…" is longer than the file system allows.')
     for part in parts[:-1]:
-        if part in IGNORED_DIRECTORIES:
+        if part in IGNORED_DIRECTORIES and part not in allowed_ignored:
             raise StoreError(f'Psydcar skips folders named "{part}".')
     return parts
 
@@ -244,14 +256,13 @@ class SourceFiles:
         _require_text_name(path.name)
         if not path.is_file():
             raise FileConflict(f"{clean} was moved or deleted after you opened it.", None)
-        current = path.read_bytes()
+        if path.stat().st_size > MAX_FILE_BYTES:
+            raise FileConflict(f"{clean} grew beyond the text editing limit after you opened it.", None)
+        with path.open("rb") as stream:
+            current = stream.read(MAX_FILE_BYTES + 1)
         if _version(current) != version:
             raise FileConflict(f"{clean} changed on disk after you opened it.", _version(current))
-        if newline == "\r\n":
-            content = content.replace("\r\n", "\n").replace("\n", "\r\n")
-        data = (b"\xef\xbb\xbf" if bom else b"") + content.encode("utf-8")
-        if len(data) > MAX_FILE_BYTES:
-            raise StoreError("The file would be larger than the 2 MiB text limit. Psydcar didn't save it.")
+        data = text_bytes(content, newline, bom)
         self._replace(path, data)
         return {"path": clean, "version": _version(data), **_stamp(path)}
 
@@ -307,13 +318,18 @@ class SourceFiles:
             raise StoreError(f"{source_clean} doesn't exist.")
         is_folder = source_path.is_dir()
         if is_folder:
+            if source_path.name in IGNORED_DIRECTORIES:
+                raise StoreError(f'Psydcar skips folders named "{source_path.name}".')
             if target_path.name in IGNORED_DIRECTORIES:
                 raise StoreError(f'Psydcar skips folders named "{target_path.name}".')
             if target_path.is_relative_to(source_path):
                 raise StoreError("A folder can't be moved inside itself.")
+        elif not source_path.is_file():
+            raise StoreError(f"{source_clean} isn't a regular file.")
         elif _is_image(source_path.name):
             _require_image_name(target_path.name)
         else:
+            _require_text_name(source_path.name)
             _require_text_name(target_path.name)
         # A case-only rename on a case-insensitive disk points at the same file, which is fine.
         if os.path.lexists(target_path) and not os.path.samefile(source_path, target_path):
@@ -328,6 +344,8 @@ class SourceFiles:
     def delete(self, relative_path: Any) -> dict[str, Any]:
         path, clean = self._path(relative_path)
         if path.is_dir():
+            if path.name in IGNORED_DIRECTORIES:
+                raise StoreError(f'Psydcar skips folders named "{path.name}".')
             leftovers = [item for item in path.iterdir() if item.name not in _MAC_JUNK]
             if leftovers:
                 raise StoreError(f"{clean} isn't empty. Delete or move its contents first.")

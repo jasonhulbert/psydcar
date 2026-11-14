@@ -1,0 +1,1 @@
+{ "version": "0.0.1", "configurations": [ { "name": "dashboard", "runtimeExecutable": "env", "runtimeArgs": ["PSYDCAR_HOME=/private/tmp/claude-501/-Users-jasonhulbert-Projects-psydcar/adf4b7aa-6c08-4e65-8a44-c208f674f16c/scratchpad/home", "/Users/jasonhulbert/Projects/psydcar/.venv/bin/python", "-m", "psydcar", "dashboard", "--port", "8799", "--no-open"], "port": 8799 } ] }

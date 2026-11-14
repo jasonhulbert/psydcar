@@ -575,7 +575,7 @@
   }
 
   function updateSelectedCount() {
-    const selected = byId("connection-sidecars").querySelectorAll("input:checked").length;
+    const selected = byId("connection-sidecars").querySelectorAll('input[name="sidecar-id"]:checked').length;
     byId("selected-count").textContent = `${selected} of ${model.sidecars.length} selected`;
   }
 
@@ -587,15 +587,28 @@
     const list = byId("connection-sidecars");
     list.replaceChildren();
     for (const sidecar of model.sidecars) {
-      const option = add(list, "label", "picker-option");
+      const row = add(list, "div", "picker-row");
+      const option = add(row, "label", "picker-option");
       const input = add(option, "input");
       input.type = "checkbox";
       input.value = sidecar.id;
       input.name = "sidecar-id";
-      input.addEventListener("change", updateSelectedCount);
       const text = add(option, "span", "picker-option-text");
       add(text, "strong", "", sidecar.name);
       add(text, "small", "", sidecar.source_path).title = `${sidecar.source_path}\n${sidecar.id}`;
+      const grantLabel = add(row, "label", "picker-grant");
+      const grant = add(grantLabel, "input");
+      grant.type = "checkbox";
+      grant.name = "proposal-id";
+      grant.value = sidecar.id;
+      grant.disabled = true;
+      grant.setAttribute("aria-label", `Allow edit proposals for ${sidecar.name}`);
+      add(grantLabel, "span", "", "Allow proposals");
+      input.addEventListener("change", () => {
+        grant.disabled = !input.checked;
+        if (!input.checked) grant.checked = false;
+        updateSelectedCount();
+      });
     }
     list.hidden = model.sidecars.length === 0;
     byId("connection-empty").hidden = model.sidecars.length !== 0;
@@ -915,7 +928,7 @@
       const anchor = files.pendingAnchor?.path === path ? files.pendingAnchor.fragment : "";
       files.pendingAnchor = null;
       if (anchor) files.editor.revealAnchor(anchor);
-      // Live preview opens fully rendered. Focusing it would reveal the first line's raw syntax.
+      // Leave focus in the file list until the user enters the document.
       if (files.editor.mode === "source") files.editor.focus();
     } catch (error) {
       closeFile();
@@ -1479,7 +1492,9 @@
   byId("connection-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = byId("connection-name").value.trim();
-    const sidecarIds = Array.from(byId("connection-sidecars").querySelectorAll("input:checked"), (input) => input.value);
+    const picker = byId("connection-sidecars");
+    const sidecarIds = Array.from(picker.querySelectorAll('input[name="sidecar-id"]:checked'), (input) => input.value);
+    const proposalIds = Array.from(picker.querySelectorAll('input[name="proposal-id"]:checked'), (input) => input.value);
     if (!name) { formError("connection-error", "Enter a server name.", byId("connection-name")); byId("connection-name").focus(); return; }
     if (!sidecarIds.length) { formError("connection-error", "Select at least one sidecar."); return; }
     const submit = event.target.querySelector('[type="submit"]');
@@ -1487,10 +1502,14 @@
     byId("connection-result").hidden = true;
     model.connectionPreview = null;
     try {
-      const preview = await request("/api/connections/preview", { method: "POST", body: JSON.stringify({ name, sidecar_ids: sidecarIds }) });
+      const preview = await request("/api/connections/preview", {
+        method: "POST", body: JSON.stringify({ name, sidecar_ids: sidecarIds, proposal_ids: proposalIds }),
+      });
       model.connectionPreview = preview;
       byId("result-name").textContent = preview.name;
       byId("result-selection").textContent = `Limited to ${preview.selected.map((item) => item.name).join(", ")}.`;
+      const proposalNames = preview.selected.filter((item) => proposalIds.includes(item.id)).map((item) => item.name);
+      if (proposalNames.length) byId("result-selection").textContent += ` Proposals allowed for ${proposalNames.join(", ")}.`;
       highlightJson(byId("connection-json"), preview.config);
       byId("result-footnote").textContent = `Upgrading Psydcar doesn't break this entry. If you remove a selected sidecar, the server won't start until you generate a new entry.${model.provider.api_key_env ? ` For embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
       byId("connection-result").hidden = false;

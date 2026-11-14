@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .embeddings import (
-    EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore, _state_schema, _vector_schema,
+    EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore,
     normalize_vector,
 )
 from .pdf_text import PdfTextError, extract_pdf_page, extract_pdf_pages
@@ -64,62 +64,6 @@ class _ScannedDocument:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _schema(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY,
-            sidecar_id TEXT NOT NULL REFERENCES sidecars(id) ON DELETE CASCADE,
-            relative_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            indexed_at TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT 'text',
-            UNIQUE(sidecar_id, relative_path)
-        );
-        CREATE TABLE IF NOT EXISTS passages (
-            id TEXT PRIMARY KEY,
-            document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-            start_line INTEGER NOT NULL,
-            end_line INTEGER NOT NULL,
-            context TEXT NOT NULL,
-            page_number INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS pdf_pages (
-            document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-            page_number INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            message TEXT NOT NULL,
-            PRIMARY KEY(document_id, page_number)
-        );
-        CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5(
-            evidence_id UNINDEXED, context, tokenize='unicode61'
-        );
-        CREATE TRIGGER IF NOT EXISTS passages_after_delete AFTER DELETE ON passages BEGIN
-            DELETE FROM passages_fts WHERE evidence_id = old.id;
-        END;"""
-    )
-    # Add PDF fields to stores created by the text/code milestone.
-    document_columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
-    if "kind" not in document_columns:
-        connection.execute("ALTER TABLE documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'text'")
-    passage_columns = {row[1] for row in connection.execute("PRAGMA table_info(passages)")}
-    if "page_number" not in passage_columns:
-        connection.execute("ALTER TABLE passages ADD COLUMN page_number INTEGER")
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS sidecar_updates (
-            sidecar_id TEXT PRIMARY KEY REFERENCES sidecars(id) ON DELETE CASCADE,
-            run_id TEXT NOT NULL,
-            started_at TEXT NOT NULL,
-            completed_at TEXT,
-            last_success_at TEXT,
-            added INTEGER NOT NULL DEFAULT 0,
-            changed INTEGER NOT NULL DEFAULT 0,
-            deleted INTEGER NOT NULL DEFAULT 0,
-            unchanged INTEGER NOT NULL DEFAULT 0,
-            issues_json TEXT NOT NULL DEFAULT '[]'
-        )"""
-    )
 
 
 def _read_source(path: Path, root: Path | None = None) -> tuple[bytes | None, str, str | None]:
@@ -178,7 +122,8 @@ def _chunks(text: str) -> list[tuple[int, int, str]]:
     return result
 
 
-def _walk_candidates(root: Path, onerror: Callable[[OSError], None]) -> Iterator[tuple[Path, bool]]:
+def _walk_candidates(root: Path, onerror: Callable[[OSError], None], *,
+                     extensions: frozenset[str] = SUPPORTED_EXTENSIONS | {".pdf"}) -> Iterator[tuple[Path, bool]]:
     """Yield files in the manual updater's scope and linked directories it must not enter."""
     for directory, dirs, files in os.walk(root, topdown=True, followlinks=False, onerror=onerror):
         traversable = []
@@ -193,7 +138,7 @@ def _walk_candidates(root: Path, onerror: Callable[[OSError], None]) -> Iterator
         dirs[:] = sorted(traversable)
         for name in sorted(files):
             extension = Path(name).suffix.lower()
-            if name.startswith(".") or (extension not in SUPPORTED_EXTENSIONS and extension != ".pdf"):
+            if name.startswith(".") or extension not in extensions:
                 continue
             yield Path(directory) / name, False
 
@@ -290,12 +235,12 @@ def _scan(sidecar: Sidecar) -> tuple[list[_ScannedDocument], list[str], set[str]
     return documents, skipped, seen, blocked_directories
 
 
-def _resolve_selection(store: SidecarStore, references: list[str]) -> list[Sidecar]:
+def _resolve_selection(store: SidecarStore, references: list[str], exact_ids: bool) -> list[Sidecar]:
     if not references:
         raise StoreError("Select at least one sidecar with --sidecar.")
     selected = {}
     for reference in references:
-        sidecar = store.get(reference)
+        sidecar = store.get(reference, exact_id=exact_ids)
         selected[sidecar.id] = sidecar
     return list(selected.values())
 
@@ -313,13 +258,22 @@ class EvidenceStore:
 
     def update(self, reference: str) -> IndexReport:
         """Refresh changed sources while retaining prior evidence for failed reads."""
+        self.sidecars.cleanup_index()
         sidecar = self.sidecars.get(reference)
         provider = ProviderStore(self.sidecars).get()
         run_id = str(uuid.uuid4())
         started_at = _now()
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                with self.sidecars._connect() as state:
+                    active = state.execute("SELECT 1 FROM sidecars WHERE id = ?", (sidecar.id,)).fetchone()
+                if active is None:
+                    raise StoreError("This sidecar was removed before indexing could start.")
+                connection.execute(
+                    "INSERT OR IGNORE INTO sidecar_index (id, status, updated_at) VALUES (?, 'update_pending', ?)",
+                    (sidecar.id, started_at),
+                )
                 connection.execute(
                     """INSERT INTO sidecar_updates (sidecar_id, run_id, started_at)
                        VALUES (?, ?, ?) ON CONFLICT(sidecar_id) DO UPDATE SET
@@ -328,7 +282,7 @@ class EvidenceStore:
                     (sidecar.id, run_id, started_at),
                 )
                 connection.execute(
-                    "UPDATE sidecars SET status = 'update_pending', updated_at = ? WHERE id = ?",
+                    "UPDATE sidecar_index SET status = 'update_pending', updated_at = ? WHERE id = ?",
                     (started_at, sidecar.id),
                 )
         except sqlite3.Error as exc:
@@ -344,8 +298,8 @@ class EvidenceStore:
             raise StoreError(message) from exc
         reuse_embeddings = False
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 self._check_run(connection, sidecar.id, run_id)
                 old_rows = connection.execute(
                     "SELECT id, relative_path, sha256, kind FROM documents WHERE sidecar_id = ?",
@@ -396,8 +350,9 @@ class EvidenceStore:
                     """SELECT count(*) FROM passages p JOIN documents d ON d.id = p.document_id
                        WHERE d.sidecar_id = ?""", (sidecar.id,),
                 ).fetchone()[0]
-                if provider is not None and not (added or changed or deleted):
-                    _state_schema(connection)
+                if added or changed or deleted:
+                    connection.execute("DELETE FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,))
+                elif provider is not None:
                     state = connection.execute(
                         "SELECT * FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,)
                     ).fetchone()
@@ -408,7 +363,7 @@ class EvidenceStore:
                         and state["expected_count"] == passage_count
                     )
                 connection.execute(
-                    "UPDATE sidecars SET status = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE sidecar_index SET status = ?, updated_at = ? WHERE id = ?",
                     ("embedding_pending" if provider else "update_pending", indexed_at, sidecar.id),
                 )
                 connection.execute(
@@ -453,7 +408,7 @@ class EvidenceStore:
              *(f"Removed source: {path}" for path in deleted_paths)],
         )
         return IndexReport(
-            self.sidecars.get(sidecar.id), len(documents), passage_count, tuple(skipped), pdf_notices,
+            self.sidecars.get(sidecar.id, exact_id=True), len(documents), passage_count, tuple(skipped), pdf_notices,
             embedded_count, embedding_status, provider_error, added, changed, deleted, unchanged,
             tuple(deleted_paths),
         )
@@ -467,8 +422,8 @@ class EvidenceStore:
     def _finish_update(self, sidecar_id: str, run_id: str, status: str, issues: list[str]) -> None:
         now = _now()
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 self._check_run(connection, sidecar_id, run_id)
                 connection.execute(
                     """UPDATE sidecar_updates SET completed_at = ?, issues_json = ?,
@@ -478,7 +433,7 @@ class EvidenceStore:
                     (now, json.dumps(issues), status, now, sidecar_id, run_id),
                 )
                 connection.execute(
-                    "UPDATE sidecars SET status = ?, updated_at = ? WHERE id = ?",
+                    "UPDATE sidecar_index SET status = ?, updated_at = ? WHERE id = ?",
                     (status, now, sidecar_id),
                 )
         except sqlite3.Error as exc:
@@ -488,8 +443,7 @@ class EvidenceStore:
         """Return persisted update details for the CLI, watcher, and dashboard."""
         sidecar = self.sidecars.get(reference)
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
                 row = connection.execute(
                     "SELECT * FROM sidecar_updates WHERE sidecar_id = ?", (sidecar.id,)
                 ).fetchone()
@@ -513,8 +467,7 @@ class EvidenceStore:
         """Summarize indexed source coverage for management surfaces."""
         sidecar = self.sidecars.get(reference)
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
                 row = connection.execute(
                     """SELECT count(*) AS files,
                               coalesce(sum(CASE WHEN kind = 'pdf' THEN 1 ELSE 0 END), 0) AS pdfs,
@@ -545,11 +498,12 @@ class EvidenceStore:
 
     def _build_embeddings(self, sidecar_id: str, provider: ProviderConfig, run_id: str) -> tuple[int, str | None]:
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 self._check_run(connection, sidecar_id, run_id)
-                _vector_schema(connection)
-                _state_schema(connection)
+                active = ProviderStore(self.sidecars).get()
+                if active is None or active.revision != provider.revision:
+                    return 0, "Provider settings changed during indexing. Reindex this sidecar."
                 rows = connection.execute(
                     """SELECT p.id, p.context FROM passages p JOIN documents d ON d.id = p.document_id
                        WHERE d.sidecar_id = ? ORDER BY d.relative_path, p.page_number, p.start_line""",
@@ -568,10 +522,11 @@ class EvidenceStore:
         dimension = None
         try:
             for start in range(0, len(rows), 16):
-                with self.sidecars._connect() as connection:
+                with self.sidecars._index_connect() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
                     self._check_run(connection, sidecar_id, run_id)
-                    active = connection.execute("SELECT revision FROM embedding_provider WHERE id = 1").fetchone()
-                    if active is None or active["revision"] != provider.revision:
+                    active = ProviderStore(self.sidecars).get()
+                    if active is None or active.revision != provider.revision:
                         raise EmbeddingError("Provider settings changed during indexing. Reindex this sidecar.")
                 batch = rows[start : start + 16]
                 vectors = client.embed([row["context"] for row in batch])
@@ -580,12 +535,12 @@ class EvidenceStore:
                         dimension = len(vector)
                     elif len(vector) != dimension:
                         raise EmbeddingError("Embedding provider changed vector dimensions during indexing.")
-                with self.sidecars._connect() as connection:
+                with self.sidecars._index_connect() as connection:
+                    connection.execute("BEGIN IMMEDIATE")
                     self._check_run(connection, sidecar_id, run_id)
-                    active = connection.execute("SELECT revision FROM embedding_provider WHERE id = 1").fetchone()
-                    if active is None or active["revision"] != provider.revision:
+                    active = ProviderStore(self.sidecars).get()
+                    if active is None or active.revision != provider.revision:
                         raise EmbeddingError("Provider settings changed during indexing. Reindex this sidecar.")
-                    _vector_schema(connection)
                     for row, vector in zip(batch, vectors):
                         connection.execute(
                             """INSERT INTO passage_embeddings (passage_id, provider_revision, vector_json, dimension)
@@ -599,10 +554,11 @@ class EvidenceStore:
                         "UPDATE sidecar_embedding_state SET embedded_count = ?, updated_at = ? WHERE sidecar_id = ? AND provider_revision = ?",
                         (embedded_count, _now(), sidecar_id, provider.revision),
                     )
-            with self.sidecars._connect() as connection:
+            with self.sidecars._index_connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 self._check_run(connection, sidecar_id, run_id)
-                active = connection.execute("SELECT revision FROM embedding_provider WHERE id = 1").fetchone()
-                if active is None or active["revision"] != provider.revision:
+                active = ProviderStore(self.sidecars).get()
+                if active is None or active.revision != provider.revision:
                     raise EmbeddingError("Provider settings changed during indexing. Reindex this sidecar.")
                 connection.execute(
                     "UPDATE sidecar_embedding_state SET status = 'complete', message = NULL, updated_at = ? WHERE sidecar_id = ? AND provider_revision = ?",
@@ -610,10 +566,11 @@ class EvidenceStore:
                 )
         except EmbeddingError as exc:
             message = str(exc)
-            with self.sidecars._connect() as connection:
+            with self.sidecars._index_connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 self._check_run(connection, sidecar_id, run_id)
-                active = connection.execute("SELECT revision FROM embedding_provider WHERE id = 1").fetchone()
-                if active is not None and active["revision"] == provider.revision:
+                active = ProviderStore(self.sidecars).get()
+                if active is not None and active.revision == provider.revision:
                     connection.execute(
                         "UPDATE sidecar_embedding_state SET status = 'error', message = ?, updated_at = ? WHERE sidecar_id = ? AND provider_revision = ?",
                         (message, _now(), sidecar_id, provider.revision),
@@ -627,8 +584,7 @@ class EvidenceStore:
         """Return persisted page notices so users can inspect them after restart."""
         sidecar = self.sidecars.get(reference)
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
                 rows = connection.execute(
                     """SELECT d.relative_path, p.page_number, p.status, p.message
                        FROM pdf_pages p JOIN documents d ON d.id = p.document_id
@@ -642,9 +598,9 @@ class EvidenceStore:
             for row in rows
         ]
 
-    def search(self, references: list[str], query: str, limit: int = 10) -> list[dict[str, Any]]:
+    def search(self, references: list[str], query: str, limit: int = 10, *, exact_ids: bool = False) -> list[dict[str, Any]]:
         self.last_search_warning = None
-        selected = _resolve_selection(self.sidecars, references)
+        selected = _resolve_selection(self.sidecars, references, exact_ids)
         terms = re.findall(r"\w+", query, flags=re.UNICODE)
         if not terms:
             raise StoreError("Search query must contain at least one word or number.")
@@ -657,8 +613,7 @@ class EvidenceStore:
         vector_rows: list[sqlite3.Row] = []
         embeddings_ready = False
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
                 lexical_rows = connection.execute(
                     f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, d.sidecar_id,
                                d.relative_path, d.sha256, d.indexed_at, d.kind, bm25(passages_fts) AS score
@@ -670,8 +625,6 @@ class EvidenceStore:
                     (expression, *selected_by_id, max(limit * 10, 100)),
                 ).fetchall()
                 if provider is not None:
-                    _state_schema(connection)
-                    _vector_schema(connection)
                     states = connection.execute(
                         f"SELECT * FROM sidecar_embedding_state WHERE sidecar_id IN ({placeholders})",
                         tuple(selected_by_id),
@@ -735,7 +688,7 @@ class EvidenceStore:
             rows = lexical_rows[:limit]
         results = []
         for row in rows:
-            sidecar = self.sidecars.get(row["sidecar_id"])
+            sidecar = self.sidecars.get(row["sidecar_id"], exact_id=True)
             path = _source_path(sidecar, row["relative_path"])
             data, source_status, _ = (
                 _read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"
@@ -765,13 +718,12 @@ class EvidenceStore:
             results.append(evidence)
         return results
 
-    def retrieve(self, references: list[str], evidence_id: str) -> dict[str, Any]:
-        selected = _resolve_selection(self.sidecars, references)
+    def retrieve(self, references: list[str], evidence_id: str, *, exact_ids: bool = False) -> dict[str, Any]:
+        selected = _resolve_selection(self.sidecars, references, exact_ids)
         selected_by_id = {item.id: item for item in selected}
         placeholders = ", ".join("?" for _ in selected)
         try:
-            with self.sidecars._connect() as connection:
-                _schema(connection)
+            with self.sidecars._index_connect() as connection:
                 row = connection.execute(
                     f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, d.sidecar_id,
                                d.relative_path, d.sha256, d.indexed_at, d.kind
@@ -783,7 +735,7 @@ class EvidenceStore:
             raise StoreError(f"Cannot retrieve evidence: {exc}") from exc
         if row is None:
             raise StoreError("Evidence was not found in the selected sidecars.")
-        sidecar = self.sidecars.get(row["sidecar_id"])
+        sidecar = self.sidecars.get(row["sidecar_id"], exact_id=True)
         path = _source_path(sidecar, row["relative_path"])
         data, source_status, reason = (
             _read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"

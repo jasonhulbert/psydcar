@@ -21,13 +21,17 @@ from psydcar.store import SidecarStore
 
 
 class MCPProcess:
-    def __init__(self, store_dir: Path, workdir: Path, *sidecar_ids: str):
+    def __init__(self, store_dir: Path, workdir: Path, *sidecar_ids: str, proposal_ids: tuple[str, ...] = ()):
         environment = os.environ.copy()
         environment["PSYDCAR_HOME"] = str(store_dir)
         environment["PYTHONPATH"] = os.pathsep.join(filter(None, (str(PROJECT_ROOT / "src"), environment.get("PYTHONPATH"))))
         command = [sys.executable, "-m", "psydcar", "mcp"]
         for sidecar_id in sidecar_ids:
             command.extend(("--sidecar-id", sidecar_id))
+        for sidecar_id in proposal_ids:
+            command.extend(("--propose-sidecar-id", sidecar_id))
+        if proposal_ids:
+            command.extend(("--agent-name", "Review assistant"))
         self.process = subprocess.Popen(command, cwd=workdir, env=environment, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
         self.lines: queue.Queue[str] = queue.Queue()
@@ -106,10 +110,83 @@ class MCPTests(unittest.TestCase):
         for sidecar in self.sidecars:
             evidence.update(sidecar.id)
 
-    def process(self, workdir: Path, *ids: str) -> MCPProcess:
-        process = MCPProcess(self.store_dir, workdir, *ids)
+    def process(self, workdir: Path, *ids: str, proposal_ids: tuple[str, ...] = ()) -> MCPProcess:
+        process = MCPProcess(self.store_dir, workdir, *ids, proposal_ids=proposal_ids)
         self.addCleanup(process.close)
         return process
+
+    def test_app_save_is_available_to_an_existing_connection(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from psydcar.api import create_app
+
+        sidecar = self.sidecars[0]
+        connection = self.process(self.work_a, sidecar.id)
+        connection.initialize()
+        origin = "http://127.0.0.1:8765"
+        with TestClient(create_app(self.store, 8765), base_url=origin) as app:
+            token = app.get("/api/v1/session").json()["token"]
+            url = f"/api/v1/sidecars/{sidecar.id}/file?path=note.md"
+            opened = app.get(url).json()
+            saved = app.put(url, json={"content": "# Lantern meadow\n", "version": opened["version"]},
+                            headers={"Origin": origin, "X-Psydcar-Token": token})
+            self.assertEqual(saved.status_code, 200, saved.text)
+            results = []
+            deadline = time.monotonic() + 8
+            while not results and time.monotonic() < deadline:
+                results = connection.call("search", {"query": "lantern"})["structuredContent"]["results"]
+                if not results:
+                    time.sleep(0.1)
+            self.assertTrue(results, "The saved file was not reindexed")
+            result = connection.call("retrieve", {"evidence_id": results[0]["evidence_id"]})["structuredContent"]
+            self.assertEqual(result["context"], "# Lantern meadow")
+
+    def test_review_edits_submitted_by_an_agent(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from psydcar.api import create_app
+
+        sidecar = self.sidecars[0]
+        path = self.sources[0] / "note.md"
+        original = b"\xef\xbb\xbf# Notes\r\n"
+        path.write_bytes(original)
+        connection = self.process(self.work_a, sidecar.id, proposal_ids=(sidecar.id,))
+        connection.initialize()
+        target = {"sidecar_id": sidecar.id, "path": "note.md"}
+        base = connection.call("read_editable_file", target)["structuredContent"]
+
+        def propose(text: str, summary: str) -> str:
+            result = connection.call("propose_edit", {
+                **target, "version": base["version"], "content": text, "summary": summary,
+            })
+            return result["structuredContent"]["id"]
+
+        approved_id = propose("# Notes\nLantern meadow\n", "Add the latest field note.")
+        rejected_id = propose("# Notes\nMove to archive.\n", "Suggest an archive note.")
+        self.assertEqual(path.read_bytes(), original)
+
+        origin = "http://127.0.0.1:8765"
+        url = f"/api/v1/sidecars/{sidecar.id}/proposals"
+        with TestClient(create_app(self.store, 8765), base_url=origin) as app:
+            token = app.get("/api/v1/session").json()["token"]
+            headers = {"Origin": origin, "X-Psydcar-Token": token}
+            detail = app.get(f"{url}/{approved_id}").json()
+            self.assertEqual(detail["agent_name"], "Review assistant")
+            self.assertIn("+Lantern meadow", detail["diff"])
+            for proposal_id, decision in ((rejected_id, "rejected"), (approved_id, "approved")):
+                app.post(f"{url}/{proposal_id}", json={"decision": decision}, headers=headers).raise_for_status()
+            history = app.get(url, params={"reviewed": "true"}).json()
+            self.assertEqual({item["id"]: item["status"] for item in history["items"]},
+                             {approved_id: "approved", rejected_id: "rejected"})
+            self.assertEqual(path.read_bytes(), b"\xef\xbb\xbf# Notes\r\nLantern meadow\r\n")
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                hits = connection.call("search", {"query": "lantern"})["structuredContent"]["results"]
+                if hits:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("The approved edit was not reindexed")
 
     def test_protocol_selection_discovery_structured_evidence_and_freshness(self) -> None:
         alpha, beta, private = self.sidecars

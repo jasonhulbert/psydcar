@@ -1,6 +1,5 @@
-// Markdown live preview: the document text never changes, but syntax marks are hidden and
-// rendered as formatting until the cursor reaches them. Revealing marks on the lines being
-// edited keeps every character reachable without a separate source mode.
+// Rendered Markdown for Reading mode. Editing uses formatted-editing.js, which keeps
+// source text visible and does not change layout when the caret moves.
 
 import { foldEffect, foldable, foldedRanges, syntaxTree, unfoldEffect } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
@@ -545,7 +544,7 @@ function build(view, options) {
 const inlinePreview = (options) => ViewPlugin.fromClass(class {
   constructor(view) { this.decorations = build(view, options); }
   update(update) {
-    if (update.docChanged || update.viewportChanged || update.selectionSet || update.focusChanged
+    if (update.docChanged || update.viewportChanged
       || syntaxTree(update.startState) !== syntaxTree(update.state) || foldedRanges(update.startState) !== foldedRanges(update.state)
       || update.startState.facet(readingMode) !== update.state.facet(readingMode)) {
       this.decorations = build(update.view, options);
@@ -620,6 +619,10 @@ export function livePreview({ onOpenLink, resolveImage, onTag } = {}) {
     follow: (view, url) => follow(view, url, onOpenLink),
     go: (view, target) => go(view, target, onOpenLink),
   };
+  return [inlinePreview(options), blockPreview(options), markdownLinks(onOpenLink), EditorView.editorAttributes.of({ class: "cm-live-preview" })];
+}
+
+export function markdownLinks(onOpenLink) {
   const openLinks = EditorView.domEventHandlers({
     mousedown(event, view) {
       if (event.button !== 0 || !followsClick(event)) return false;
@@ -640,5 +643,5 @@ export function livePreview({ onOpenLink, resolveImage, onTag } = {}) {
     key: "Mod-Enter",
     run: (view) => go(view, targetAt(view.state, view.state.selection.main.head), onOpenLink),
   }]));
-  return [inlinePreview(options), blockPreview(options), openLinks, openKey, EditorView.editorAttributes.of({ class: "cm-live-preview" })];
+  return [openLinks, openKey];
 }

@@ -45,6 +45,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Build Angular app
+        run: |
+          npm --prefix app ci
+          npm --prefix app run build
       - name: Install packaging tools
         run: python -m pip install build twine
       - name: Build wheel and source distribution

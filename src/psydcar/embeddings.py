@@ -112,51 +112,6 @@ def _from_row(row: sqlite3.Row) -> ProviderConfig:
     )
 
 
-def _config_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS embedding_provider (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            base_url TEXT NOT NULL,
-            model TEXT NOT NULL,
-            api_key_env TEXT,
-            allow_insecure_http INTEGER NOT NULL,
-            revision TEXT NOT NULL,
-            configured_at TEXT NOT NULL
-        )"""
-    )
-
-
-def _vector_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS passage_embeddings (
-            passage_id TEXT PRIMARY KEY REFERENCES passages(id) ON DELETE CASCADE,
-            provider_revision TEXT NOT NULL,
-            vector_json TEXT NOT NULL,
-            dimension INTEGER NOT NULL
-        )"""
-    )
-
-
-def _state_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS sidecar_embedding_state (
-            sidecar_id TEXT PRIMARY KEY REFERENCES sidecars(id) ON DELETE CASCADE,
-            provider_revision TEXT NOT NULL,
-            status TEXT NOT NULL,
-            embedded_count INTEGER NOT NULL,
-            expected_count INTEGER NOT NULL,
-            message TEXT,
-            updated_at TEXT NOT NULL
-        )"""
-    )
-
-
-def _has_vectors_table(connection: sqlite3.Connection) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'passage_embeddings'"
-    ).fetchone() is not None
-
-
 class ProviderStore:
     """Store one explicitly chosen processing route for this OS user."""
 
@@ -166,7 +121,6 @@ class ProviderStore:
     def get(self) -> ProviderConfig | None:
         try:
             with self.sidecars._connect() as connection:
-                _config_schema(connection)
                 row = connection.execute("SELECT * FROM embedding_provider WHERE id = 1").fetchone()
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect embedding provider: {exc}") from exc
@@ -187,8 +141,6 @@ class ProviderStore:
         now = _now()
         try:
             with self.sidecars._connect() as connection:
-                _config_schema(connection)
-                _state_schema(connection)
                 connection.execute(
                     """INSERT INTO embedding_provider
                        (id, base_url, model, api_key_env, allow_insecure_http, revision, configured_at)
@@ -198,49 +150,38 @@ class ProviderStore:
                            revision=excluded.revision, configured_at=excluded.configured_at""",
                     (draft.base_url, draft.model, draft.api_key_env, int(draft.allow_insecure_http), revision, now),
                 )
-                if _has_vectors_table(connection):
-                    connection.execute("DELETE FROM passage_embeddings")
-                connection.execute(
-                    """INSERT INTO sidecar_embedding_state
-                       (sidecar_id, provider_revision, status, embedded_count, expected_count, message, updated_at)
-                       SELECT id, ?, 'pending', 0, 0, 'Reindex this sidecar to build embeddings.', ? FROM sidecars WHERE true
-                       ON CONFLICT(sidecar_id) DO UPDATE SET provider_revision=excluded.provider_revision,
-                           status='pending', embedded_count=0, expected_count=0,
-                           message=excluded.message, updated_at=excluded.updated_at""",
-                    (revision, now),
-                )
-                connection.execute("UPDATE sidecars SET status = 'embedding_pending' WHERE status IN ('indexed', 'embedding_error', 'embedding_pending')")
+                self.sidecars._mark_index_cleanup(connection)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot save embedding provider: {exc}") from exc
+        self.sidecars.cleanup_index()
         return ProviderConfig(draft.base_url, draft.model, draft.api_key_env, draft.allow_insecure_http, revision, now)
 
     def clear(self) -> bool:
         try:
             with self.sidecars._connect() as connection:
-                _config_schema(connection)
-                _state_schema(connection)
                 existed = connection.execute("DELETE FROM embedding_provider WHERE id = 1").rowcount > 0
-                if _has_vectors_table(connection):
-                    connection.execute("DELETE FROM passage_embeddings")
-                connection.execute("DELETE FROM sidecar_embedding_state")
-                connection.execute("UPDATE sidecars SET status = 'indexed' WHERE status IN ('embedding_pending', 'embedding_error')")
+                self.sidecars._mark_index_cleanup(connection)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot clear embedding provider: {exc}") from exc
+        self.sidecars.cleanup_index()
         return existed
 
     def sidecar_state(self, sidecar_id: str) -> dict[str, Any] | None:
+        provider = self.get()
+        if provider is None:
+            return None
         try:
-            with self.sidecars._connect() as connection:
-                _state_schema(connection)
+            with self.sidecars._index_connect() as connection:
                 row = connection.execute(
-                    "SELECT status, embedded_count, expected_count, message FROM sidecar_embedding_state WHERE sidecar_id = ?",
-                    (sidecar_id,),
+                    """SELECT status, embedded_count, expected_count, message FROM sidecar_embedding_state
+                       WHERE sidecar_id = ? AND provider_revision = ?""",
+                    (sidecar_id, provider.revision),
                 ).fetchone()
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect embedding status: {exc}") from exc
         if row is None:
             return None
-        return {key: row[key] for key in ("status", "embedded_count", "expected_count", "message")}
+        return dict(row)
 
 
 def normalize_vector(values: Any) -> tuple[float, ...]:

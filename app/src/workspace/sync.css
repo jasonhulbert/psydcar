@@ -1,0 +1,25 @@
+:host { display: flex; flex: 1; }
+.sync-trigger { width: 100%; }
+.sync-content { display: grid; align-content: start; gap: 16px; overflow: auto; padding: 16px 20px; }
+.sync-content h3, .sync-content h4, .sync-content p { margin: 0; }
+.sync-content psydcar-empty-state { margin-block: 22px; }
+.sync-overview, .sync-actions, .sync-version header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sync-overview, .sync-version header { justify-content: space-between; }
+.sync-setup, .sync-review, .sync-pair { display: grid; gap: 10px; border-top: 1px solid var(--border); padding-top: 14px; }
+.sync-setup .btn { justify-self: start; }
+.sync-setup .field, .sync-pair .field { max-width: 480px; }
+.sync-pair .field { flex: 1 1 240px; }
+.sync-list { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.sync-list li { min-width: 0; max-width: 100%; }
+.sync-list .btn, .conflict-path { max-width: 100%; overflow-wrap: anywhere; white-space: normal; text-align: start; }
+.sync-list [aria-current="true"] { border-color: var(--accent-border); background: var(--accent-subtle); }
+.sync-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.sync-version { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-inset); }
+.sync-version header, .sync-version p { padding: 8px 12px; }
+.sync-version header { border-bottom: 1px solid var(--border); }
+.sync-version pre { margin: 0; padding: 10px 12px; max-height: 32dvh; overflow: auto; }
+
+@media (max-width: 650px) {
+  .sync-content { padding: 12px; }
+  .sync-versions { grid-template-columns: minmax(0, 1fr); }
+}

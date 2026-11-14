@@ -277,10 +277,11 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(entry["env"], {"PSYDCAR_HOME": str(self.database.parent)})
         self.assertNotIn(two.id, json.dumps(preview))
         status, combined = self.http("POST", "/api/connections/preview",
-                                     {"name": "project_b", "sidecar_ids": [one.id, two.id]})
+                                     {"name": "project_b", "sidecar_ids": [one.id, two.id], "proposal_ids": [two.id]})
         self.assertEqual(status, 200)
         self.assertEqual(combined["entry"]["args"],
-                         ["-m", "psydcar", "mcp", "--sidecar-id", one.id, "--sidecar-id", two.id])
+                         ["-m", "psydcar", "mcp", "--sidecar-id", one.id, "--sidecar-id", two.id,
+                          "--propose-sidecar-id", two.id, "--agent-name", "project_b"])
 
     def test_connection_preview_uses_installed_command_on_path(self) -> None:
         one = self.server.store.create("One", self.source)
@@ -339,7 +340,8 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(sorted(p.relative_to(self.source).as_posix() for p in self.source.rglob("*")), ["art", "plan.md"])
 
     def test_static_assets_and_package_data(self) -> None:
-        for path in ("/", "/assets/dashboard.css", "/assets/dashboard.js", "/assets/editor.js",
+        for path in ("/", "/assets/brand.svg", "/assets/design-system.css", "/assets/dashboard.css",
+                     "/assets/dashboard.js", "/assets/editor.css", "/assets/editor.js",
                      "/assets/Geist-Variable.woff2", "/assets/GeistMono-Variable.woff2"):
             request = Request(self.server.url + path)
             with urlopen(request, timeout=3) as response:

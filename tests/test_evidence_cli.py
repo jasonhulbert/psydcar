@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -131,7 +132,7 @@ class EvidenceCliTests(unittest.TestCase):
         self.assertEqual(self.cli("sidecar", "remove", "A").returncode, 0)
         self.assertTrue((self.source_a / "guide.md").exists())
         self.assertEqual(self.cli("search", "--sidecar", "A", "green").returncode, 2)
-        with sqlite3.connect(self.store / "psydcar.sqlite3") as connection:
+        with closing(sqlite3.connect(self.store / "search.sqlite3")) as connection, connection:
             indexed_sidecar_ids = {
                 row[0] for row in connection.execute("SELECT DISTINCT sidecar_id FROM documents")
             }

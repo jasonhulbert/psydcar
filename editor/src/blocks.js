@@ -17,7 +17,7 @@ export function iconElement(name) {
   svg.setAttribute("class", "icon cm-md-icon");
   svg.setAttribute("aria-hidden", "true");
   const use = svg.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "use"));
-  use.setAttribute("href", `#${name}`);
+  use.setAttribute("href", `/assets/icons.svg#${name}`);
   return svg;
 }
 

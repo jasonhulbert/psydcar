@@ -6,8 +6,10 @@
   <meta name="color-scheme" content="light dark">
   <meta name="psydcar-style-nonce" content="psydcar:style-nonce">
   <title>Sidecars · Psydcar</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236236e8'/%3E%3Crect x='7' y='8' width='12' height='16' rx='2.5' fill='none' stroke='%23fff' stroke-width='2.4'/%3E%3Crect x='21.5' y='12' width='4' height='8' rx='2' fill='%23ff3d8b'/%3E%3C/svg%3E">
+  <link rel="icon" href="/assets/brand.svg">
+  <link rel="stylesheet" href="/assets/design-system.css">
   <link rel="stylesheet" href="/assets/dashboard.css">
+  <link rel="stylesheet" href="/assets/editor.css">
   <script src="/assets/dashboard.js" defer></script>
 </head>
 <body>
@@ -15,7 +17,7 @@
   <header class="app-header">
     <div class="app-header-inner">
       <a class="brand" href="/" aria-label="Psydcar dashboard">
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect class="brand-mark-bg" width="32" height="32" rx="7"/><rect class="brand-mark-body" x="7" y="8" width="12" height="16" rx="2.5"/><rect class="brand-mark-car" x="21.5" y="12" width="4" height="8" rx="2"/></svg>
+        <img class="brand-mark" src="/assets/brand.svg" alt="" width="24" height="24">
         <span class="brand-name">Psydcar</span>
       </a>
       <span class="header-divider" aria-hidden="true">/</span>
@@ -170,7 +172,7 @@
           <button class="btn-icon outline-toggle" id="outline-button" type="button" aria-controls="outline-pane" aria-expanded="false" aria-label="Show outline" title="Show outline" hidden><svg class="icon" aria-hidden="true"><use href="#table-of-contents"/></svg></button>
           <div class="segmented segmented-sm" id="preview-toggle" role="group" aria-label="Markdown view">
             <button type="button" data-mode="reading" aria-pressed="false" title="Reading: rendered and read-only. Click a link to open it."><svg class="icon" aria-hidden="true"><use href="#book-open"/></svg>Reading</button>
-            <button type="button" data-mode="live" aria-pressed="true" title="Live preview: rendered, with syntax shown where you edit"><svg class="icon" aria-hidden="true"><use href="#eye"/></svg>Live preview</button>
+            <button type="button" data-mode="live" aria-pressed="true" title="Edit Markdown with stable formatting and visible syntax"><svg class="icon" aria-hidden="true"><use href="#pencil"/></svg>Edit</button>
             <button type="button" data-mode="source" aria-pressed="false" title="Source: the Markdown as written"><svg class="icon" aria-hidden="true"><use href="#code"/></svg>Source</button>
           </div>
           <button class="btn btn-sm btn-primary" id="save-button" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#save"/></svg>Save<kbd class="kbd" id="save-shortcut">⌘S</kbd></button>
@@ -274,7 +276,7 @@
     <form id="connection-form" novalidate>
       <div class="dialog-header"><h2 id="connection-title">Prepare an MCP connection</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
       <div class="dialog-body">
-        <p class="dialog-text">The agent gets <code>search</code> and <code>retrieve</code> tools limited to the sidecars you select. It can't widen that selection.</p>
+        <p class="dialog-text">Select which sidecars the agent can read. You can also allow edit proposals per sidecar. Review those edits in the Psydcar app before they are saved.</p>
         <label class="field"><span class="field-label">Server name</span><input id="connection-name" class="mono" placeholder="project-notes" autocomplete="off" spellcheck="false" maxlength="64" required><span class="field-hint">Starts with a letter. Letters, numbers, dashes, and underscores only.</span></label>
         <fieldset class="field picker">
           <legend class="field-label">Sidecars <span class="field-optional" id="selected-count">0 selected</span></legend>

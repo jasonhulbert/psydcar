@@ -1,0 +1,121 @@
+.app-workspace {
+  display: grid;
+  grid-template-columns: clamp(260px, 22vw, 304px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: calc(100dvh - var(--header-height));
+}
+.app-workspace.is-single-pane { grid-template-columns: minmax(0, 1fr); }
+.app-workspace.has-feedback { grid-template-rows: auto minmax(0, 1fr); }
+.app-file-list, .app-document { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.app-file-list { border-inline-end: 1px solid var(--border); background: var(--surface-subtle); }
+.file-pane-heading { display: flex; align-items: start; gap: var(--space-2); padding: var(--space-6) var(--space-3) var(--space-5) var(--space-5); }
+.file-pane-identity { flex: 1; min-width: 0; }
+.file-pane-identity h2 { margin-top: var(--space-1); font-size: var(--text-lg); line-height: 1.4; font-weight: 650; letter-spacing: -0.02em; }
+.file-pane-identity h2, .file-root { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-root { margin-top: var(--space-1); color: var(--fg-subtle); font-size: var(--text-xs); }
+.app-file-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 10px; }
+.files-section-heading { align-items: center; gap: 2px; padding-bottom: 6px; }
+.files-section-heading h3 { display: flex; align-items: center; gap: var(--space-2); flex: 1; padding-inline-start: var(--space-2); color: var(--fg-muted); font-size: var(--text-sm); font-weight: 600; }
+.files-section-heading .counter { background: transparent; font-size: 10px; }
+.file-pane-footer { display: grid; gap: 2px; flex: none; border-top: 1px solid var(--border); padding: var(--space-3); }
+.file-pane-footer .eyebrow { padding: var(--space-1) 10px var(--space-2); font-size: 10px; }
+
+.app-document { background: var(--surface); }
+.app-editor-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  flex: none;
+  min-height: 62px;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+.document-identity, .document-path, .editor-controls, .editor-file-actions { display: flex; align-items: center; gap: 8px; }
+.document-identity { flex: 1 1 180px; min-width: 0; }
+.document-path { min-width: 0; color: var(--fg-muted); }
+.document-path strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-size: var(--text-control); font-weight: 550; }
+.editor-controls { flex-wrap: wrap; min-width: 0; gap: 6px; }
+.editor-file-actions { gap: 2px; padding-inline-start: 6px; border-inline-start: 1px solid var(--border); }
+.editor-file-actions .btn-primary { margin-inline-start: 4px; }
+.document-modes { --icon-size: 14px; }
+.compact-files-label { display: none; }
+.outline-toggle[aria-expanded="true"] { background: var(--accent-subtle); color: var(--accent); }
+.workspace-feedback { grid-column: 1 / -1; border-bottom: 1px solid var(--border); }
+.workspace-message { align-items: center; flex-wrap: wrap; margin: 8px 12px; overflow-wrap: anywhere; }
+.workspace-notice { padding: 5px 14px; font-size: 12.5px; }
+
+.app-editor-body { position: relative; display: flex; flex: 1; min-height: 0; }
+psydcar-editor { display: block; }
+.app-outline {
+  display: flex;
+  flex: 0 0 min(34%, 248px);
+  flex-direction: column;
+  min-height: 0;
+  border-inline-start: 1px solid var(--border);
+  background: var(--surface);
+}
+.app-outline header { display: flex; align-items: center; justify-content: space-between; padding: var(--space-4) var(--space-2) var(--space-3) var(--space-4); }
+.app-outline h2 { color: var(--fg-muted); font-size: var(--text-sm); font-weight: 600; }
+.app-outline ul { min-height: 0; overflow: auto; padding: 0 8px 12px; list-style: none; }
+.app-outline button:not(.btn-icon) {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-outline button:not(.btn-icon):hover { background: var(--surface-hover); color: var(--fg); }
+.app-outline button[aria-current] { background: var(--accent-subtle); color: var(--accent); }
+.outline-empty { padding: 6px; font-size: 12px; }
+.document-empty { display: grid; flex: 1; place-items: center; overflow: auto; }
+.app-file-details {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-height: 32px;
+  padding: 6px var(--space-5);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.editor-position { margin-inline-end: auto; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 760px) {
+  .app-file-list { border: 0; }
+  .app-file-actions { padding-inline: var(--page-gutter); }
+  .file-pane-heading { padding-inline: var(--page-gutter); }
+  .file-pane-footer { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .files-toggle { display: inline-flex; gap: 5px; width: auto; padding: 0 6px; }
+  .compact-files-label { display: inline; font-size: 12px; }
+  .app-outline {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 5;
+    width: min(280px, 80%);
+    box-shadow: var(--shadow-md);
+  }
+}
+@media (max-width: 480px) {
+  .app-editor-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+  .document-identity { grid-column: 1; grid-row: 1; gap: 4px; }
+  .editor-controls { display: contents; }
+  .editor-file-actions { grid-column: 2; grid-row: 1; margin: 0; padding: 0; border: 0; }
+  .editor-file-actions .btn-icon { width: 25px; }
+  .editor-file-actions .btn-primary { margin-inline-start: 2px; padding-inline: 8px; }
+  .editor-file-actions .btn-primary psydcar-icon { display: none; }
+  .document-modes { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+  .outline-toggle { grid-column: 2; grid-row: 2; justify-self: end; }
+  .app-file-details { padding-inline: var(--space-3); }
+}

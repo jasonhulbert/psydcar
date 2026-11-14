@@ -21,10 +21,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from .core.workspace import Workspace
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
 from .evidence import MAX_FILE_BYTES, EvidenceStore
-from .files import FileConflict, SourceFiles
-from .mcp_server import selected_ids
+from .files import FileConflict
+from .mcp_server import proposal_scope, selected_ids
 from .store import SidecarStore, StoreError
 from .watcher import SidecarWatcher, WatchEvent
 
@@ -38,8 +39,11 @@ _MAX_BODY = 16384
 _MAX_FILE_BODY = 6 * MAX_FILE_BYTES
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
+    "/assets/brand.svg": ("brand.svg", "image/svg+xml"),
+    "/assets/design-system.css": ("design-system.css", "text/css; charset=utf-8"),
     "/assets/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
     "/assets/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
+    "/assets/editor.css": ("editor.css", "text/css; charset=utf-8"),
     "/assets/editor.js": ("editor.js", "text/javascript; charset=utf-8"),
     "/assets/Geist-Variable.woff2": ("Geist-Variable.woff2", "font/woff2"),
     "/assets/GeistMono-Variable.woff2": ("GeistMono-Variable.woff2", "font/woff2"),
@@ -135,6 +139,7 @@ class DashboardServer(ThreadingHTTPServer):
         if not 0 <= port <= 65535:
             raise StoreError("Dashboard port must be between 0 and 65535.")
         self.store = store or SidecarStore()
+        self.workspace = Workspace(self.store)
         self.evidence = EvidenceStore(self.store)
         self.provider = ProviderStore(self.store)
         self.csrf_token = secrets.token_urlsafe(32)
@@ -234,20 +239,22 @@ class DashboardServer(ThreadingHTTPServer):
                 "provider_configured": provider_configured, "provider": provider,
                 "version": _installed_version(), "data_dir": str(self.store.db_path.parent)}
 
-    def source_files(self, sidecar_id: str) -> SourceFiles:
-        sidecar = self.store.get(sidecar_id)
-        if sidecar.id != sidecar_id:
-            raise StoreError("Sidecar ID is invalid.")
-        return SourceFiles(sidecar)
-
-    def connection_preview(self, name: Any, references: Any) -> dict[str, Any]:
+    def connection_preview(self, name: Any, references: Any, proposal_ids: Any = None) -> dict[str, Any]:
         if not isinstance(name, str) or not _CONNECTION_NAME.fullmatch(name):
             raise StoreError("Connection name must start with a letter and use up to 64 letters, numbers, dashes, or underscores.")
         if not isinstance(references, list) or any(not isinstance(item, str) for item in references):
             raise StoreError("Select one or more sidecars for this connection.")
         ids = selected_ids(self.store, references)
+        if proposal_ids is None:
+            proposal_ids = []
+        if not isinstance(proposal_ids, list) or any(not isinstance(item, str) for item in proposal_ids):
+            raise StoreError("Select the sidecars where this connection can propose edits.")
+        grants = proposal_scope(ids, proposal_ids)
         command, prefix = _mcp_launcher()
         args = [*prefix, "mcp", *(part for sidecar_id in ids for part in ("--sidecar-id", sidecar_id))]
+        if grants:
+            args.extend(part for sidecar_id in grants for part in ("--propose-sidecar-id", sidecar_id))
+            args.extend(("--agent-name", name))
         entry = {"command": command, "args": args, "env": {"PSYDCAR_HOME": str(self.store.db_path.parent)}}
         return {
             "name": name,
@@ -355,7 +362,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             match = _SIDECAR_FILES.fullmatch(path)
             if match and match.group(2) in ("file", "files", "image"):
-                sources = self.server.source_files(match.group(1))
+                sources = self.server.workspace.files(match.group(1))
                 if match.group(2) == "files":
                     self._json(HTTPStatus.OK, sources.tree())
                 elif match.group(2) == "image":
@@ -392,13 +399,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             match = _SIDECAR_FILES.fullmatch(path)
             if match and match.group(2) == "files":
-                result = self.server.source_files(match.group(1)).create(payload.get("path"), payload.get("type"))
+                with self.server.workspace.edit(match.group(1)) as sources:
+                    result = sources.create(payload.get("path"), payload.get("type"))
                 self.server.schedule_update(match.group(1))
                 noun = "Folder" if result["type"] == "folder" else "File"
                 self._json(HTTPStatus.CREATED, {**result, "message": f"{noun} {result['path']} created."})
                 return
             if match and match.group(2) == "files/move":
-                result = self.server.source_files(match.group(1)).move(payload.get("from"), payload.get("to"))
+                with self.server.workspace.edit(match.group(1)) as sources:
+                    result = sources.move(payload.get("from"), payload.get("to"))
                 self.server.schedule_update(match.group(1))
                 self._json(HTTPStatus.OK, {**result, "message": f"Moved {result['from']} to {result['path']}."})
                 return
@@ -421,7 +430,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                            "message": "Provider saved. Update sidecars to build embeddings with these settings."})
                 return
             if path == "/api/connections/preview":
-                preview = self.server.connection_preview(payload.get("name"), payload.get("sidecar_ids"))
+                preview = self.server.connection_preview(
+                    payload.get("name"), payload.get("sidecar_ids"), payload.get("proposal_ids"),
+                )
                 self._json(HTTPStatus.OK, preview)
                 return
             if path == "/api/sidecars":
@@ -462,10 +473,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if payload is None:
             return
         try:
-            result = self.server.source_files(match.group(1)).write(
-                payload.get("path"), payload.get("content"), payload.get("version"),
-                payload.get("newline", "\n"), payload.get("bom", False),
-            )
+            with self.server.workspace.edit(match.group(1)) as sources:
+                result = sources.write(
+                    payload.get("path"), payload.get("content"), payload.get("version"),
+                    payload.get("newline", "\n"), payload.get("bom", False),
+                )
             self.server.schedule_update(match.group(1))
             self._json(HTTPStatus.OK, {**result, "message": f"Saved {result['path']}."})
         except FileConflict as exc:
@@ -485,7 +497,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.BAD_REQUEST, {"error": "Confirm the path before deleting it."})
                 return
             try:
-                result = self.server.source_files(match.group(1)).delete(payload.get("path"))
+                with self.server.workspace.edit(match.group(1)) as sources:
+                    result = sources.delete(payload.get("path"))
                 self.server.schedule_update(match.group(1))
                 self._json(HTTPStatus.OK, {**result, "message": f"Deleted {result['path']}."})
             except StoreError as exc:

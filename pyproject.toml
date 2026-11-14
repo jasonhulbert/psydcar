@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Jason Hulbert" }]
 requires-python = ">=3.10"
-dependencies = ["pypdf>=6.0,<7", "mcp>=2.3,<3"]
+dependencies = ["pypdf>=6.0,<7", "mcp>=2.3,<3", "fastapi>=0.115,<1", "uvicorn>=0.34,<1"]
 keywords = ["mcp", "model-context-protocol", "coding-agents", "search", "embeddings", "rag", "knowledge-base"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -30,6 +30,9 @@ classifiers = [
     "Topic :: Text Processing :: Indexing",
 ]
 
+[project.optional-dependencies]
+test = ["httpx>=0.28,<1"]
+
 [project.urls]
 Homepage = "https://github.com/jasonhulbert/psydcar"
 Issues = "https://github.com/jasonhulbert/psydcar/issues"
@@ -42,4 +45,4 @@ psydcar = "psydcar.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-psydcar = ["dashboard_assets/*"]
+psydcar = ["dashboard_assets/*", "app_assets/*"]

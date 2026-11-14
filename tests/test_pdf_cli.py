@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 try:
@@ -16,7 +17,6 @@ try:
     from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 except ImportError:
     PdfReader = PdfWriter = None
-from psydcar.store import SidecarStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -152,13 +152,23 @@ class PdfCliTests(unittest.TestCase):
         page_two = json.loads(self.cli("search", "--sidecar", "Library", "page two").stdout)
         self.assertEqual(page_two[0]["location"], {"kind": "page", "page": 2})
 
-    def test_existing_text_index_survives_pdf_schema_upgrade(self) -> None:
-        sidecar = SidecarStore(self.store / "psydcar.sqlite3").get("Library")
+    def test_existing_text_evidence_survives_database_split(self) -> None:
+        self.store = self.root / "legacy-store"
+        self.store.mkdir()
+        sidecar_id = str(uuid.uuid4())
         text_path = self.source / "notes.md"
         old_id = str(uuid.uuid4())
-        with sqlite3.connect(self.store / "psydcar.sqlite3") as connection:
+        with closing(sqlite3.connect(self.store / "psydcar.sqlite3")) as connection, connection:
             connection.executescript(
-                """CREATE TABLE documents (
+                """CREATE TABLE sidecars (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    source_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE documents (
                     id INTEGER PRIMARY KEY, sidecar_id TEXT NOT NULL REFERENCES sidecars(id) ON DELETE CASCADE,
                     relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, indexed_at TEXT NOT NULL,
                     UNIQUE(sidecar_id, relative_path)
@@ -169,9 +179,13 @@ class PdfCliTests(unittest.TestCase):
                 );
                 CREATE VIRTUAL TABLE passages_fts USING fts5(evidence_id UNINDEXED, context, tokenize='unicode61');"""
             )
+            connection.execute(
+                "INSERT INTO sidecars VALUES (?, 'Library', ?, 'indexed', ?, ?)",
+                (sidecar_id, str(self.source), "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            )
             document = connection.execute(
                 "INSERT INTO documents (sidecar_id, relative_path, sha256, indexed_at) VALUES (?, ?, ?, ?)",
-                (sidecar.id, "notes.md", hashlib.sha256(text_path.read_bytes()).hexdigest(), "2026-01-01T00:00:00+00:00"),
+                (sidecar_id, "notes.md", hashlib.sha256(text_path.read_bytes()).hexdigest(), "2026-01-01T00:00:00+00:00"),
             )
             connection.execute(
                 "INSERT INTO passages (id, document_id, start_line, end_line, context) VALUES (?, ?, ?, ?, ?)",
@@ -184,7 +198,7 @@ class PdfCliTests(unittest.TestCase):
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["evidence_id"], old_id)
         self.assertEqual(hits[0]["location"], {"kind": "lines", "start": 1, "end": 1})
-        self.assertEqual(json.loads(self.cli("retrieve", "--sidecar", "Library", old_id).stdout)["freshness"], "current")
+        self.assertEqual(json.loads(self.cli("retrieve", "--sidecar", sidecar_id, old_id).stdout)["freshness"], "current")
 
 
 if __name__ == "__main__":

@@ -16,10 +16,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from psydcar.core.proposals import Proposals
-from psydcar.core.workspace import Workspace
 from psydcar.evidence import EvidenceStore
-from psydcar.store import SidecarStore
+from psydcar.proposal_files import Workspace
+from psydcar.proposals import Proposals
+from psydcar.registry import SidecarStore
 
 
 class MCPProcess:

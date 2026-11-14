@@ -5,17 +5,35 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import uuid
+from datetime import datetime, timezone
+from difflib import unified_diff
 from typing import Any, Literal
 
-from ..files import FileConflict, text_bytes
-from ..store import SidecarStore, StoreError, _now
-from .workspace import Workspace
-from .diff import text_diff
+from .proposal_files import FileConflict, Workspace, text_bytes
+from .registry import SidecarStore, StoreError
 
 
 MAX_PENDING = 50
 MAX_SUMMARY_LENGTH = 500
 _FIELDS = "id, path, agent_name, summary, status, created_at, decided_at"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def text_diff(before: str, proposed: str) -> str | None:
+    # Bound the work for long files or pathological line sequences.
+    if len(before) + len(proposed) > 128 * 1024:
+        return None
+    old_lines = before.splitlines(keepends=True)
+    new_lines = proposed.splitlines(keepends=True)
+    if len(old_lines) + len(new_lines) > 2500:
+        return None
+    return "".join(
+        line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        for line in unified_diff(old_lines, new_lines, n=3)
+    )
 
 
 def _summary(row: sqlite3.Row) -> dict[str, Any]:

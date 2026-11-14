@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import uuid
-from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,19 +17,10 @@ from .embeddings import (
     normalize_vector,
 )
 from .pdf_text import PdfTextError, extract_pdf_page, extract_pdf_pages
-from .store import Sidecar, SidecarStore, StoreError
+from .registry import Sidecar, SidecarStore, StoreError
+from .source_scope import is_link, is_pdf, is_source_root, read_bytes, read_source, size_limit, walk
 
 
-SUPPORTED_EXTENSIONS = frozenset(
-    {
-        ".txt", ".md", ".markdown", ".rst", ".py", ".js", ".jsx", ".ts", ".tsx",
-        ".json", ".yaml", ".yml", ".toml", ".go", ".rs", ".java", ".c", ".h",
-        ".cpp", ".hpp", ".cs", ".sh", ".sql", ".html", ".css",
-    }
-)
-IGNORED_DIRECTORIES = frozenset({"node_modules", "__pycache__", "dist", "build", "target", "vendor"})
-MAX_FILE_BYTES = 2 * 1024 * 1024
-MAX_PDF_BYTES = 50 * 1024 * 1024
 CHUNK_LINES = 40
 CHUNK_OVERLAP = 5
 
@@ -66,37 +55,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _read_source(path: Path, root: Path | None = None) -> tuple[bytes | None, str, str | None]:
-    """Read a regular UTF-8 file once; return bytes, status, and a clear failure reason."""
-    data, status, reason = _read_bytes(path, root)
-    if data is None:
-        return None, status, reason
-    if b"\0" in data:
-        return None, "unreadable", "Source contains binary data."
-    try:
-        data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return None, "unreadable", "Source is not UTF-8 text."
-    return data, "current", None
-
-
-def _read_bytes(path: Path, root: Path | None = None) -> tuple[bytes | None, str, str | None]:
-    """Read current bytes while enforcing the source-tree boundary."""
-    try:
-        if path.is_symlink():
-            return None, "unreadable", "Source is a symbolic link."
-        if root is not None and not path.resolve(strict=False).is_relative_to(root):
-            return None, "unreadable", "Source path no longer stays inside the sidecar tree."
-        data = path.read_bytes()
-    except FileNotFoundError:
-        return None, "missing", "Source file no longer exists."
-    except OSError as exc:
-        return None, "unreadable", f"Source file cannot be read: {exc.strerror or exc}"
-    except RuntimeError as exc:
-        return None, "unreadable", f"Source path cannot be resolved: {exc}"
-    return data, "current", None
-
-
 def _source_path(sidecar: Sidecar, relative_path: str) -> Path:
     # The relative path comes from our own index, but still enforce the sidecar boundary.
     root = sidecar.source_path
@@ -122,56 +80,9 @@ def _chunks(text: str) -> list[tuple[int, int, str]]:
     return result
 
 
-def _walk_candidates(root: Path, onerror: Callable[[OSError], None], *,
-                     extensions: frozenset[str] = SUPPORTED_EXTENSIONS | {".pdf"}) -> Iterator[tuple[Path, bool]]:
-    """Yield files in the manual updater's scope and linked directories it must not enter."""
-    for directory, dirs, files in os.walk(root, topdown=True, followlinks=False, onerror=onerror):
-        traversable = []
-        for name in dirs:
-            if name.startswith(".") or name in IGNORED_DIRECTORIES:
-                continue
-            child = Path(directory) / name
-            if child.is_symlink():
-                yield child, True
-            else:
-                traversable.append(name)
-        dirs[:] = sorted(traversable)
-        for name in sorted(files):
-            extension = Path(name).suffix.lower()
-            if name.startswith(".") or extension not in extensions:
-                continue
-            yield Path(directory) / name, False
-
-
-def source_snapshot(sidecar: Sidecar) -> tuple[tuple[str, str, int, int, int, int], ...]:
-    """Cheap watcher fingerprint with the updater's exact source scope."""
-    root = sidecar.source_path
-    if root.is_symlink():
-        return ((".", "linked_root", 0, 0, 0, 0),)
-    if not root.is_dir():
-        return ((".", "missing_root", 0, 0, 0, 0),)
-    entries: list[tuple[str, str, int, int, int, int]] = []
-
-    def walk_error(error: OSError) -> None:
-        entries.append((str(error.filename or root), "walk_error", error.errno or 0, 0, 0, 0))
-
-    for path, linked_directory in _walk_candidates(root, walk_error):
-        relative = path.relative_to(root).as_posix()
-        try:
-            stat = path.lstat()
-        except OSError as exc:
-            entries.append((relative, "stat_error", exc.errno or 0, 0, 0, 0))
-            continue
-        entries.append((
-            relative, "linked_directory" if linked_directory else "file",
-            stat.st_mode, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
-        ))
-    return tuple(sorted(entries))
-
-
 def _scan(sidecar: Sidecar) -> tuple[list[_ScannedDocument], list[str], set[str], set[str]]:
     root = sidecar.source_path
-    if root.is_symlink() or not root.is_dir():
+    if not is_source_root(root):
         raise StoreError(f"Source directory is missing, a symbolic link, or not a directory: {root}")
     documents = []
     skipped = []
@@ -188,33 +99,32 @@ def _scan(sidecar: Sidecar) -> tuple[list[_ScannedDocument], list[str], set[str]
         else:
             blocked_directories.add(".")
 
-    for path, linked_directory in _walk_candidates(root, walk_error):
+    for path, linked_directory in walk(root, walk_error):
         relative = path.relative_to(root).as_posix()
         if linked_directory:
             blocked_directories.add(relative)
             skipped.append(f"{relative}: source directory is a symbolic link")
             continue
         seen.add(relative)
-        if path.is_symlink():
+        if is_link(path):
             skipped.append(f"{relative}: source is a symbolic link")
             continue
-        extension = path.suffix.lower()
+        pdf = is_pdf(path)
         try:
             size = path.stat().st_size
         except OSError as exc:
             skipped.append(f"{relative}: {exc.strerror or exc}")
             continue
-        size_limit = MAX_PDF_BYTES if extension == ".pdf" else MAX_FILE_BYTES
-        if size > size_limit:
-            limit_name = "50 MiB PDF" if extension == ".pdf" else "2 MiB text"
+        limit, limit_name = size_limit(path)
+        if size > limit:
             skipped.append(f"{relative}: exceeds the {limit_name} file limit")
             continue
-        data, status, reason = _read_bytes(path, root) if extension == ".pdf" else _read_source(path, root)
+        data, status, reason = read_bytes(path, root) if pdf else read_source(path, root)
         if data is None:
             skipped.append(f"{relative}: {reason or status}")
             continue
         digest = hashlib.sha256(data).hexdigest()
-        if extension == ".pdf":
+        if pdf:
             try:
                 pages, no_text_pages, page_errors = extract_pdf_pages(data)
             except PdfTextError as exc:
@@ -691,8 +601,8 @@ class EvidenceStore:
             sidecar = self.sidecars.get(row["sidecar_id"], exact_id=True)
             path = _source_path(sidecar, row["relative_path"])
             data, source_status, _ = (
-                _read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"
-                else _read_source(path, sidecar.source_path)
+                read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"
+                else read_source(path, sidecar.source_path)
             )
             if data is None:
                 freshness = source_status
@@ -738,8 +648,8 @@ class EvidenceStore:
         sidecar = self.sidecars.get(row["sidecar_id"], exact_id=True)
         path = _source_path(sidecar, row["relative_path"])
         data, source_status, reason = (
-            _read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"
-            else _read_source(path, sidecar.source_path)
+            read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"
+            else read_source(path, sidecar.source_path)
         )
         if data is None:
             evidence = self._evidence(row, sidecar, None, source_status, None)

@@ -6,11 +6,11 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from .core.proposals import MAX_SUMMARY_LENGTH, Proposals
-from .core.workspace import Workspace
-from .evidence import MAX_FILE_BYTES, EvidenceStore
-from .files import MAX_PATH_LENGTH
-from .store import SidecarStore, StoreError
+from .evidence import EvidenceStore
+from .proposal_files import MAX_PATH_LENGTH, Workspace
+from .proposals import MAX_SUMMARY_LENGTH, Proposals
+from .registry import SidecarStore, StoreError
+from .source_scope import MAX_FILE_BYTES
 
 
 def selected_ids(store: SidecarStore, references: list[str]) -> tuple[str, ...]:

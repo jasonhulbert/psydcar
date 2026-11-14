@@ -1,6 +1,6 @@
 """Read and write a sidecar's text source files for agent proposals.
 
-Every path is relative to the sidecar folder and must stay inside the indexer's scope:
+Every path is relative to the sidecar folder and must stay inside the source scope:
 no hidden or ignored folders, no symbolic links, and only indexed text extensions.
 An agent reads a file to propose against it. An approved proposal is written atomically,
 keeps the file's line endings and byte order mark, and is refused when the file changed after it was read.
@@ -12,11 +12,16 @@ import hashlib
 import os
 import stat
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .evidence import IGNORED_DIRECTORIES, MAX_FILE_BYTES, SUPPORTED_EXTENSIONS, _read_source
-from .store import Sidecar, StoreError
+from .registry import Sidecar, SidecarStore, StoreError
+from .source_scope import (
+    MAX_FILE_BYTES, SUPPORTED_EXTENSIONS, is_hidden, is_ignored_directory, is_link, is_source_root, is_text_source,
+    read_source,
+)
 
 
 MAX_PATH_LENGTH = 1024
@@ -55,18 +60,18 @@ def _parts(relative_path: Any) -> list[str]:
     for part in parts:
         if part in ("", ".", ".."):
             raise StoreError("Paths can't contain empty, '.', or '..' segments.")
-        if part.startswith("."):
+        if is_hidden(part):
             raise StoreError(f'"{part}" is hidden. Psydcar skips hidden files and folders.')
         if len(part.encode("utf-8")) > 255:
             raise StoreError(f'"{part[:40]}…" is longer than the file system allows.')
     for part in parts[:-1]:
-        if part in IGNORED_DIRECTORIES:
+        if is_ignored_directory(part):
             raise StoreError(f'Psydcar skips folders named "{part}".')
     return parts
 
 
 def _require_text_name(name: str) -> None:
-    if Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+    if not is_text_source(name):
         allowed = " ".join(sorted(SUPPORTED_EXTENSIONS))
         raise StoreError(f"Use a text file extension Psydcar indexes: {allowed}")
 
@@ -77,7 +82,7 @@ class SourceFiles:
     def __init__(self, sidecar: Sidecar):
         self.sidecar = sidecar
         root = sidecar.source_path
-        if root.is_symlink() or not root.is_dir():
+        if not is_source_root(root):
             raise StoreError(f"The sidecar folder is missing, a symbolic link, or not a folder: {root}")
         self.root = root.resolve()
 
@@ -87,7 +92,7 @@ class SourceFiles:
         current = self.root
         for part in parts:
             current = current / part
-            if current.is_symlink():
+            if is_link(current):
                 raise StoreError(f"{current.relative_to(self.root).as_posix()} is a symbolic link. Psydcar doesn't follow links.")
         if not current.resolve(strict=False).is_relative_to(self.root):
             raise StoreError("That path is outside the sidecar folder.")
@@ -100,7 +105,7 @@ class SourceFiles:
             raise StoreError(f"{clean} doesn't exist or isn't a file.")
         if path.stat().st_size > MAX_FILE_BYTES:
             raise StoreError(f"{clean} is larger than the 2 MiB text limit, so agents can't propose edits to it.")
-        data, _status, reason = _read_source(path, self.root)
+        data, _status, reason = read_source(path, self.root)
         if data is None:
             raise StoreError(f"{clean} can't be opened. {reason}")
         bom = data.startswith(b"\xef\xbb\xbf")
@@ -145,3 +150,18 @@ class SourceFiles:
         except BaseException:
             Path(temporary).unlink(missing_ok=True)
             raise
+
+
+class Workspace:
+    """Open a sidecar's source files, and serialize proposal writes across local processes."""
+
+    def __init__(self, store: SidecarStore):
+        self.store = store
+
+    def files(self, sidecar_id: str) -> SourceFiles:
+        return SourceFiles(self.store.get(sidecar_id, exact_id=True))
+
+    @contextmanager
+    def edit(self, sidecar_id: str) -> Iterator[SourceFiles]:
+        with self.store.file_writes():
+            yield self.files(sidecar_id)

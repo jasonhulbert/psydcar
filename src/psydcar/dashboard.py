@@ -23,9 +23,9 @@ from urllib.parse import urlsplit
 
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
 from .evidence import EvidenceStore
+from .freshness import SidecarWatcher, WatchEvent
 from .mcp_server import proposal_scope, selected_ids
-from .store import SidecarStore, StoreError
-from .watcher import SidecarWatcher, WatchEvent
+from .registry import SidecarStore, StoreError
 
 
 _SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update)$")

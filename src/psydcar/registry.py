@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .core.storage import database, exclusive_file_lock, initialize_index, initialize_state
+from .storage import database, exclusive_file_lock, initialize_index, initialize_state
 
 
 INITIAL_STATUS = "not_indexed"

@@ -7,8 +7,9 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from .evidence import EvidenceStore, IndexReport, source_snapshot
-from .store import SidecarStore, StoreError
+from .evidence import EvidenceStore, IndexReport
+from .registry import SidecarStore, StoreError
+from .source_scope import source_snapshot
 
 
 @dataclass(frozen=True)

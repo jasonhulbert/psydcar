@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
-from .store import SidecarStore, StoreError
+from .registry import SidecarStore, StoreError
 
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

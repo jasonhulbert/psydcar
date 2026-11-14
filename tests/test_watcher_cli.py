@@ -17,8 +17,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from psydcar.evidence import EvidenceStore
-from psydcar.store import SidecarStore
-from psydcar.watcher import SidecarWatcher
+from psydcar.freshness import SidecarWatcher
+from psydcar.registry import SidecarStore
 
 try:
     from test_pdf_cli import PdfReader, write_pdf
@@ -136,7 +136,7 @@ class WatcherCliTests(unittest.TestCase):
         # Simulate a metadata check that missed a change. The full pass still compares bytes.
         (self.source / "base.md").write_text("mango kiwi\n")
         sidecar = store.get("Library")
-        with patch("psydcar.watcher.source_snapshot", return_value=watcher._snapshots[sidecar.id]):
+        with patch("psydcar.freshness.source_snapshot", return_value=watcher._snapshots[sidecar.id]):
             watcher._last_reconcile = time.monotonic() - 11
             periodic = watcher.step()
         self.assertEqual(periodic[0].reason, "periodic")

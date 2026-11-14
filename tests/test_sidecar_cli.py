@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from psydcar.store import INITIAL_STATUS, SidecarStore
+from psydcar.registry import INITIAL_STATUS, SidecarStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

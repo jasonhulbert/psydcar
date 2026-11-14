@@ -20,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from psydcar.dashboard import DashboardServer
-from psydcar.store import SidecarStore
+from psydcar.registry import SidecarStore
 
 
 PROBE_SECRET = "DASHBOARD_TEST_CREDENTIAL_DO_NOT_DISPLAY"

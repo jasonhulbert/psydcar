@@ -11,11 +11,11 @@ from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError, version
 
 from .embeddings import ProviderStore
-from .evidence import EvidenceStore
 from .dashboard import run_dashboard
+from .evidence import EvidenceStore
+from .freshness import SidecarWatcher, WatchEvent
 from .mcp_server import run_mcp
-from .store import Sidecar, SidecarStore, StoreError
-from .watcher import SidecarWatcher, WatchEvent
+from .registry import Sidecar, SidecarStore, StoreError
 
 
 def _display_status(status: str) -> str:

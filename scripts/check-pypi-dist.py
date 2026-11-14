@@ -16,9 +16,6 @@ REQUIRED_PACKAGE_FILES = {
     "psydcar/__init__.py",
     "psydcar/cli.py",
     "psydcar/dashboard.py",
-    "psydcar/api/__init__.py",
-    "psydcar/app_assets/index.html",
-    "psydcar/app_assets/3rdpartylicenses.txt",
     "psydcar/files.py",
     "psydcar/mcp_server.py",
     "psydcar/store.py",
@@ -56,10 +53,6 @@ def check(tag: str, dist: Path) -> None:
         missing = REQUIRED_PACKAGE_FILES - members
         if missing:
             raise ValueError(f"Wheel is missing: {sorted(missing)}")
-        app_html = archive.read("psydcar/app_assets/index.html").decode()
-        bundle_names = re.findall(r'(?:src|href)="([a-zA-Z0-9_-]+\.(?:js|css))"', app_html)
-        if not bundle_names or any(f"psydcar/app_assets/{name}" not in members for name in bundle_names):
-            raise ValueError("Wheel is missing a bundle referenced by the Angular app")
         metadata = email.message_from_bytes(archive.read(f"psydcar-{version}.dist-info/METADATA"))
         if metadata["Name"] != "psydcar" or metadata["Version"] != version:
             raise ValueError("Wheel metadata name or version is incorrect")

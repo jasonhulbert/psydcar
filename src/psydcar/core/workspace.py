@@ -1,4 +1,4 @@
-"""File operations shared by the app and the legacy dashboard."""
+"""Sidecar file access shared by the dashboard and agent proposals."""
 
 from __future__ import annotations
 

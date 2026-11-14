@@ -54,32 +54,6 @@ _PROPOSALS_SCHEMA = (
        ON file_proposals(sidecar_id, status, created_at DESC, id)""",
 )
 
-_SYNC_SCHEMA = (
-    """CREATE TABLE sync_identity (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        endpoint TEXT NOT NULL,
-        credential TEXT NOT NULL,
-        active INTEGER NOT NULL
-    )""",
-    """CREATE TABLE sync_links (
-        sidecar_id TEXT PRIMARY KEY REFERENCES sidecars(id) ON DELETE CASCADE,
-        remote_id TEXT NOT NULL UNIQUE,
-        last_synced_at TEXT,
-        error TEXT,
-        revision INTEGER NOT NULL DEFAULT 0
-    )""",
-    """CREATE TABLE sync_paths (
-        sidecar_id TEXT NOT NULL REFERENCES sync_links(sidecar_id) ON DELETE CASCADE,
-        path TEXT NOT NULL,
-        base_digest TEXT,
-        conflict_id TEXT,
-        cloud_digest TEXT,
-        cloud_content BLOB,
-        PRIMARY KEY(sidecar_id, path),
-        UNIQUE(sidecar_id, conflict_id)
-    )""",
-)
-
 
 _INDEX_SCHEMA = """
     CREATE TABLE IF NOT EXISTS sidecar_index (
@@ -180,7 +154,7 @@ def initialize_index(connection: sqlite3.Connection) -> None:
 
 
 def initialize_state(connection: sqlite3.Connection, index_path: Path, legacy_path: Path | None) -> None:
-    if _version(connection) >= 3:
+    if _version(connection) >= 2:
         return
     # Only one process may migrate. The state version commits after the index copy,
     # so a crash between commits causes the copy to be repeated from the original.
@@ -194,10 +168,7 @@ def initialize_state(connection: sqlite3.Connection, index_path: Path, legacy_pa
     if version < 2:
         for statement in _PROPOSALS_SCHEMA:
             connection.execute(statement)
-    if version < 3:
-        for statement in _SYNC_SCHEMA:
-            connection.execute(statement)
-        connection.execute("PRAGMA user_version = 3")
+        connection.execute("PRAGMA user_version = 2")
 
 
 def _migrate_legacy(state: sqlite3.Connection, index_path: Path, legacy_path: Path) -> None:

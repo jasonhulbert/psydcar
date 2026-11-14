@@ -25,7 +25,7 @@ const MODES = new Set(["live", "reading", "source"]);
 
 // mode is "live", "reading", or "source", and applies to Markdown files. onOutline({ headings, current })
 // reports a Markdown file's headings and the one at the top of the editor whenever either changes.
-function create({ parent, doc = "", path, mode = "live", label, nonce, onChange, onSave, onOpenLink, resolveImage, onTag, onOutline, onStatus }) {
+function create({ parent, doc = "", path, mode = "live", label, nonce, onChange, onSave, onOpenLink, resolveImage, onTag, onOutline }) {
   const extension = path.split(".").pop().toLowerCase();
   const isMarkdown = MARKDOWN.has(extension);
   const isProse = PROSE.has(extension);
@@ -42,11 +42,6 @@ function create({ parent, doc = "", path, mode = "live", label, nonce, onChange,
     EditorView.contentAttributes.of({ tabindex: "0" }), EditorView.editorAttributes.of({ class: "cm-reading" }),
   ];
   const modeExtension = () => (!isMarkdown || currentMode === "source" ? [] : currentMode === "reading" ? readingExtension : formattedEditing({ onOpenLink }));
-  const reportStatus = (state) => {
-    const selection = state.selection.main;
-    const line = state.doc.lineAt(selection.head);
-    onStatus?.({ line: line.number, column: selection.head - line.from + 1, selected: selection.to - selection.from });
-  };
 
   const extensions = [
     // CodeMirror adds its base styles in a <style> element; the page's CSP admits it by nonce.
@@ -74,10 +69,7 @@ function create({ parent, doc = "", path, mode = "live", label, nonce, onChange,
     EditorView.contentAttributes.of({ "aria-label": label || `Edit ${path}`, spellcheck: isProse ? "true" : "false" }),
     EditorView.editorAttributes.of({ class: `${isProse ? "cm-prose" : "cm-code"}${isMarkdown ? " cm-markdown" : ""}` }),
     themeSlot.of(EditorView.darkTheme.of(scheme.matches)),
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged) onChange?.();
-      if (update.docChanged || update.selectionSet) reportStatus(update.state);
-    }),
+    EditorView.updateListener.of((update) => { if (update.docChanged) onChange?.(); }),
   ];
   if (isProse) {
     extensions.push(EditorView.lineWrapping, placeholder("Start writing…"));
@@ -95,7 +87,6 @@ function create({ parent, doc = "", path, mode = "live", label, nonce, onChange,
 
   const makeState = (text) => EditorState.create({ doc: text, extensions });
   const view = new EditorView({ parent, state: makeState(doc) });
-  reportStatus(view.state);
   let saved = view.state.doc;
   const followScheme = () => view.dispatch({ effects: themeSlot.reconfigure(EditorView.darkTheme.of(scheme.matches)) });
   scheme.addEventListener("change", followScheme);

@@ -94,15 +94,11 @@ def _parser() -> argparse.ArgumentParser:
     dashboard.add_argument("--port", type=int, default=8765, metavar="PORT", help="Local port (default 8765; 0 chooses a free port)")
     dashboard.add_argument("--no-open", action="store_true", help="Do not open a browser automatically")
 
-    app = commands.add_parser("app", help="Open the local Psydcar app")
-    app.add_argument("--port", type=int, default=8765, metavar="PORT", help="Local port (default 8765; 0 chooses a free port)")
-    app.add_argument("--no-open", action="store_true", help="Do not open a browser automatically")
-
     mcp = commands.add_parser("mcp", help="Serve selected sidecars to one MCP client over stdio")
     mcp.add_argument("--sidecar-id", action="append", default=[], metavar="ID", help="Stable sidecar ID to expose; repeat to select several")
     mcp.add_argument("--propose-sidecar-id", action="append", default=[], metavar="ID",
                      help="Allow proposals for this selected sidecar; repeat for each grant")
-    mcp.add_argument("--agent-name", metavar="NAME", help="Name displayed in the app for this connection's proposals")
+    mcp.add_argument("--agent-name", metavar="NAME", help="Name shown with this connection's proposals")
     return parser
 
 
@@ -264,10 +260,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 signal.signal(signal.SIGTERM, prior_handler)
         elif args.command == "dashboard":
             run_dashboard(store, args.port, not args.no_open)
-        elif args.command == "app":
-            from .api import run_app
-
-            run_app(store, args.port, not args.no_open)
         elif args.command == "mcp":
             run_mcp(store, args.sidecar_id, proposal_ids=args.propose_sidecar_id, agent_name=args.agent_name)
     except StoreError as exc:

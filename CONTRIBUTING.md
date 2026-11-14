@@ -24,58 +24,13 @@ export PSYDCAR_HOME="$(mktemp -d)"
 
 ## Running tests
 
-The tests use the standard library's `unittest`. Install the test extra for the app API tests:
+The tests use the standard library's `unittest` and need no extra packages:
 
 ```console
-python -m pip install -e '.[test]'
 python -m unittest discover -s tests
 ```
 
 CI runs the suite on macOS and Linux for every supported Python version. Some tests start local HTTP servers on `127.0.0.1`, so a sandbox that blocks loopback sockets will skip them.
-
-## Angular app
-
-The app source lives in `app/`. Use a Node release supported by the app's `package.json`. Build the browser assets, then open them through the local API:
-
-```console
-npm --prefix app ci
-npm --prefix app run build
-psydcar app
-```
-
-The app and dashboard share the CodeMirror bundle, editor stylesheet, and design system assets. Release builds package the compiled app with Python, so users do not need Node.
-
-Follow the [UI system guide](app/src/design-system/README.md) when changing the app. Keep reusable Angular controls in `app/src/design-system/` and feature layouts beside their feature. Use the button directive and shared segmented control, dialog, icon, search field, badge, diff, and empty state components. Shared color, spacing, type, size, radius, and shadow tokens live in `src/psydcar/dashboard_assets/design-system.css`. Keep CodeMirror presentation in `src/psydcar/dashboard_assets/editor.css` so both interfaces render documents consistently.
-
-The app has Playwright tests for successful editing, view switching, proposal review, and browsing with a large document on a narrow screen. Activate the Python environment, build the app and editor, then run:
-
-```console
-cd app
-npx playwright install chromium
-npm run test:e2e
-```
-
-To use an existing Chrome installation, set `PSYDCAR_TEST_BROWSER` to its executable path instead of installing Chromium. The tests start a temporary workspace on `127.0.0.1:8789` and refuse to reuse an existing server. Your registered folders and sync accounts are not used. CI runs these browser journeys after the production build.
-
-When changing the app API, regenerate the TypeScript contract before rebuilding:
-
-```console
-schema=$(mktemp)
-python -m psydcar.api > "$schema"
-npm --prefix app run generate:api -- --input "$schema"
-```
-
-## Architecture roadmap
-
-1. Establish the shared Python core, CLI and MCP adapters, FastAPI, and Angular app. Split local state from the rebuildable search index.
-2. Move file browsing and editing into the app and add isolated web previews.
-3. Add scoped agent proposals and human approval or rejection.
-4. Polish the app against the dashboard's visual baseline. Consolidate recurring controls, refine navigation and editor layout, and verify both themes, keyboard interaction, and narrow screens.
-5. Add offline-first sync between two devices, including pairing, revocation, and conflict review in the app.
-
-## Sync service
-
-The local core owns reconciliation and conflict resolution. The cloud endpoint handles device access and conditional manifest updates. Files transfer directly between devices and the private S3 bucket. The wire format is shared by the Python core and the Lambda. The [service guide](cloud/sync/README.md) covers packaging and development deployment. The two-device integration test uses an in-memory object store and runs with the normal test suite.
 
 ## Dashboard assets
 

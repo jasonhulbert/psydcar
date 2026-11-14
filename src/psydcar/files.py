@@ -64,7 +64,7 @@ def _stamp(path: Path) -> dict[str, Any]:
             "modified_at": datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat(timespec="seconds")}
 
 
-def _parts(relative_path: Any, *, allowed_ignored: frozenset[str] = frozenset()) -> list[str]:
+def _parts(relative_path: Any) -> list[str]:
     if not isinstance(relative_path, str) or not relative_path.strip("/"):
         raise StoreError("Enter a path inside the sidecar folder.")
     if len(relative_path) > MAX_PATH_LENGTH or "\0" in relative_path or "\\" in relative_path:
@@ -78,7 +78,7 @@ def _parts(relative_path: Any, *, allowed_ignored: frozenset[str] = frozenset())
         if len(part.encode("utf-8")) > 255:
             raise StoreError(f'"{part[:40]}…" is longer than the file system allows.')
     for part in parts[:-1]:
-        if part in IGNORED_DIRECTORIES and part not in allowed_ignored:
+        if part in IGNORED_DIRECTORIES:
             raise StoreError(f'Psydcar skips folders named "{part}".')
     return parts
 

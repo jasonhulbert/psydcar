@@ -6,12 +6,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ### Added
 
-- `psydcar app` opens the Angular file workspace. Create, move, rename, and delete files and folders, edit Markdown with a heading outline, and view images and file details.
-- Web preview opens HTML and prebuilt sites with relative asset URLs in a sandboxed frame on a separate local origin.
-- Grant individual MCP connections permission to propose edits per sidecar. Review the changes in the app and approve or reject them before they reach disk.
-- Sync sidecar files across two paired devices using hosted object storage. Review both copies, keep either version, or merge conflicting text in the app.
+- Grant individual MCP connections permission to propose edits per sidecar. A proposed edit waits in a local queue and doesn't reach disk unless it's approved.
 - Local state and search now live in separate SQLite databases. The upgrade preserves sidecar and evidence IDs and keeps the original database as a backup.
-
 - Markdown links open other files in the sidecar. ⌘-click (Ctrl-click on Linux) a relative link such as `../ideas.md` or `notes/plan#next-steps` to open that file. A link without an extension matches a Markdown file of that name, and a `#heading` part scrolls to that heading. ⌘Enter opens the link under the cursor. Hovering a link shows where it points.
 - Markdown front matter shows as a properties list in Reading mode. Lists render as chips and tags as `#tag` links. Switch to Edit or Source to edit the YAML. Psydcar never rewrites front matter.
 - Tags from front matter filter the file list. Click a tag, or type `#tag` in the filter, to list the files with that tag. Nested tags such as `#project/q4` also match `#project`.
@@ -29,12 +25,10 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 ### Fixed
 
 - Markdown editing keeps its layout stable across caret movement, selection, and focus changes. Rendered block spacing follows CodeMirror’s layout requirements.
-- Sync conflict review highlights text changes in a shared diff component and offers a full-file comparison.
 
 ### Changed
 
-- The Angular app uses a shared component library and design tokens for spacing, type, control sizes, colors, and focus. The library, file navigation, toolbars, and review dialogs use consistent controls in light, dark, and narrow layouts.
-- Edit mode keeps Markdown text in place while navigating, selecting, and typing. Source has line numbers, and the app status bar shows line, column, and selection. Tab moves focus in prose and indents code. Prose no longer inserts automatic closing brackets.
+- Edit mode keeps Markdown text in place while navigating, selecting, and typing. Source has line numbers. Tab moves focus in prose and indents code. Prose no longer inserts automatic closing brackets.
 - Lists in Reading mode are easier to read. Nested items are indented with guide lines, and wrapped text lines up under the item's first line. Text no longer shifts when the cursor reaches a list marker, and a task's checkbox stands in for its bullet.
 - Markdown opens in stable formatted editing, with visible syntax. Reading mode provides the fully rendered document.
 - Reading mode hides the underline of `===` and `---` headings, hides the backslash in escapes such as `\*`, and shows entities such as `&copy;` as the characters they stand for.

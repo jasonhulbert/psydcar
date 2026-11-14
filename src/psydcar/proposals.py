@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 from typing import Any, Literal
 
 from .evidence import EvidenceStore, UpdateSuperseded
+from .git_record import CommitPlan, GitRecord
 from .proposal_files import FileConflict, Workspace, text_bytes
 from .registry import SidecarStore, StoreError
 from .storage import Tables, connect
@@ -22,7 +23,7 @@ MAX_PENDING = 50
 MAX_SUMMARY_LENGTH = 500
 MIN_ID_PREFIX = 4
 _ID_PREFIX = re.compile(r"[0-9a-f-]+")
-_FIELDS = "id, path, agent_name, summary, status, created_at, decided_at"
+_FIELDS = "id, path, agent_name, summary, status, created_at, decided_at, commit_id"
 _TABLES = Tables("proposals", "file_proposals", ((
     """CREATE TABLE file_proposals (
         id TEXT PRIMARY KEY,
@@ -42,7 +43,10 @@ _TABLES = Tables("proposals", "file_proposals", ((
     )""",
     """CREATE INDEX file_proposals_queue
        ON file_proposals(sidecar_id, status, created_at DESC, id)""",
-),))
+), (
+    # The commit that recorded an approval, when the sidecar's git record was on.
+    "ALTER TABLE file_proposals ADD COLUMN commit_id TEXT",
+)))
 
 
 def _now() -> str:
@@ -135,6 +139,7 @@ class Proposals:
     def __init__(self, store: SidecarStore):
         self.store = store
         self.workspace = Workspace(store)
+        self.record = GitRecord(store)
 
     @contextmanager
     def _state(self) -> Iterator[sqlite3.Connection]:
@@ -294,20 +299,36 @@ class Proposals:
         if decision not in ("approved", "rejected"):
             raise StoreError("Choose whether to approve or reject the proposal.")
         self._recover(sidecar_id, proposal_id)
-        written = False
+        approval: tuple[CommitPlan | None, bytes] | None = None
         with self.store.file_writes():
             row, _ = self._load(sidecar_id, proposal_id)
             if row["status"] not in ("pending", decision):
                 raise StoreError(f"This proposal was already {row['status']}.")
             if row["status"] == "pending":
                 if decision == "approved":
+                    plan = self._plan_commit(row)
                     self._write(row)
-                    written = True
+                    approval = (plan, text_bytes(row["proposed_text"], row["newline"], bool(row["bom"])))
                 row = self._finish(row, decision)
         result = _summary(row)
-        if written:
-            result.update(self._after_approval(row))
+        if approval is not None:
+            result.update(self._after_approval(row, *approval))
         return result
+
+    def _plan_commit(self, row: sqlite3.Row) -> CommitPlan | None:
+        """Check whether the approval can be recorded as a commit, before the file changes."""
+        try:
+            if not self.record.enabled(row["sidecar_id"]):
+                return None
+        except StoreError as exc:
+            return CommitPlan(reason=f"{str(exc).rstrip('.')}.")
+        try:
+            files = self.workspace.files(row["sidecar_id"])
+            base = files.read_bytes(row["path"])
+        except (StoreError, OSError) as exc:
+            # The write that follows refuses the same unreadable file, so this reason is rarely shown.
+            return CommitPlan(reason=f"Psydcar couldn't read {row['path']} to check it against git: {str(exc).rstrip('.')}.")
+        return self.record.prepare(files.sidecar.source_path, row["path"], base)
 
     def _write(self, row: sqlite3.Row) -> None:
         current = self._current_version(row)
@@ -332,8 +353,25 @@ class Proposals:
                 ) from exc
             raise
 
-    def _after_approval(self, row: sqlite3.Row) -> dict[str, Any]:
-        """Run the steps that follow an approved write. The approval stands whatever they report."""
+    def _after_approval(self, row: sqlite3.Row, plan: CommitPlan | None = None, approved: bytes = b"") -> dict[str, Any]:
+        """Run the steps that follow an approved write. The approval stands whatever they report.
+
+        The commit comes first, while the branch is most likely where the checks found it.
+        """
+        outcome: dict[str, Any] = {"git_record": plan is not None, "commit_id": None, "commit_branch": None, "commit_notice": None}
+        if plan is not None:
+            outcome.update(self.record.commit(
+                plan, approved, agent=row["agent_name"], reason=row["summary"], proposal_id=row["id"],
+            ))
+            if outcome["commit_id"]:
+                try:
+                    with self._state() as state:
+                        state.execute("UPDATE file_proposals SET commit_id = ? WHERE id = ?", (outcome["commit_id"], row["id"]))
+                except (StoreError, sqlite3.Error):
+                    pass  # The commit is in git's history whether or not the decision list shows it.
+        return {**outcome, **self._update_index(row)}
+
+    def _update_index(self, row: sqlite3.Row) -> dict[str, Any]:
         try:
             report = EvidenceStore(self.store).update(row["sidecar_id"])
         except UpdateSuperseded:

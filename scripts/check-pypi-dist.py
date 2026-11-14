@@ -21,6 +21,7 @@ REQUIRED_PACKAGE_FILES = {
     "psydcar/embeddings.py",
     "psydcar/evidence.py",
     "psydcar/freshness.py",
+    "psydcar/git_record.py",
     "psydcar/git_state.py",
     "psydcar/index_tables.py",
     "psydcar/mcp_server.py",

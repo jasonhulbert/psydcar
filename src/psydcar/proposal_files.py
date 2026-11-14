@@ -116,6 +116,14 @@ class SourceFiles:
             "newline": newline, "bom": bom,
         }
 
+    def read_bytes(self, relative_path: Any) -> bytes:
+        """Return a text source file's bytes as they are on disk."""
+        path, clean = self._path(relative_path)
+        _require_text_name(path.name)
+        if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
+            raise StoreError(f"{clean} doesn't exist, isn't a file, or is larger than the 2 MiB text limit.")
+        return path.read_bytes()
+
     def write(self, relative_path: Any, content: Any, version: Any, newline: Any = "\n", bom: Any = False) -> dict[str, Any]:
         if not isinstance(content, str) or not isinstance(version, str):
             raise StoreError("Send the file content and the version it was read at.")

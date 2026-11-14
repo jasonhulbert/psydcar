@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from git_sandbox import git, use_sandbox
 from psydcar.evidence import EvidenceStore
 from psydcar.proposal_files import Workspace
 from psydcar.proposals import Proposals
@@ -63,6 +65,25 @@ class ReviewCliTests(unittest.TestCase):
         self.assertEqual(rejected.returncode, 0, rejected.stderr)
         self.assertEqual(self.note.read_text(), "The heron waits by the reeds.\n")
         self.assertIn("Rejected", self.cli("proposal", "list", "Notes", "--reviewed").stdout)
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_approval_with_the_git_record_on_commits_only_the_approved_file(self) -> None:
+        use_sandbox(self, self.root)
+        (self.source / "todo.md").write_text("Buy bread.\n")
+        git(self.source, "init", "-q")
+        git(self.source, "add", ".")
+        git(self.source, "commit", "-q", "-m", "Start")
+        (self.source / "todo.md").write_text("Buy bread and milk.\n")
+        git(self.source, "add", "todo.md")
+        self.assertEqual(self.cli("sidecar", "git-record", "Notes", "on").returncode, 0)
+        proposal_id = self.propose("The heron waits by the reeds.\nA kingfisher flashes past.\n", "Add the kingfisher.")
+
+        approved = self.cli("proposal", "approve", proposal_id)
+
+        self.assertIn("Recorded commit", approved.stdout, approved.stderr)
+        commit = git(self.source, "show", "--format=%B", "--name-only", "HEAD")
+        self.assertTrue(commit.startswith("Add the kingfisher.") and "Review assistant" in commit and commit.endswith("\nheron.md"), commit)
+        self.assertEqual(git(self.source, "status", "--porcelain"), "M  todo.md")
 
 
 if __name__ == "__main__":

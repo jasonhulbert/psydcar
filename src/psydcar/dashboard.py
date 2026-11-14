@@ -25,12 +25,13 @@ from . import access
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
 from .evidence import EvidenceStore
 from .freshness import SidecarWatcher, WatchEvent
+from .git_record import GitRecord
 from .proposal_files import FileConflict
 from .proposals import Proposals
 from .registry import SidecarStore, StoreError
 
 
-_SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update)$")
+_SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update|git-record)$")
 _SIDECAR_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})$")
 _PROPOSAL_LIST = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals$")
 _PROPOSAL_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals/([0-9a-f-]{36})$")
@@ -139,6 +140,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.evidence = EvidenceStore(self.store)
         self.provider = ProviderStore(self.store)
         self.proposals = Proposals(self.store)
+        self.git_record = GitRecord(self.store)
         self.csrf_token = secrets.token_urlsafe(32)
         self.operation_lock = threading.Lock()
         self._pending_lock = threading.Lock()
@@ -344,6 +346,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {
                     "pending": self.server.proposals.list(sidecar_id)["items"],
                     "reviewed": self.server.proposals.list(sidecar_id, reviewed=True)["items"],
+                    "git_record": self.server.git_record.state(self.server.store.get(sidecar_id, exact_id=True)),
                 })
                 return
             match = _PROPOSAL_ITEM.fullmatch(path)
@@ -425,6 +428,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     with self.server.operation_lock:
                         sidecar = self.server.store.rename(sidecar_id, name)
                     self._json(HTTPStatus.OK, {"id": sidecar.id, "message": f'Renamed sidecar to "{sidecar.name}".'})
+                    return
+                if action == "git-record":
+                    enabled = payload.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise StoreError("Choose whether to turn the git record on or off.")
+                    with self.server.operation_lock:
+                        sidecar, state = self.server.git_record.set(sidecar_id, enabled)
+                    message = (f'Approvals in "{sidecar.name}" now become commits.' if enabled
+                               else f'Approvals in "{sidecar.name}" no longer make commits.')
+                    self._json(HTTPStatus.OK, {"git_record": state, "message": message})
                     return
                 queued = self.server.schedule_update(sidecar_id)
                 self._json(HTTPStatus.ACCEPTED, {"id": sidecar_id, "message": "Update queued." if queued else "Update already queued."})

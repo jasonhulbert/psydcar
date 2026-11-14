@@ -11,6 +11,8 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
+from git_sandbox import git, use_sandbox
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -151,13 +153,12 @@ class EvidenceCliTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "git is not installed")
     def test_evidence_from_a_repository_reports_its_commit_and_uncommitted_changes(self) -> None:
+        use_sandbox(self, self.root)
         (self.source_b / "draft.md").write_text("A red comet draft.\n")
-        git = ("git", "-c", "user.name=Owner", "-c", "user.email=owner@example.com", "-c", "commit.gpgsign=false")
-        subprocess.run([*git, "init", "-q"], cwd=self.source_b, check=True)
-        subprocess.run([*git, "add", "."], cwd=self.source_b, check=True)
-        subprocess.run([*git, "commit", "-q", "-m", "Notes"], cwd=self.source_b, check=True)
-        commit = subprocess.run([*git, "rev-parse", "HEAD"], cwd=self.source_b, check=True,
-                                capture_output=True, text=True).stdout.strip()
+        git(self.source_b, "init", "-q")
+        git(self.source_b, "add", ".")
+        git(self.source_b, "commit", "-q", "-m", "Notes")
+        commit = git(self.source_b, "rev-parse", "HEAD")
         (self.source_b / "draft.md").write_text("A red comet draft, revised.\n")
         self.assertEqual(self.cli("sidecar", "update", "B").returncode, 0)
 

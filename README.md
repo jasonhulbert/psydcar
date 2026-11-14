@@ -105,6 +105,24 @@ psydcar proposal list --reviewed      # recent decisions
 
 Commands accept a proposal's full ID or the first characters that `proposal list` shows.
 
+## Record approvals as git commits
+
+When a sidecar's folder is in a git repository, including a folder inside a larger repository, you can turn on its **git record**. Each approval in that sidecar then becomes a commit on the checked-out branch. History shows which agent changed what and why, and `git revert` undoes an agent's change in one command. The record is off until you turn it on, and Psydcar offers it only for folders in a repository.
+
+```console
+psydcar sidecar git-record "My notes" on    # commit each approval
+psydcar sidecar git-record "My notes"       # show the setting and the repository
+psydcar sidecar git-record "My notes" off   # approvals write files without commits
+```
+
+In the dashboard, select the sidecar and use the **Git record** switch. While the record is on, the review dialog says that approving also records a commit.
+
+The commit's subject is the agent's one-line reason. Its message names the agent in the body and in a `Psydcar-Agent` trailer, and gives the proposal ID in a `Psydcar-Proposal` trailer. Psydcar commits with your git identity and signs the commit if your git configuration signs commits. Git hooks don't run for these commits.
+
+A commit holds only the approved change to that one file. Psydcar builds it from the branch's last commit, so files you staged and other uncommitted work stay out of it and stay as they were. When a commit can't be limited to the approved change, Psydcar still saves the approved edit, makes no commit, and says why. That happens when the file already had uncommitted or staged changes, the file isn't tracked, the repository has no commits, HEAD is detached, a merge, rebase, cherry-pick, revert, or bisect is in progress, or another git command is running. If git fails for any other reason, or isn't installed, the approval still stands and Psydcar reports what went wrong. After each approval, the CLI and the dashboard say whether a commit was recorded, and **Recent decisions** and `psydcar proposal list --reviewed` show its commit ID.
+
+Psydcar never pulls, pushes, or fetches, and it never touches remotes. To move work between devices, use your own git commands, such as `git push` and `git pull`. When pulled changes arrive in a sidecar's folder, the watcher re-indexes them. Rejections never make commits.
+
 ## Keep sidecars up to date
 
 Run `psydcar sidecar update NAME` after files change. It reports what was added, changed, deleted, or unchanged.
@@ -141,6 +159,7 @@ In the dashboard, the same settings are under **Embedding provider**. **Test set
 | `psydcar sidecar index NAME` / `update NAME` | Index the folder, or refresh changed files. Both commands run the same refresh. |
 | `psydcar sidecar rename OLD NEW` | Rename a sidecar. Its ID stays the same. |
 | `psydcar sidecar remove NAME` | Delete the sidecar and its index. The source folder isn't touched. |
+| `psydcar sidecar git-record NAME [on\|off]` | Show, or turn on or off, [recording approvals as git commits](#record-approvals-as-git-commits). |
 
 Commands accept a sidecar's name or ID. To search several sidecars, repeat `--sidecar`. Run `psydcar --help` or `psydcar COMMAND --help` for every option.
 
@@ -165,7 +184,7 @@ Text and code are split into passages of up to 40 lines that overlap by 5 lines.
 | `git.uncommitted` | `true` when the file differs from that commit, staged or not, or isn't tracked by git. |
 | `git.tracked` | `false` when git doesn't track the file, for example a new or ignored file. |
 
-The `git` fields appear only when the sidecar's folder is in a git repository, including a folder inside a larger repository. Psydcar reads them with your installed `git` and never changes the repository. In other folders, or without git installed, results don't include `git`. When `freshness` is `current` and `git.uncommitted` is `false`, the evidence matches the file as committed at `git.commit`.
+The `git` fields appear only when the sidecar's folder is in a git repository, including a folder inside a larger repository. Psydcar reads them with your installed `git`, and reading them never changes the repository. In other folders, or without git installed, results don't include `git`. When `freshness` is `current` and `git.uncommitted` is `false`, the evidence matches the file as committed at `git.commit`.
 
 If a file has changed or disappeared, `retrieve` returns `context: null` instead of outdated text. After an update, changed passages get new evidence IDs.
 
@@ -178,7 +197,7 @@ Psydcar keeps its index in one per-user folder:
 
 To use a different folder, set `PSYDCAR_HOME` to an absolute path. If you do, set the same value for the CLI, the dashboard, and your MCP client.
 
-The data folder contains `state.sqlite3` for sidecar registrations, provider settings, and proposed edits and `search.sqlite3` for indexed documents and embeddings. The first run upgrades an existing `psydcar.sqlite3` database automatically and retains it as a pre-upgrade backup. Existing sidecar IDs and indexed evidence IDs carry over. Stop running Psydcar processes before upgrading so all interfaces switch to the new stores together.
+The data folder contains `state.sqlite3` for sidecar registrations, provider settings, proposed edits, and git record settings and `search.sqlite3` for indexed documents and embeddings. The first run upgrades an existing `psydcar.sqlite3` database automatically and retains it as a pre-upgrade backup. Existing sidecar IDs and indexed evidence IDs carry over. Stop running Psydcar processes before upgrading so all interfaces switch to the new stores together.
 
 ## Upgrade and uninstall
 

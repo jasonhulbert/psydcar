@@ -43,7 +43,12 @@ _REPOSITORY_VARIABLES = frozenset({
 })
 
 
-def _git(cwd: Path, *args: str) -> str | None:
+def git_environment() -> dict[str, str]:
+    """Return an environment in which git finds the repository from its working folder.
+
+    Variables that point git at another repository or index are dropped, and git
+    never prompts, takes optional locks, or reads pathspecs as patterns.
+    """
     environment = {
         key: value for key, value in os.environ.items()
         if key not in _REPOSITORY_VARIABLES and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
@@ -54,6 +59,11 @@ def _git(cwd: Path, *args: str) -> str | None:
         "GIT_LITERAL_PATHSPECS": "1",
         "LC_ALL": "C",
     })
+    return environment
+
+
+def _git(cwd: Path, *args: str) -> str | None:
+    environment = git_environment()
     try:
         completed = subprocess.run(
             ["git", *_READ_ONLY_CONFIG, *args], cwd=cwd, env=environment, stdin=subprocess.DEVNULL,

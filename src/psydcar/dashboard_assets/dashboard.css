@@ -271,6 +271,47 @@
 .decision .proposal-reason { -webkit-line-clamp: 1; }
 .decision-more { margin-top: 8px; }
 
+.commit-chip {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; margin-left: auto; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--fg-muted);
+  font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background-color 0.08s, border-color 0.08s, color 0.08s;
+}
+.commit-chip:hover { border-color: var(--border-strong); color: var(--fg); }
+.commit-chip .icon { width: 13px; height: 13px; }
+
+/* Git record */
+
+.git-record-row { display: flex; align-items: flex-start; gap: 16px; }
+.git-record-text { flex: 1; min-width: 0; }
+.detail-section .git-record-text h3 { margin-bottom: 4px; }
+.git-record-description { font-size: 13px; color: var(--fg-muted); }
+.git-record-meta {
+  display: flex; align-items: flex-start; gap: 6px; margin-top: 10px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 18px; color: var(--fg-subtle);
+}
+.git-record-meta .icon { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+.git-record-meta bdi { min-width: 0; overflow-wrap: anywhere; }
+.git-record-note { margin-top: 6px; font-size: 12px; color: var(--fg-subtle); }
+
+.switch { position: relative; display: inline-flex; flex: none; width: 36px; height: 20px; margin-top: 1px; cursor: pointer; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: inherit; }
+.switch-track {
+  width: 100%; height: 100%; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--neutral-bg);
+  transition: background-color 0.12s, border-color 0.12s; pointer-events: none;
+}
+.switch-track::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 0.12s;
+}
+.switch input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + .switch-track::after { transform: translateX(16px); }
+.switch input:focus-visible + .switch-track { box-shadow: var(--focus-ring); }
+.switch:has(input:disabled) { cursor: default; opacity: 0.55; }
+
+.review-commit { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg-muted); }
+.review-commit .icon { width: 14px; height: 14px; color: var(--fg-subtle); }
+
 .review-nav { display: flex; align-items: center; gap: 2px; }
 .review-position { margin-right: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--fg-subtle); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .review-loading { color: var(--fg-muted); font-size: 13px; }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from git_sandbox import git, use_sandbox
 from psydcar.dashboard import DashboardServer
 from psydcar.proposal_files import Workspace
 from psydcar.proposals import Proposals
@@ -280,6 +282,26 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual((queue["pending"], [item["status"] for item in queue["reviewed"]]), ([], ["approved", "rejected"]))
         self.wait_for(lambda: len(json.loads(self.cli("search", "--sidecar", sidecar.id, "meadow").stdout or "[]")) == 1,
                       "approved text was not searchable")
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_owner_turns_on_the_git_record_and_an_approval_becomes_a_commit(self) -> None:
+        use_sandbox(self, self.root)
+        (self.source / "notes.md").write_text("quiet orchard\n")
+        git(self.source, "init", "-q")
+        git(self.source, "add", ".")
+        git(self.source, "commit", "-q", "-m", "Start")
+        store = self.server.store
+        sidecar = store.create("Research", self.source)
+        base = Workspace(store).files(sidecar.id).read("notes.md")
+        proposal = Proposals(store).submit(sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n",
+                                           "Add the meadow.", "Review assistant")
+        base_path = f"/api/sidecars/{sidecar.id}"
+        self.assertEqual(self.http("POST", f"{base_path}/git-record", {"enabled": True})[0], 200)
+
+        approved = self.http("POST", f"{base_path}/proposals/{proposal['id']}", {"decision": "approved"})[1]
+
+        self.assertEqual(approved["commit_id"], git(self.source, "rev-parse", "HEAD"))
+        self.assertEqual(self.http("GET", f"{base_path}/proposals")[1]["reviewed"][0]["commit_id"], approved["commit_id"])
 
     def test_connection_preview_uses_exact_ids_and_local_store(self) -> None:
         which = patch("psydcar.dashboard.shutil.which", return_value=None)

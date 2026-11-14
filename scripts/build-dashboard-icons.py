@@ -27,6 +27,7 @@ ICONS = [
     "circle-x",
     "copy",
     "folder-plus",
+    "git-commit-horizontal",
     "git-pull-request",
     "inbox",
     "info",

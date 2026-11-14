@@ -9,8 +9,8 @@
     token: null, sidecars: [], selectedId: null, filter: "", statusFilter: "all",
     watching: false, loading: false, toastTimer: null, provider: { configured: false },
     connectionPreview: null, snapshotKey: "", renderedAt: 0,
-    proposals: { sidecarId: null, key: "", pending: [], reviewed: [], loaded: false, expanded: false },
-    review: null,
+    proposals: { sidecarId: null, key: "", pending: [], reviewed: [], gitRecord: null, loaded: false, expanded: false },
+    review: null, savingRecord: false,
   };
 
   // DOM helpers
@@ -130,7 +130,8 @@
     // As a popover the toast joins the top layer, so it shows above an open dialog.
     if (toast.showPopover) toast.showPopover();
     clearTimeout(model.toastTimer);
-    model.toastTimer = setTimeout(hideToast, 5000);
+    // Problems stay longer, so there is time to read what to do about them.
+    model.toastTimer = setTimeout(hideToast, error ? 10000 : 5000);
   }
 
   function hideToast() {
@@ -406,6 +407,7 @@
     }
 
     renderProposals(target, sidecar);
+    renderGitRecord(target, sidecar);
 
     const updates = section(target, "Updates");
     props(updates, [
@@ -636,7 +638,7 @@
 
   async function loadProposals(sidecarId, key) {
     if (model.proposals.sidecarId !== sidecarId) {
-      model.proposals = { sidecarId, key, pending: [], reviewed: [], loaded: false, expanded: false };
+      model.proposals = { sidecarId, key, pending: [], reviewed: [], gitRecord: null, loaded: false, expanded: false };
     } else {
       model.proposals.key = key;
     }
@@ -645,6 +647,7 @@
       if (model.proposals.sidecarId !== sidecarId) return;
       model.proposals.pending = (result.pending || []).sort(byCreated);
       model.proposals.reviewed = result.reviewed || [];
+      model.proposals.gitRecord = result.git_record || null;
       model.proposals.loaded = true;
     } catch (error) {
       if (model.proposals.sidecarId !== sidecarId) return;
@@ -715,6 +718,14 @@
         const approved = item.status === "approved";
         add(top, "span", `badge decision-badge${approved ? " badge-success" : ""}`, approved ? "Approved" : "Rejected");
         add(top, "span", "proposal-path", item.path).title = item.path;
+        if (item.commit_id) {
+          const short = item.commit_id.slice(0, 7);
+          const chip = button(top, "commit-chip", short, {
+            iconName: "git-commit-horizontal", focusKey: `commit:${item.id}`, ariaLabel: `Copy commit ID ${short}`,
+          });
+          chip.title = `Recorded as commit ${item.commit_id}. Click to copy.`;
+          chip.addEventListener("click", () => copyText(item.commit_id, null, "Commit ID copied."));
+        }
         add(row, "span", "proposal-reason", item.summary);
         agentLine(row, item, "decided", item.decided_at);
       }
@@ -725,6 +736,82 @@
         });
       }
     }
+  }
+
+  // Git record
+
+  function branchText(record) {
+    return record.branch ? `the ${record.branch} branch` : "the checked-out branch";
+  }
+
+  function renderGitRecord(parent, sidecar) {
+    const record = model.proposals.sidecarId === sidecar.id ? model.proposals.gitRecord : null;
+    // Offered only where commits can work, or where an earlier choice needs undoing.
+    if (!record || (!record.available && !record.enabled)) return;
+    const block = add(parent, "section", "detail-section git-record");
+    const row = add(block, "div", "git-record-row");
+    const text = add(row, "div", "git-record-text");
+    const title = add(text, "h3", "", "Git record");
+    title.id = "git-record-title";
+    const description = add(text, "p", "git-record-description");
+    description.id = "git-record-description";
+    if (!record.available) {
+      description.textContent = "The folder is no longer in a git repository, so approvals don't make commits. Turn the record off, or restore the repository.";
+    } else if (record.enabled) {
+      description.textContent = `Each approved edit becomes a commit on ${branchText(record)} that names the agent and its reason.`;
+    } else {
+      description.textContent = `Record each approved edit as a commit on ${branchText(record)}. Your other changes stay out of these commits.`;
+    }
+    const toggle = add(row, "label", "switch");
+    const input = add(toggle, "input");
+    input.type = "checkbox";
+    input.setAttribute("role", "switch");
+    input.checked = Boolean(record.enabled);
+    input.disabled = model.savingRecord || (!record.available && !record.enabled);
+    input.dataset.focusKey = "detail:git-record";
+    input.setAttribute("aria-labelledby", "git-record-title");
+    input.setAttribute("aria-describedby", "git-record-description");
+    add(toggle, "span", "switch-track").setAttribute("aria-hidden", "true");
+    input.addEventListener("change", () => setGitRecord(sidecar, input.checked));
+    if (record.repository) {
+      const where = add(block, "p", "git-record-meta");
+      where.append(icon("git-commit-horizontal"));
+      add(where, "bdi", "", record.repository).title = record.repository;
+    }
+    add(block, "p", "git-record-note", "Psydcar never pulls or pushes. Move commits between devices with your own git commands.");
+  }
+
+  async function setGitRecord(sidecar, enabled) {
+    model.savingRecord = true;
+    renderDetail();
+    try {
+      const result = await request(`/api/sidecars/${sidecar.id}/git-record`, {
+        method: "POST", body: JSON.stringify({ enabled }),
+      });
+      if (model.proposals.sidecarId === sidecar.id) model.proposals.gitRecord = result.git_record;
+      message(result.message);
+    } catch (error) {
+      message(error.message, true);
+    } finally {
+      model.savingRecord = false;
+      if (model.selectedId === sidecar.id) {
+        renderDetail();
+        document.querySelector('[data-focus-key="detail:git-record"]')?.focus({ preventScroll: true });
+      }
+    }
+  }
+
+  function approvalMessage(result) {
+    const notices = [result.commit_notice, result.index_notice].filter(Boolean);
+    let text;
+    if (result.commit_id) {
+      text = `Approved. ${result.path} was saved and recorded as commit ${result.commit_id.slice(0, 7)} on ${result.commit_branch}.`;
+    } else if (result.git_record) {
+      text = "Approved.";
+    } else {
+      text = notices.length ? `Approved and saved ${result.path}.` : `Approved. ${result.path} was saved and is searchable now.`;
+    }
+    return { text: [text, ...notices].join(" "), error: notices.length > 0 };
   }
 
   // Review dialog
@@ -810,6 +897,12 @@
     byline.append(document.createTextNode(` proposed an edit${sidecar ? ` in ${sidecar.name}` : ""} ${ago(detail.created_at)}`));
     byline.title = date(detail.created_at);
     add(head, "p", "review-reason", detail.summary);
+    const record = model.proposals.sidecarId === review.sidecarId ? model.proposals.gitRecord : null;
+    if (detail.status === "pending" && record?.enabled && record.available) {
+      const note = add(head, "p", "review-commit");
+      note.append(icon("git-commit-horizontal"));
+      add(note, "span", "", `Approving also records a commit on ${branchText(record)}.`);
+    }
 
     if (detail.status !== "pending") {
       flash(target, "info", `This proposal was ${detail.status}`, { text: detail.decided_at ? `Decided ${ago(detail.decided_at)}. Nothing is left to review.` : "" });
@@ -883,8 +976,7 @@
         method: "POST", body: JSON.stringify({ decision }),
       });
       if (decision === "rejected") message(`Rejected. ${result.path} was not changed.`);
-      else if (result.index_notice) message(`Approved and saved ${result.path}. ${result.index_notice}`, true);
-      else message(`Approved. ${result.path} was saved and is searchable now.`);
+      else { const outcome = approvalMessage(result); message(outcome.text, outcome.error); }
       await refresh(false, true);
       await loadProposals(review.sidecarId, `${review.sidecarId}:${model.snapshotKey}`);
       if (model.review !== review) return;

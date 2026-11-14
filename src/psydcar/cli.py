@@ -16,6 +16,7 @@ from .embeddings import ProviderStore
 from .dashboard import run_dashboard
 from .evidence import EvidenceStore, IndexedSidecar
 from .freshness import SidecarWatcher, WatchEvent
+from .git_record import GitRecord
 from .mcp_server import run_mcp
 from .proposals import Proposals
 from .registry import SidecarStore, StoreError
@@ -69,6 +70,10 @@ def _parser() -> argparse.ArgumentParser:
     update = actions.add_parser("update", help="Refresh added, changed, and deleted source files")
     update.add_argument("reference", help="Sidecar name or ID")
 
+    record = actions.add_parser("git-record", help="Show, or turn on or off, recording approvals as git commits")
+    record.add_argument("reference", help="Sidecar name or ID")
+    record.add_argument("state", nargs="?", choices=("on", "off"), help="Turn the record on or off (default: show it)")
+
     proposal = commands.add_parser("proposal", help="Review edits that agents proposed")
     proposal_actions = proposal.add_subparsers(dest="proposal_action", required=True)
     proposal_list = proposal_actions.add_parser("list", help="List proposals waiting for review")
@@ -76,7 +81,7 @@ def _parser() -> argparse.ArgumentParser:
     proposal_list.add_argument("--reviewed", action="store_true", help="List recent decisions instead")
     for action, description in (
         ("show", "Show a proposal with its diff"),
-        ("approve", "Write a proposal to its file and update the search index"),
+        ("approve", "Write a proposal to its file, update the search index, and commit it if the git record is on"),
         ("reject", "Reject a proposal; the file is not changed"),
     ):
         proposal_actions.add_parser(action, help=description).add_argument(
@@ -149,9 +154,11 @@ def _proposal_command(store: SidecarStore, args: argparse.Namespace) -> int:
             return 0
         if args.reviewed:
             rows.sort(key=lambda pair: pair[0]["decided_at"] or "", reverse=True)
-            _table(("ID", "SIDECAR", "FILE", "AGENT", "DECISION", "DECIDED", "REASON"), [
+            commits = any(item["commit_id"] for item, _ in rows)
+            _table(("ID", "SIDECAR", "FILE", "AGENT", "DECISION", "DECIDED", *(("COMMIT",) if commits else ()), "REASON"), [
                 (item["id"][:8], name, item["path"], item["agent_name"], item["status"].capitalize(),
-                 _short_time(item["decided_at"]), item["summary"]) for item, name in rows
+                 _short_time(item["decided_at"]), *(((item["commit_id"] or "-")[:7],) if commits else ()), item["summary"])
+                for item, name in rows
             ])
         else:
             rows.sort(key=lambda pair: pair[0]["created_at"])
@@ -178,6 +185,8 @@ def _proposal_command(store: SidecarStore, args: argparse.Namespace) -> int:
         )))
         if detail["decided_at"]:
             print(f"Decided: {_short_time(detail['decided_at'])}")
+        if detail["commit_id"]:
+            print(f"Commit: {detail['commit_id']}")
         if detail["stale"]:
             print(f"Out of date: {detail['stale_message']}")
         if detail["diff"] is not None:
@@ -194,8 +203,35 @@ def _proposal_command(store: SidecarStore, args: argparse.Namespace) -> int:
     notice = result["index_notice"]
     print(f'Approved proposal {result["id"][:8]}. Wrote {result["path"]} in "{sidecar.name}"'
           + ("." if notice else " and updated the search index."), flush=True)
-    if notice:
-        print(notice, file=sys.stderr)
+    if result["commit_id"]:
+        print(f'Recorded commit {result["commit_id"][:7]} on {result["commit_branch"]}.', flush=True)
+    for line in (result["commit_notice"], notice):
+        if line:
+            print(line, file=sys.stderr)
+    return 0
+
+
+def _git_record_lines(state: dict) -> list[str]:
+    if not state["available"]:
+        return ["Git record: Not available (the folder isn't in a git repository)" if not state["enabled"]
+                else "Git record: On, but the folder is no longer in a git repository"]
+    where = f'{state["repository"]}' + (f' on branch {state["branch"]}' if state["branch"] else "")
+    return [f'Git record: {"On" if state["enabled"] else "Off"}', f"Repository: {where}"]
+
+
+def _git_record_command(store: SidecarStore, args: argparse.Namespace) -> int:
+    record = GitRecord(store)
+    if args.state is None:
+        print("\n".join(_git_record_lines(record.state(store.get(args.reference)))))
+        return 0
+    sidecar, state = record.set(args.reference, args.state == "on")
+    if args.state == "off":
+        print(f'Git record is off for "{sidecar.name}". Approvals write files without making commits.')
+        return 0
+    branch = f' (now {state["branch"]})' if state["branch"] else ""
+    print(f'Git record is on for "{sidecar.name}". Each approval becomes a commit on the checked-out branch{branch} '
+          f'in {state["repository"]}.')
+    print("Psydcar never pulls or pushes. Move commits between devices with your own git commands.")
     return 0
 
 
@@ -223,6 +259,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         store = SidecarStore()
+        if args.command == "sidecar" and args.action == "git-record":
+            return _git_record_command(store, args)
         if args.command == "sidecar":
             if args.action == "create":
                 sidecar = EvidenceStore(store).sidecar(store.create(args.name, args.source).id, exact_id=True)
@@ -269,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         print(f'Embedding note: {state["message"]}')
                 for notice in evidence_store.pdf_page_notices(sidecar.id):
                     print(f'PDF page: {notice["source"]}, page {notice["page"]}: {notice["message"]}')
+                print("\n".join(_git_record_lines(GitRecord(store).state(store.get(sidecar.id, exact_id=True)))))
             elif args.action == "rename":
                 sidecar = EvidenceStore(store).sidecar(store.rename(args.reference, args.new_name).id, exact_id=True)
                 print(f'Renamed sidecar to "{sidecar.name}".\n{_details(sidecar)}')

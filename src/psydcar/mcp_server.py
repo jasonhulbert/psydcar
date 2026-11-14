@@ -30,7 +30,9 @@ def create_server(store: SidecarStore, access: AgentAccess):
         results = evidence.search(list(access.selected), query, limit, exact_ids=True)
         return {"results": results, "warning": evidence.last_search_warning}
 
-    @server.tool(name="retrieve", description="Read current source for an evidence ID in this connection's selected sidecars.", structured_output=True)
+    @server.tool(
+        name="retrieve", description="Read current source for an evidence ID in this connection's selected sidecars.", structured_output=True
+    )
     def retrieve(evidence_id: str) -> dict[str, Any]:
         """Return source-checked evidence with its location and freshness."""
         return EvidenceStore(store).retrieve(list(access.selected), evidence_id, exact_ids=True)
@@ -49,7 +51,8 @@ def create_server(store: SidecarStore, access: AgentAccess):
 
         @server.tool(name="read_editable_file", structured_output=True)
         def read_editable_file(
-            sidecar_id: str, path: Annotated[str, Field(min_length=1, max_length=MAX_PATH_LENGTH)],
+            sidecar_id: str,
+            path: Annotated[str, Field(min_length=1, max_length=MAX_PATH_LENGTH)],
         ) -> dict[str, Any]:
             """Read the full text and version of an existing file in a sidecar granted for proposals."""
             require_grant(sidecar_id)
@@ -59,14 +62,22 @@ def create_server(store: SidecarStore, access: AgentAccess):
                 raise ToolError(str(exc)) from exc
             return {key: file[key] for key in ("path", "content", "version")}
 
-        @server.tool(name="propose_edit", structured_output=True)
+        @server.tool(
+            name="propose_edit",
+            structured_output=True,
+            description=(
+                "Queue complete replacement text and a one-line reason for the owner to review. "
+                "Use the version from read_editable_file. This tool does not write the file. "
+                "If the owner approves, Psydcar writes it, and the reason may become the subject of a git commit."
+            ),
+        )
         def propose_edit(
-            sidecar_id: str, path: Annotated[str, Field(min_length=1, max_length=MAX_PATH_LENGTH)],
+            sidecar_id: str,
+            path: Annotated[str, Field(min_length=1, max_length=MAX_PATH_LENGTH)],
             version: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")],
             content: Annotated[str, Field(max_length=MAX_FILE_BYTES)],
             summary: Annotated[str, Field(min_length=1, max_length=MAX_SUMMARY_LENGTH)],
         ) -> dict[str, Any]:
-            """Queue complete replacement text and a one-line reason for the owner to review. Use the version from read_editable_file. This tool does not write the file. If the owner approves, Psydcar writes it, and the reason may become the subject of a git commit."""
             require_grant(sidecar_id)
             try:
                 return proposals.submit(sidecar_id, path, version, content, summary, access.agent_name)

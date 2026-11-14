@@ -10,7 +10,6 @@ from pathlib import Path
 from psydcar.evidence import INITIAL_STATUS, EvidenceStore
 from psydcar.registry import SidecarStore
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 

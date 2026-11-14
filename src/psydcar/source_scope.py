@@ -12,12 +12,33 @@ from pathlib import Path
 
 from .registry import Sidecar
 
-
 SUPPORTED_EXTENSIONS = frozenset(
     {
-        ".txt", ".md", ".markdown", ".rst", ".py", ".js", ".jsx", ".ts", ".tsx",
-        ".json", ".yaml", ".yml", ".toml", ".go", ".rs", ".java", ".c", ".h",
-        ".cpp", ".hpp", ".cs", ".sh", ".sql", ".html", ".css",
+        ".txt",
+        ".md",
+        ".markdown",
+        ".rst",
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".go",
+        ".rs",
+        ".java",
+        ".c",
+        ".h",
+        ".cpp",
+        ".hpp",
+        ".cs",
+        ".sh",
+        ".sql",
+        ".html",
+        ".css",
     }
 )
 PDF_EXTENSION = ".pdf"
@@ -125,8 +146,14 @@ def source_snapshot(sidecar: Sidecar) -> tuple[tuple[str, str, int, int, int, in
         except OSError as exc:
             entries.append((relative, "stat_error", exc.errno or 0, 0, 0, 0))
             continue
-        entries.append((
-            relative, "linked_directory" if linked_directory else "file",
-            stat.st_mode, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
-        ))
+        entries.append(
+            (
+                relative,
+                "linked_directory" if linked_directory else "file",
+                stat.st_mode,
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ctime_ns,
+            )
+        )
     return tuple(sorted(entries))

@@ -12,7 +12,6 @@ import time
 import unittest
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
@@ -34,8 +33,9 @@ class MCPProcess:
             command.extend(("--propose-sidecar-id", sidecar_id))
         if proposal_ids:
             command.extend(("--agent-name", "Review assistant"))
-        self.process = subprocess.Popen(command, cwd=workdir, env=environment, stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        self.process = subprocess.Popen(
+            command, cwd=workdir, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1
+        )
         self.lines: queue.Queue[str] = queue.Queue()
         assert self.process.stdout is not None
         threading.Thread(target=self._read, daemon=True).start()
@@ -69,10 +69,14 @@ class MCPProcess:
         self.process.stdin.flush()
 
     def initialize(self) -> dict:
-        response = self.request("initialize", {
-            "protocolVersion": "2025-06-18", "capabilities": {},
-            "clientInfo": {"name": "psydcar-test", "version": "1"},
-        })
+        response = self.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "psydcar-test", "version": "1"},
+            },
+        )
         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         return response
 
@@ -105,9 +109,9 @@ class MCPTests(unittest.TestCase):
         self.sources = [self.root / name for name in ("alpha", "beta", "private")]
         for source in self.sources:
             source.mkdir()
-        for source, content in zip(self.sources, ("sharedterm alphaonly\n", "sharedterm betaonly\n", "sharedterm privateonly\n")):
+        for source, content in zip(self.sources, ("sharedterm alphaonly\n", "sharedterm betaonly\n", "sharedterm privateonly\n"), strict=True):
             (source / "note.md").write_text(content)
-        self.sidecars = [self.store.create(name, source) for name, source in zip(("Alpha", "Beta", "Private"), self.sources)]
+        self.sidecars = [self.store.create(name, source) for name, source in zip(("Alpha", "Beta", "Private"), self.sources, strict=True)]
         evidence = EvidenceStore(self.store)
         for sidecar in self.sidecars:
             evidence.update(sidecar.id)
@@ -125,13 +129,18 @@ class MCPTests(unittest.TestCase):
         connection.initialize()
         target = {"sidecar_id": sidecar.id, "path": "note.md"}
         base = connection.call("read_editable_file", target)["structuredContent"]
-        connection.call("propose_edit", {
-            **target, "version": base["version"], "content": "Lantern meadow\n", "summary": "Add the latest field note.",
-        })
+        connection.call(
+            "propose_edit",
+            {
+                **target,
+                "version": base["version"],
+                "content": "Lantern meadow\n",
+                "summary": "Add the latest field note.",
+            },
+        )
 
         queued = Proposals(self.store).list(sidecar.id)["items"]
-        self.assertEqual([(item["agent_name"], item["summary"]) for item in queued],
-                         [("Review assistant", "Add the latest field note.")])
+        self.assertEqual([(item["agent_name"], item["summary"]) for item in queued], [("Review assistant", "Add the latest field note.")])
         self.assertEqual(path.read_bytes(), original)
 
     def test_approved_proposal_keeps_line_endings_and_byte_order_mark(self) -> None:
@@ -140,8 +149,14 @@ class MCPTests(unittest.TestCase):
         path.write_bytes(b"\xef\xbb\xbfsharedterm alphaonly\r\nfield note\nend\r\n")
         proposals = Proposals(self.store)
         base = ProposalFiles(self.store).files(sidecar.id).read("note.md")
-        queued = proposals.submit(sidecar.id, "note.md", base["version"], "sharedterm alphaonly\nLantern meadow\nend\nnew\n",
-                                  "Add the latest field note.", "Review assistant")
+        queued = proposals.submit(
+            sidecar.id,
+            "note.md",
+            base["version"],
+            "sharedterm alphaonly\nLantern meadow\nend\nnew\n",
+            "Add the latest field note.",
+            "Review assistant",
+        )
         proposals.review(sidecar.id, queued["id"], "approved")
         self.assertEqual(path.read_bytes(), b"\xef\xbb\xbfsharedterm alphaonly\r\nLantern meadow\nend\r\nnew\r\n")
 

@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Jason Hulbert" }]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = ["pypdf>=6.0,<7", "mcp>=2.3,<3"]
 keywords = ["mcp", "model-context-protocol", "coding-agents", "search", "embeddings", "rag", "knowledge-base"]
 classifiers = [
@@ -21,7 +21,6 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -43,3 +42,17 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 psydcar = ["dashboard_assets/*"]
+
+[dependency-groups]
+dev = ["ruff>=0.17,<0.18", "ty>=0.0.104,<0.1"]
+
+[tool.ruff]
+line-length = 150
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests put src/ on sys.path before importing the package.
+"tests/*.py" = ["E402"]

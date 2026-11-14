@@ -8,17 +8,13 @@ import sys
 import tempfile
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from contextlib import closing
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
-try:
-    from test_pdf_cli import write_pdf
-    from pypdf import PdfReader
-except ImportError:
-    PdfReader = None
-
+from test_pdf_cli import write_pdf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SECRET = "VERY_SECRET_TEST_CREDENTIAL"
@@ -36,17 +32,25 @@ def deterministic_vector(text: str) -> list[float]:
     return [0.0, 0.0, 1.0]
 
 
+class GatewayServer(ThreadingHTTPServer):
+    state: dict[str, Any]
+
+
 class GatewayHandler(BaseHTTPRequestHandler):
+    server: GatewayServer  # ty: ignore[incompatible-mutable-override]
+
     def do_POST(self) -> None:
         state = self.server.state
         length = int(self.headers["Content-Length"])
         body = json.loads(self.rfile.read(length))
-        state["requests"].append({
-            "path": self.path,
-            "authorization": self.headers.get("Authorization"),
-            "user_agent": self.headers.get("User-Agent"),
-            "body": body,
-        })
+        state["requests"].append(
+            {
+                "path": self.path,
+                "authorization": self.headers.get("Authorization"),
+                "user_agent": self.headers.get("User-Agent"),
+                "body": body,
+            }
+        )
         if state["fail_on_request"] == len(state["requests"]):
             status, payload = state.get("fail_response", (503, b"temporary failure"))
             self.send_response(status)
@@ -64,10 +68,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if state["pause_on_request"] == len(state["requests"]):
             state["pause_entered"].set()
             state["resume"].wait(10)
-        result = {"data": [
-            {"index": index, "embedding": deterministic_vector(text)}
-            for index, text in enumerate(body["input"])
-        ]}
+        result = {"data": [{"index": index, "embedding": deterministic_vector(text)} for index, text in enumerate(body["input"])]}
         payload = json.dumps(result).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -75,14 +76,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def log_message(self, format: str, *args: object) -> None:
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
 
 class EmbeddingClientTests(unittest.TestCase):
     def setUp(self) -> None:
         try:
-            self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
+            self.server = GatewayServer(("127.0.0.1", 0), GatewayHandler)
         except PermissionError:
             self.skipTest("loopback sockets are unavailable in this sandbox")
         self.server.state = {"requests": [], "fail_on_request": None, "bad_encoding_on_request": None, "pause_on_request": None}
@@ -118,7 +119,6 @@ class EmbeddingClientTests(unittest.TestCase):
         self.assertNotIn(SECRET, message)
 
 
-@unittest.skipUnless(PdfReader is not None, "pypdf is not installed in this Python environment")
 class EmbeddingCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -136,12 +136,16 @@ class EmbeddingCliTests(unittest.TestCase):
         write_pdf(self.source / "guide.pdf", ["PDF astronomy orbit guide"])
         (self.other_source / "private.md").write_text("Automobile private detail\n")
         try:
-            self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
+            self.server = GatewayServer(("127.0.0.1", 0), GatewayHandler)
         except PermissionError:
             self.skipTest("loopback sockets are unavailable in this sandbox")
         self.server.state = {
-            "requests": [], "fail_on_request": None, "bad_encoding_on_request": None,
-            "pause_on_request": None, "pause_entered": threading.Event(), "resume": threading.Event(),
+            "requests": [],
+            "fail_on_request": None,
+            "bad_encoding_on_request": None,
+            "pause_on_request": None,
+            "pause_entered": threading.Event(),
+            "resume": threading.Event(),
         }
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -161,14 +165,24 @@ class EmbeddingCliTests(unittest.TestCase):
         else:
             env.pop("PSYDCAR_TEST_KEY", None)
         return subprocess.run(
-            [sys.executable, "-m", "psydcar", *args], cwd=cwd or self.work_one,
-            env=env, capture_output=True, text=True, check=False,
+            [sys.executable, "-m", "psydcar", *args],
+            cwd=cwd or self.work_one,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     def configure(self) -> None:
         configured = self.cli(
-            "provider", "set", "--base-url", self.base_url,
-            "--model", "deterministic-test", "--api-key-env", "PSYDCAR_TEST_KEY",
+            "provider",
+            "set",
+            "--base-url",
+            self.base_url,
+            "--model",
+            "deterministic-test",
+            "--api-key-env",
+            "PSYDCAR_TEST_KEY",
         )
         self.assertEqual(configured.returncode, 0, configured.stderr)
 
@@ -220,7 +234,13 @@ class EmbeddingCliTests(unittest.TestCase):
 
         pdf_search = self.cli("search", "--sidecar", "Library", "astronomy")
         pdf_hits = json.loads(pdf_search.stdout)
-        self.assertTrue(any(hit["source"]["relative_path"] == "guide.pdf" and hit["location"]["page"] == 1 for hit in pdf_hits if hit["location"]["kind"] == "page"))
+        self.assertTrue(
+            any(
+                hit["source"]["relative_path"] == "guide.pdf" and hit["location"]["page"] == 1
+                for hit in pdf_hits
+                if hit["location"]["kind"] == "page"
+            )
+        )
 
         cleared = self.cli("provider", "clear")
         self.assertEqual(cleared.returncode, 0, cleared.stderr)
@@ -291,8 +311,7 @@ class EmbeddingCliTests(unittest.TestCase):
     def test_pending_update_marks_search_stale_and_refreshes_embeddings(self) -> None:
         self.configure()
         self.assertEqual(self.cli("sidecar", "index", "Library").returncode, 0)
-        old = next(hit for hit in json.loads(self.cli("search", "--sidecar", "Library", "car").stdout)
-                   if hit["source"]["relative_path"] == "cars.md")
+        old = next(hit for hit in json.loads(self.cli("search", "--sidecar", "Library", "car").stdout) if hit["source"]["relative_path"] == "cars.md")
         (self.source / "cars.md").write_text("An automobile engine is documented here.\n")
         (self.source / "orbit.py").unlink()
         (self.source / "new.md").write_text("A new car reference is here.\n")
@@ -303,7 +322,11 @@ class EmbeddingCliTests(unittest.TestCase):
         env["PSYDCAR_TEST_KEY"] = SECRET
         process = subprocess.Popen(
             [sys.executable, "-m", "psydcar", "sidecar", "update", "Library"],
-            cwd=self.work_two, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=self.work_two,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             self.assertTrue(self.server.state["pause_entered"].wait(5), "update did not reach the gateway")
@@ -351,7 +374,11 @@ class EmbeddingCliTests(unittest.TestCase):
         env["PSYDCAR_TEST_KEY"] = SECRET
         process = subprocess.Popen(
             [sys.executable, "-m", "psydcar", "watch", "--once"],
-            cwd=self.work_two, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=self.work_two,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             self.assertTrue(self.server.state["pause_entered"].wait(5), "watch catch-up did not reach the gateway")

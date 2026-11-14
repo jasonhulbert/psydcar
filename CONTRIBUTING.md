@@ -4,17 +4,17 @@ Thanks for your interest in improving Psydcar. Bug reports, ideas, and pull requ
 
 ## Development setup
 
-You need Python 3.10 or newer. Clone the repository and install it in editable mode in a virtual environment:
+You need Python 3.11 or newer. Clone the repository and install it in editable mode in a virtual environment:
 
 ```console
 git clone https://github.com/jasonhulbert/psydcar.git
 cd psydcar
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e . --group dev
 ```
 
-With uv, `uv venv && uv pip install -e .` does the same.
+The `dev` group adds [Ruff](https://docs.astral.sh/ruff/) and [ty](https://docs.astral.sh/ty/). Installing a dependency group needs pip 25.1 or newer. With uv, `uv venv && uv pip install -e . --group dev` does the same.
 
 To keep experiments away from your real sidecars, point `PSYDCAR_HOME` at a scratch folder:
 
@@ -31,6 +31,18 @@ python -m unittest discover -s tests
 ```
 
 CI runs the suite on macOS and Linux for every supported Python version. Some tests start local HTTP servers on `127.0.0.1`, so a sandbox that blocks loopback sockets will skip them. Tests of git provenance and the git record need `git` and are skipped without it.
+
+## Linting, formatting, and type checking
+
+Ruff lints and formats the code, and ty checks types. Their settings are in `pyproject.toml`. Run all three from the repository root before you open a pull request:
+
+```console
+ruff check .
+ruff format .
+ty check
+```
+
+`ruff check --fix .` applies the safe fixes. ty reads the packages installed in `.venv`, so run it with the virtual environment in place. CI runs the same checks and fails on any finding.
 
 ## How the code is organized
 

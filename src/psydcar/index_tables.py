@@ -10,20 +10,23 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 
 from .registry import SidecarStore, StoreError
 from .storage import Tables, connect, copy_rows, read_only
 
-
-_SEARCH_TABLES = Tables("evidence index", "sidecar_index", ((
-    """CREATE TABLE sidecar_index (
+_SEARCH_TABLES = Tables(
+    "evidence index",
+    "sidecar_index",
+    (
+        (
+            """CREATE TABLE sidecar_index (
         id TEXT PRIMARY KEY,
         status TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
-    """CREATE TABLE documents (
+            """CREATE TABLE documents (
         id INTEGER PRIMARY KEY,
         sidecar_id TEXT NOT NULL REFERENCES sidecar_index(id) ON DELETE CASCADE,
         relative_path TEXT NOT NULL,
@@ -32,7 +35,7 @@ _SEARCH_TABLES = Tables("evidence index", "sidecar_index", ((
         kind TEXT NOT NULL DEFAULT 'text',
         UNIQUE(sidecar_id, relative_path)
     )""",
-    """CREATE TABLE passages (
+            """CREATE TABLE passages (
         id TEXT PRIMARY KEY,
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         start_line INTEGER NOT NULL,
@@ -40,20 +43,20 @@ _SEARCH_TABLES = Tables("evidence index", "sidecar_index", ((
         context TEXT NOT NULL,
         page_number INTEGER
     )""",
-    """CREATE TABLE pdf_pages (
+            """CREATE TABLE pdf_pages (
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         page_number INTEGER NOT NULL,
         status TEXT NOT NULL,
         message TEXT NOT NULL,
         PRIMARY KEY(document_id, page_number)
     )""",
-    """CREATE VIRTUAL TABLE passages_fts USING fts5(
+            """CREATE VIRTUAL TABLE passages_fts USING fts5(
         evidence_id UNINDEXED, context, tokenize='unicode61'
     )""",
-    """CREATE TRIGGER passages_after_delete AFTER DELETE ON passages BEGIN
+            """CREATE TRIGGER passages_after_delete AFTER DELETE ON passages BEGIN
         DELETE FROM passages_fts WHERE evidence_id = old.id;
     END""",
-    """CREATE TABLE sidecar_updates (
+            """CREATE TABLE sidecar_updates (
         sidecar_id TEXT PRIMARY KEY REFERENCES sidecar_index(id) ON DELETE CASCADE,
         run_id TEXT NOT NULL,
         started_at TEXT NOT NULL,
@@ -65,13 +68,13 @@ _SEARCH_TABLES = Tables("evidence index", "sidecar_index", ((
         unchanged INTEGER NOT NULL DEFAULT 0,
         issues_json TEXT NOT NULL DEFAULT '[]'
     )""",
-    """CREATE TABLE passage_embeddings (
+            """CREATE TABLE passage_embeddings (
         passage_id TEXT PRIMARY KEY REFERENCES passages(id) ON DELETE CASCADE,
         provider_revision TEXT NOT NULL,
         vector_json TEXT NOT NULL,
         dimension INTEGER NOT NULL
     )""",
-    """CREATE TABLE sidecar_embedding_state (
+            """CREATE TABLE sidecar_embedding_state (
         sidecar_id TEXT PRIMARY KEY REFERENCES sidecar_index(id) ON DELETE CASCADE,
         provider_revision TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -80,7 +83,9 @@ _SEARCH_TABLES = Tables("evidence index", "sidecar_index", ((
         message TEXT,
         updated_at TEXT NOT NULL
     )""",
-),))
+        ),
+    ),
+)
 
 
 def _state_tables(store: SidecarStore) -> Tables:
@@ -113,28 +118,30 @@ def _import_legacy(store: SidecarStore, state: sqlite3.Connection) -> None:
     # The state step commits after the index copy, so a crash between the two
     # commits repeats the copy from the original.
     with read_only(store.legacy_path) as legacy:
-        copy_rows(legacy, state, "embedding_provider",
-                  "id, base_url, model, api_key_env, allow_insecure_http, revision, configured_at")
+        copy_rows(legacy, state, "embedding_provider", "id, base_url, model, api_key_env, allow_insecure_http, revision, configured_at")
         with connect(store.index_path, _SEARCH_TABLES) as index:
             index.execute("BEGIN IMMEDIATE")
             index.execute("DELETE FROM sidecar_index")
             index.execute("DELETE FROM passages_fts")
             copy_rows(legacy, index, "sidecars", "id, status, updated_at", target="sidecar_index")
-            copy_rows(legacy, index, "documents", "id, sidecar_id, relative_path, sha256, indexed_at, kind",
-                      defaults={"kind": "'text'"})
-            copy_rows(legacy, index, "passages", "id, document_id, start_line, end_line, context, page_number",
-                      defaults={"page_number": "NULL"})
+            copy_rows(legacy, index, "documents", "id, sidecar_id, relative_path, sha256, indexed_at, kind", defaults={"kind": "'text'"})
+            copy_rows(legacy, index, "passages", "id, document_id, start_line, end_line, context, page_number", defaults={"page_number": "NULL"})
             copy_rows(legacy, index, "pdf_pages", "document_id, page_number, status, message")
-            copy_rows(legacy, index, "sidecar_updates",
-                      "sidecar_id, run_id, started_at, completed_at, last_success_at, added, changed, deleted, unchanged, issues_json")
+            copy_rows(
+                legacy,
+                index,
+                "sidecar_updates",
+                "sidecar_id, run_id, started_at, completed_at, last_success_at, added, changed, deleted, unchanged, issues_json",
+            )
             copy_rows(legacy, index, "passage_embeddings", "passage_id, provider_revision, vector_json, dimension")
-            copy_rows(legacy, index, "sidecar_embedding_state",
-                      "sidecar_id, provider_revision, status, embedded_count, expected_count, message, updated_at")
+            copy_rows(
+                legacy, index, "sidecar_embedding_state", "sidecar_id, provider_revision, status, embedded_count, expected_count, message, updated_at"
+            )
             index.execute("INSERT INTO passages_fts (evidence_id, context) SELECT id, context FROM passages")
 
 
 @contextmanager
-def open_state(store: SidecarStore) -> Iterator[sqlite3.Connection]:
+def open_state(store: SidecarStore) -> Generator[sqlite3.Connection]:
     """Open the evidence index's tables in the state database."""
     try:
         with connect(store.db_path, _state_tables(store)) as connection:
@@ -144,7 +151,7 @@ def open_state(store: SidecarStore) -> Iterator[sqlite3.Connection]:
 
 
 @contextmanager
-def open_search(store: SidecarStore) -> Iterator[sqlite3.Connection]:
+def open_search(store: SidecarStore) -> Generator[sqlite3.Connection]:
     """Open the search database, after any upgrade from version 0.3.0 has filled it."""
     with open_state(store):
         pass

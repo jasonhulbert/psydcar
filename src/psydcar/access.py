@@ -10,7 +10,6 @@ from dataclasses import dataclass
 
 from .registry import SidecarStore, StoreError
 
-
 MAX_AGENT_NAME_LENGTH = 64
 
 
@@ -48,8 +47,7 @@ def grant(selected: tuple[str, ...], requested: list[str]) -> tuple[str, ...]:
     return tuple(sidecar_id for sidecar_id in selected if sidecar_id in requested)
 
 
-def connect_agent(store: SidecarStore, references: list[str], *,
-                  proposal_ids: list[str] | None = None, agent_name: str | None = None) -> AgentAccess:
+def connect_agent(store: SidecarStore, references: list[str], *, proposal_ids: list[str] | None = None, agent_name: str | None = None) -> AgentAccess:
     """Fix one connection's access. A connection with proposal grants must name its agent."""
     selected = select(store, references)
     grants = grant(selected, proposal_ids or [])

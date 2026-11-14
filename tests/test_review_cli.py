@@ -15,7 +15,6 @@ from psydcar.proposal_files import ProposalFiles
 from psydcar.proposals import Proposals
 from psydcar.registry import SidecarStore
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -36,15 +35,19 @@ class ReviewCliTests(unittest.TestCase):
     def propose(self, content: str, summary: str) -> str:
         base = ProposalFiles(self.store).files(self.sidecar.id).read("heron.md")
         return Proposals(self.store).submit(
-            self.sidecar.id, "heron.md", base["version"], content, summary, "Review assistant",
+            self.sidecar.id,
+            "heron.md",
+            base["version"],
+            content,
+            summary,
+            "Review assistant",
         )["id"]
 
     def cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["PSYDCAR_HOME"] = str(self.store_dir)
         environment["PYTHONPATH"] = str(PROJECT_ROOT / "src")
-        return subprocess.run([sys.executable, "-m", "psydcar", *args], cwd=self.root,
-                              env=environment, capture_output=True, text=True, check=False)
+        return subprocess.run([sys.executable, "-m", "psydcar", *args], cwd=self.root, env=environment, capture_output=True, text=True, check=False)
 
     def test_owner_reviews_and_approves_a_proposal_that_becomes_searchable(self) -> None:
         proposal_id = self.propose("The heron waits by the reeds.\nA kingfisher flashes past.\n", "Add the kingfisher.")

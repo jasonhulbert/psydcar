@@ -11,11 +11,10 @@ from __future__ import annotations
 import fcntl
 import os
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-
 
 Step = Callable[[sqlite3.Connection], None] | tuple[str, ...]
 
@@ -43,7 +42,7 @@ _VERSIONS = "CREATE TABLE IF NOT EXISTS schema_versions (owner TEXT PRIMARY KEY,
 
 
 @contextmanager
-def database(path: Path) -> Iterator[sqlite3.Connection]:
+def database(path: Path) -> Generator[sqlite3.Connection]:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
     connection = sqlite3.connect(path, timeout=5)
@@ -57,7 +56,7 @@ def database(path: Path) -> Iterator[sqlite3.Connection]:
 
 
 @contextmanager
-def connect(path: Path, tables: Tables) -> Iterator[sqlite3.Connection]:
+def connect(path: Path, tables: Tables) -> Generator[sqlite3.Connection]:
     """Open a database with the caller's tables present and upgraded."""
     with database(path) as connection:
         _ensure(connection, tables)
@@ -65,7 +64,7 @@ def connect(path: Path, tables: Tables) -> Iterator[sqlite3.Connection]:
 
 
 @contextmanager
-def exclusive_file_lock(path: Path, *, wait: bool = True) -> Iterator[None]:
+def exclusive_file_lock(path: Path, *, wait: bool = True) -> Generator[None]:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(fd, "rb") as lock:
@@ -92,9 +91,7 @@ def _ensure(connection: sqlite3.Connection, tables: Tables) -> None:
         connection.execute(_VERSIONS)
         version = _recorded(connection, tables.owner)
         if version is None:
-            existing = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (tables.first_table,)
-            ).fetchone()
+            existing = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (tables.first_table,)).fetchone()
             version = 1 if existing is not None else 0
         for step in tables.steps[version:]:
             if callable(step):
@@ -114,7 +111,7 @@ def _ensure(connection: sqlite3.Connection, tables: Tables) -> None:
 
 
 @contextmanager
-def read_only(path: Path) -> Iterator[sqlite3.Connection]:
+def read_only(path: Path) -> Generator[sqlite3.Connection]:
     """Read a database without changing it, from one consistent snapshot."""
     connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
     try:
@@ -124,8 +121,15 @@ def read_only(path: Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
-def copy_rows(source: sqlite3.Connection, destination: sqlite3.Connection, table: str, columns: str, *,
-              target: str | None = None, defaults: dict[str, str] | None = None) -> None:
+def copy_rows(
+    source: sqlite3.Connection,
+    destination: sqlite3.Connection,
+    table: str,
+    columns: str,
+    *,
+    target: str | None = None,
+    defaults: dict[str, str] | None = None,
+) -> None:
     """Copy a table's rows into a table of the same shape. A missing source table copies nothing."""
     # Table names, column names, and defaults are internal schema constants.
     available = {row[1] for row in source.execute(f"PRAGMA table_info({table})")}

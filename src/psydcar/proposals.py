@@ -6,10 +6,10 @@ import hashlib
 import re
 import sqlite3
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Literal
+from datetime import UTC, datetime
+from typing import Any
 
 from .evidence import EvidenceStore, UpdateSuperseded
 from .git_record import CommitPlan, GitRecord
@@ -17,14 +17,17 @@ from .proposal_files import FileConflict, LineMatcher, ProposalFiles, text_bytes
 from .registry import SidecarStore, StoreError
 from .storage import Tables, connect
 
-
 MAX_PENDING = 50
 MAX_SUMMARY_LENGTH = 500
 MIN_ID_PREFIX = 4
 _ID_PREFIX = re.compile(r"[0-9a-f-]+")
 _FIELDS = "id, path, agent_name, summary, status, created_at, decided_at, commit_id"
-_TABLES = Tables("proposals", "file_proposals", ((
-    """CREATE TABLE file_proposals (
+_TABLES = Tables(
+    "proposals",
+    "file_proposals",
+    (
+        (
+            """CREATE TABLE file_proposals (
         id TEXT PRIMARY KEY,
         sidecar_id TEXT NOT NULL REFERENCES sidecars(id) ON DELETE CASCADE,
         path TEXT NOT NULL,
@@ -40,17 +43,20 @@ _TABLES = Tables("proposals", "file_proposals", ((
         before_text TEXT,
         proposed_text TEXT
     )""",
-    """CREATE INDEX file_proposals_queue
+            """CREATE INDEX file_proposals_queue
        ON file_proposals(sidecar_id, status, created_at DESC, id)""",
-), (
-    # The commit that recorded an approval, when the sidecar's git record was on.
-    "ALTER TABLE file_proposals ADD COLUMN commit_id TEXT",
-)))
+        ),
+        (
+            # The commit that recorded an approval, when the sidecar's git record was on.
+            "ALTER TABLE file_proposals ADD COLUMN commit_id TEXT",
+        ),
+    ),
+)
 
 
 def _now() -> str:
     # Milliseconds keep decisions made within one second in order.
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 _DIFF_CONTEXT = 3
@@ -87,7 +93,7 @@ def _conflict(row: sqlite3.Row, current: str | None) -> FileConflict:
 
 
 def _summary(row: sqlite3.Row) -> dict[str, Any]:
-    result = {key: row[key] for key in _FIELDS.split(", ")}
+    result: dict[str, Any] = {key: row[key] for key in _FIELDS.split(", ")}
     if result["status"] == "applying":
         result["status"] = "pending"
     return result
@@ -100,7 +106,7 @@ class Proposals:
         self.record = GitRecord(store)
 
     @contextmanager
-    def _state(self) -> Iterator[sqlite3.Connection]:
+    def _state(self) -> Generator[sqlite3.Connection]:
         # Removing a sidecar removes its proposals through the foreign key.
         try:
             with connect(self.store.db_path, _TABLES) as connection:
@@ -108,8 +114,7 @@ class Proposals:
         except OSError as exc:
             raise StoreError(f"Cannot open sidecar state at {self.store.db_path}: {exc}") from exc
 
-    def submit(self, sidecar_id: str, path: str, version: str, content: str,
-               summary: str, agent_name: str) -> dict[str, Any]:
+    def submit(self, sidecar_id: str, path: str, version: str, content: str, summary: str, agent_name: str) -> dict[str, Any]:
         summary = summary.strip()
         if not summary or len(summary) > MAX_SUMMARY_LENGTH or not summary.isprintable():
             raise StoreError("Describe the proposed edit in one line of up to 500 characters.")
@@ -140,8 +145,20 @@ class Proposals:
                        (id, sidecar_id, path, agent_name, summary, status, created_at, base_version,
                         result_version, newline, bom, before_text, proposed_text)
                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
-                    (proposal_id, sidecar_id, base["path"], agent_name, summary, _now(), version,
-                     result_version, base["newline"], base["bom"], base["content"], content),
+                    (
+                        proposal_id,
+                        sidecar_id,
+                        base["path"],
+                        agent_name,
+                        summary,
+                        _now(),
+                        version,
+                        result_version,
+                        base["newline"],
+                        base["bom"],
+                        base["content"],
+                        content,
+                    ),
                 )
                 return _summary(self._find(state, sidecar_id, proposal_id))
 
@@ -175,7 +192,8 @@ class Proposals:
     @staticmethod
     def _find(state: sqlite3.Connection, sidecar_id: str, proposal_id: str) -> sqlite3.Row:
         row = state.execute(
-            "SELECT * FROM file_proposals WHERE sidecar_id = ? AND id = ?", (sidecar_id, proposal_id),
+            "SELECT * FROM file_proposals WHERE sidecar_id = ? AND id = ?",
+            (sidecar_id, proposal_id),
         ).fetchone()
         if row is None:
             raise StoreError("This proposal does not exist in this sidecar.")
@@ -212,7 +230,8 @@ class Proposals:
             raise StoreError(f"Enter a proposal ID or at least its first {MIN_ID_PREFIX} characters.")
         with self._state() as state:
             rows = state.execute(
-                "SELECT sidecar_id, id FROM file_proposals WHERE id LIKE ? LIMIT 2", (reference + "%",),
+                "SELECT sidecar_id, id FROM file_proposals WHERE id LIKE ? LIMIT 2",
+                (reference + "%",),
             ).fetchall()
         if not rows:
             raise StoreError(f'No proposal is identified by "{reference}".')
@@ -247,14 +266,16 @@ class Proposals:
         stale = current != row["base_version"]
         before, proposed = row["before_text"], row["proposed_text"]
         return {
-            **_summary(row), "stale": stale, "stale_message": str(_conflict(row, current)) if stale else None,
+            **_summary(row),
+            "stale": stale,
+            "stale_message": str(_conflict(row, current)) if stale else None,
             # A decision clears the stored text, so only pending proposals have a diff.
             "diff": text_diff(before, proposed, row["path"]) if before is not None and proposed is not None else None,
         }
 
-    def review(self, sidecar_id: str, proposal_id: str, decision: Literal["approved", "rejected"]) -> dict[str, Any]:
+    def review(self, sidecar_id: str, proposal_id: str, decision: object) -> dict[str, Any]:
         """Record the owner's decision. An approval writes the file, then runs the steps that follow it."""
-        if decision not in ("approved", "rejected"):
+        if not isinstance(decision, str) or decision not in ("approved", "rejected"):
             raise StoreError("Choose whether to approve or reject the proposal.")
         self._recover(sidecar_id, proposal_id)
         approval: tuple[CommitPlan | None, bytes] | None = None
@@ -296,7 +317,11 @@ class Proposals:
             state.execute("UPDATE file_proposals SET status = 'applying' WHERE id = ?", (row["id"],))
         try:
             written = self.sources.files(row["sidecar_id"]).write(
-                row["path"], row["proposed_text"], row["base_version"], row["newline"], bool(row["bom"]),
+                row["path"],
+                row["proposed_text"],
+                row["base_version"],
+                row["newline"],
+                bool(row["bom"]),
             )
         except Exception as exc:
             # The atomic replacement did not happen, so the proposal waits for another review.
@@ -306,8 +331,7 @@ class Proposals:
                 raise _conflict(row, exc.version) from exc
             if isinstance(exc, OSError):
                 raise StoreError(
-                    f"Couldn't write {row['path']}: {exc.strerror or exc}. "
-                    "The file was not changed, and the proposal is still pending."
+                    f"Couldn't write {row['path']}: {exc.strerror or exc}. The file was not changed, and the proposal is still pending."
                 ) from exc
             raise
         return written["data"]
@@ -319,13 +343,19 @@ class Proposals:
         """
         outcome: dict[str, Any] = {"git_record": plan is not None, "commit_id": None, "commit_branch": None, "commit_notice": None}
         if plan is not None:
-            outcome.update(self.record.commit(
-                plan, approved, agent=row["agent_name"], reason=row["summary"], proposal_id=row["id"],
-            ))
-            if outcome["commit_id"]:
+            recorded = self.record.commit(
+                plan,
+                approved,
+                agent=row["agent_name"],
+                reason=row["summary"],
+                proposal_id=row["id"],
+            )
+            outcome.update(recorded)
+            commit_id = recorded.get("commit_id")
+            if commit_id:
                 try:
                     with self._state() as state:
-                        state.execute("UPDATE file_proposals SET commit_id = ? WHERE id = ?", (outcome["commit_id"], row["id"]))
+                        state.execute("UPDATE file_proposals SET commit_id = ? WHERE id = ?", (commit_id, row["id"]))
                 except (StoreError, sqlite3.Error):
                     pass  # The commit is in git's history whether or not the decision list shows it.
         return {**outcome, **self._update_index(row)}

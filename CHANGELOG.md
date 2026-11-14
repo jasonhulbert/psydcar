@@ -18,6 +18,7 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ### Removed
 
+- Python 3.10 is no longer supported. Psydcar now needs Python 3.11 or newer.
 - The dashboard no longer edits files. The file list, the editor, and creating, renaming, moving, and deleting files and folders from the dashboard are gone. Your files belong to you, and the editor you already use writes to them. While `psydcar watch` or the dashboard is running, Psydcar picks up those changes and re-indexes them. Removing the editor keeps Psydcar focused on giving agents evidence from your folders and on controlling what each agent can see and change. It also removes the dashboard's JavaScript build, so building and releasing Psydcar needs only Python.
 
 ## [0.3.0] - 2026-11-07

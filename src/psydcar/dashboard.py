@@ -30,7 +30,6 @@ from .proposal_files import FileConflict
 from .proposals import Proposals
 from .registry import SidecarStore, StoreError
 
-
 _SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update|git-record)$")
 _SIDECAR_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})$")
 _PROPOSAL_LIST = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals$")
@@ -60,9 +59,12 @@ def _provider_view(config: ProviderConfig | None) -> dict[str, Any]:
         return {"configured": False, "state": "unconfigured"}
     available = config.credential_available
     return {
-        "configured": True, "state": "ready" if available else "missing_credential",
-        "base_url": config.base_url, "model": config.model,
-        "api_key_env": config.api_key_env, "credential_available": available,
+        "configured": True,
+        "state": "ready" if available else "missing_credential",
+        "base_url": config.base_url,
+        "model": config.model,
+        "api_key_env": config.api_key_env,
+        "credential_available": available,
         "allow_insecure_http": config.allow_insecure_http,
         "configured_at": config.configured_at,
     }
@@ -74,9 +76,12 @@ def _provider_draft(provider: ProviderStore, payload: dict[str, Any]) -> Provide
     if api_key_env == "":
         api_key_env = None
     allow_insecure_http = payload.get("allow_insecure_http", False)
-    if not isinstance(base_url, str) or not isinstance(model, str) or (
-        api_key_env is not None and not isinstance(api_key_env, str)
-    ) or not isinstance(allow_insecure_http, bool):
+    if (
+        not isinstance(base_url, str)
+        or not isinstance(model, str)
+        or (api_key_env is not None and not isinstance(api_key_env, str))
+        or not isinstance(allow_insecure_http, bool)
+    ):
         raise StoreError("Enter a provider base URL, model, and optional credential variable name.")
     try:
         return provider.validate(base_url, model, api_key_env, allow_insecure_http)
@@ -91,8 +96,10 @@ def _provider_test_hint(error: EmbeddingError) -> str:
     if "credential is missing" in detail:
         return "Set that environment variable before starting the dashboard and MCP client, then restart the dashboard and test again."
     if "HTTP 401" in detail or "HTTP 403" in detail:
-        return ("Check the credential variable, model, and provider URL. A gateway, proxy, "
-                "or firewall in front of the provider may also have rejected the request.")
+        return (
+            "Check the credential variable, model, and provider URL. A gateway, proxy, "
+            "or firewall in front of the provider may also have rejected the request."
+        )
     if "HTTP 5" in detail:
         return "The provider is unavailable. Check its service or gateway, then retry."
     if "could not be reached" in detail:
@@ -233,23 +240,35 @@ class DashboardServer(ThreadingHTTPServer):
             embedding = self.provider.sidecar_state(sidecar.id) if provider_configured else None
             source_drift = self.watcher.source_changed(sidecar)
             state = "pending" if sidecar.id in queued else update["state"]
-            freshness = (
-                "not_indexed" if state == "not_indexed" else
-                "stale" if state != "current" or source_drift else "current"
+            freshness = "not_indexed" if state == "not_indexed" else "stale" if state != "current" or source_drift else "current"
+            entries.append(
+                {
+                    "id": sidecar.id,
+                    "name": sidecar.name,
+                    "source_path": str(sidecar.source_path),
+                    "status": sidecar.status,
+                    "state": state,
+                    "freshness": freshness,
+                    "source_drift": source_drift,
+                    "created_at": sidecar.created_at,
+                    "updated_at": sidecar.updated_at,
+                    "update": update,
+                    "coverage": coverage,
+                    "embedding": embedding,
+                    "queued": sidecar.id in queued,
+                    "error": errors.get(sidecar.id),
+                    "pdf_pages": self.evidence.pdf_page_notices(sidecar.id),
+                    "pending_proposals": pending_proposals.get(sidecar.id, 0),
+                }
             )
-            entries.append({
-                "id": sidecar.id, "name": sidecar.name, "source_path": str(sidecar.source_path),
-                "status": sidecar.status, "state": state, "freshness": freshness,
-                "source_drift": source_drift, "created_at": sidecar.created_at,
-                "updated_at": sidecar.updated_at, "update": update, "coverage": coverage,
-                "embedding": embedding, "queued": sidecar.id in queued,
-                "error": errors.get(sidecar.id),
-                "pdf_pages": self.evidence.pdf_page_notices(sidecar.id),
-                "pending_proposals": pending_proposals.get(sidecar.id, 0),
-            })
-        return {"sidecars": entries, "watching": self._watch_thread.is_alive(),
-                "provider_configured": provider_configured, "provider": provider,
-                "version": _installed_version(), "data_dir": str(self.store.db_path.parent)}
+        return {
+            "sidecars": entries,
+            "watching": self._watch_thread.is_alive(),
+            "provider_configured": provider_configured,
+            "provider": provider,
+            "version": _installed_version(),
+            "data_dir": str(self.store.db_path.parent),
+        }
 
     def connection_preview(self, name: Any, references: Any, proposal_ids: Any = None) -> dict[str, Any]:
         if not isinstance(name, str) or not _CONNECTION_NAME.fullmatch(name):
@@ -277,9 +296,10 @@ class DashboardServer(ThreadingHTTPServer):
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
-    server: DashboardServer
+    # The handler only ever runs under DashboardServer.
+    server: DashboardServer  # ty: ignore[incompatible-mutable-override]
 
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
     def _headers(self, status: int, content_type: str, length: int) -> None:
@@ -354,11 +374,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             match = _PROPOSAL_LIST.fullmatch(path)
             if match:
                 sidecar_id = match.group(1)
-                self._json(HTTPStatus.OK, {
-                    "pending": self.server.proposals.list(sidecar_id)["items"],
-                    "reviewed": self.server.proposals.list(sidecar_id, reviewed=True)["items"],
-                    "git_record": self.server.git_record.state(self.server.store.get(sidecar_id, exact_id=True)),
-                })
+                self._json(
+                    HTTPStatus.OK,
+                    {
+                        "pending": self.server.proposals.list(sidecar_id)["items"],
+                        "reviewed": self.server.proposals.list(sidecar_id, reviewed=True)["items"],
+                        "git_record": self.server.git_record.state(self.server.store.get(sidecar_id, exact_id=True)),
+                    },
+                )
                 return
             match = _PROPOSAL_ITEM.fullmatch(path)
             if match:
@@ -393,20 +416,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except EmbeddingError as exc:
                     self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "hint": _provider_test_hint(exc)})
                     return
-                self._json(HTTPStatus.OK, {"message": "Provider responded to a sample-text embedding request.",
-                                           "dimensions": len(vectors[0])})
+                self._json(HTTPStatus.OK, {"message": "Provider responded to a sample-text embedding request.", "dimensions": len(vectors[0])})
                 return
             if path == "/api/provider":
                 draft = _provider_draft(self.server.provider, payload)
                 with self.server.operation_lock:
-                    config = self.server.provider.set(draft.base_url, draft.model, draft.api_key_env,
-                                                      draft.allow_insecure_http)
-                self._json(HTTPStatus.OK, {"provider": _provider_view(config),
-                                           "message": "Provider saved. Update sidecars to build embeddings with these settings."})
+                    config = self.server.provider.set(draft.base_url, draft.model, draft.api_key_env, draft.allow_insecure_http)
+                self._json(
+                    HTTPStatus.OK,
+                    {"provider": _provider_view(config), "message": "Provider saved. Update sidecars to build embeddings with these settings."},
+                )
                 return
             if path == "/api/connections/preview":
                 preview = self.server.connection_preview(
-                    payload.get("name"), payload.get("sidecar_ids"), payload.get("proposal_ids"),
+                    payload.get("name"),
+                    payload.get("sidecar_ids"),
+                    payload.get("proposal_ids"),
                 )
                 self._json(HTTPStatus.OK, preview)
                 return
@@ -448,8 +473,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         raise StoreError("Choose whether to turn the git record on or off.")
                     with self.server.operation_lock:
                         sidecar, state = self.server.git_record.set(sidecar_id, enabled)
-                    message = (f'Approvals in "{sidecar.name}" now become commits.' if enabled
-                               else f'Approvals in "{sidecar.name}" no longer make commits.')
+                    message = (
+                        f'Approvals in "{sidecar.name}" now become commits.' if enabled else f'Approvals in "{sidecar.name}" no longer make commits.'
+                    )
                     self._json(HTTPStatus.OK, {"git_record": state, "message": message})
                     return
                 queued = self.server.schedule_update(sidecar_id)
@@ -472,8 +498,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 with self.server.operation_lock:
                     self.server.provider.clear()
-                self._json(HTTPStatus.OK, {"provider": _provider_view(None),
-                                           "message": "Provider removed. Lexical evidence remains available."})
+                self._json(HTTPStatus.OK, {"provider": _provider_view(None), "message": "Provider removed. Lexical evidence remains available."})
             except StoreError as exc:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return

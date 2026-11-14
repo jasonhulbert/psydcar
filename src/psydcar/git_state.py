@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
-
 
 GIT_TIMEOUT_SECONDS = 10
 
@@ -35,12 +34,25 @@ class Repository:
 
 # Variables that point git at a particular repository, from `git rev-parse --local-env-vars`.
 # They are dropped so that git finds the repository from the folder, as it would for the owner.
-_REPOSITORY_VARIABLES = frozenset({
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
-    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
-    "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE",
-    "GIT_COMMON_DIR",
-})
+_REPOSITORY_VARIABLES = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CONFIG",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_GRAFT_FILE",
+        "GIT_INDEX_FILE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_PREFIX",
+        "GIT_SHALLOW_FILE",
+        "GIT_COMMON_DIR",
+    }
+)
 
 
 def git_environment() -> dict[str, str]:
@@ -50,15 +62,18 @@ def git_environment() -> dict[str, str]:
     never prompts, takes optional locks, or reads pathspecs as patterns.
     """
     environment = {
-        key: value for key, value in os.environ.items()
+        key: value
+        for key, value in os.environ.items()
         if key not in _REPOSITORY_VARIABLES and not key.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
     }
-    environment.update({
-        "GIT_OPTIONAL_LOCKS": "0",
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_LITERAL_PATHSPECS": "1",
-        "LC_ALL": "C",
-    })
+    environment.update(
+        {
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_LITERAL_PATHSPECS": "1",
+            "LC_ALL": "C",
+        }
+    )
     return environment
 
 
@@ -66,8 +81,13 @@ def _git(cwd: Path, *args: str) -> str | None:
     environment = git_environment()
     try:
         completed = subprocess.run(
-            ["git", *_READ_ONLY_CONFIG, *args], cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
-            capture_output=True, timeout=GIT_TIMEOUT_SECONDS, check=False,
+            ["git", *_READ_ONLY_CONFIG, *args],
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -122,8 +142,16 @@ def observe(files: Iterable[tuple[Path, str]]) -> dict[tuple[Path, str], dict[st
 
 def _read_state(root: Path, pathspecs: list[str]) -> tuple[str | None, set[str], set[str]] | None:
     status = _git(
-        root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=no", "--no-renames",
-        "--ignore-submodules=all", "--", *pathspecs,
+        root,
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--branch",
+        "--untracked-files=no",
+        "--no-renames",
+        "--ignore-submodules=all",
+        "--",
+        *pathspecs,
     )
     listing = _git(root, "ls-files", "-z", "--full-name", "--", *pathspecs)
     if status is None or listing is None:

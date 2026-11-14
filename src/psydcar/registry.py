@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import builtins
 import os
 import sqlite3
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .storage import Tables, connect, copy_rows, exclusive_file_lock, read_only
@@ -68,7 +69,7 @@ def _validate_source(source: str | Path) -> Path:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _from_row(row: sqlite3.Row) -> Sidecar:
@@ -117,7 +118,7 @@ class SidecarStore:
         self._tables = _tables(self.legacy_path)
 
     @contextmanager
-    def _connect(self) -> Iterator[sqlite3.Connection]:
+    def _connect(self) -> Generator[sqlite3.Connection]:
         try:
             with connect(self.db_path, self._tables) as connection:
                 yield connection
@@ -125,7 +126,7 @@ class SidecarStore:
             raise StoreError(f"Cannot open sidecar state at {self.db_path}: {exc}") from exc
 
     @contextmanager
-    def file_writes(self) -> Iterator[None]:
+    def file_writes(self) -> Generator[None]:
         """Serialize version checks and file mutations across local processes."""
         try:
             with exclusive_file_lock(self.db_path.with_suffix(".files.lock")):
@@ -150,7 +151,7 @@ class SidecarStore:
             raise StoreError(f"Cannot create sidecar: {exc}") from exc
         return Sidecar(sidecar_id, name, source_path, now, now)
 
-    def list(self) -> list[Sidecar]:
+    def list(self) -> builtins.list[Sidecar]:
         try:
             with self._connect() as connection:
                 rows = connection.execute("SELECT * FROM sidecars ORDER BY name COLLATE NOCASE, id").fetchall()

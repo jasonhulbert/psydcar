@@ -15,13 +15,15 @@ def use_sandbox(test: TestCase, root: Path) -> None:
     Child processes inherit it. Git also stops looking for a repository at that folder.
     """
     config = root / "gitconfig"
-    config.write_text(
-        "[user]\n\tname = Owner\n\temail = owner@example.com\n"
-        "[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n"
+    config.write_text("[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n")
+    environment = patch.dict(
+        os.environ,
+        {
+            "GIT_CONFIG_GLOBAL": str(config),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CEILING_DIRECTORIES": str(root),
+        },
     )
-    environment = patch.dict(os.environ, {
-        "GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CEILING_DIRECTORIES": str(root),
-    })
     environment.start()
     test.addCleanup(environment.stop)
 

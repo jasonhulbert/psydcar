@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .embeddings import (
-    EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore,
+    EmbeddingClient,
+    EmbeddingError,
+    ProviderConfig,
+    ProviderStore,
     normalize_vector,
 )
 from .git_state import observe
@@ -21,7 +25,6 @@ from .index_tables import open_search, remove_outdated
 from .pdf_text import PdfTextError, extract_pdf_page, extract_pdf_pages
 from .registry import Sidecar, SidecarStore, StoreError
 from .source_scope import is_link, is_pdf, is_source_root, read_bytes, read_source, size_limit, walk
-
 
 CHUNK_LINES = 40
 CHUNK_OVERLAP = 5
@@ -66,7 +69,7 @@ class _ScannedDocument:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _source_path(sidecar: Sidecar, relative_path: str) -> Path:
@@ -152,9 +155,8 @@ def _scan(sidecar: Sidecar) -> tuple[list[_ScannedDocument], list[str], set[str]
             except PdfTextError as exc:
                 skipped.append(f"{relative}: {exc}")
                 continue
-            passages = [
-                (start, end, context, page.number)
-                for page in pages for start, end, context in _chunks(page.text)
+            passages: builtins.list[tuple[int, int, str, int | None]] = [
+                (start, end, context, page.number) for page in pages for start, end, context in _chunks(page.text)
             ]
             notices = [(number, "no_text", "No searchable text; OCR is not available.") for number in no_text_pages]
             notices.extend((number, "error", f"Text extraction failed: {reason}") for number, reason in page_errors)
@@ -178,7 +180,7 @@ class EvidenceStore:
         """Return one registered sidecar with the status of its index."""
         return self._with_status([self.sidecars.get(reference, exact_id=exact_id)])[0]
 
-    def list(self) -> list[IndexedSidecar]:
+    def list(self) -> builtins.list[IndexedSidecar]:
         """Return every registered sidecar with the status of its index."""
         return self._with_status(self.sidecars.list())
 
@@ -192,7 +194,7 @@ class EvidenceStore:
         """Finish index cleanup left by a removal or provider change, including an interrupted one."""
         remove_outdated(self.sidecars)
 
-    def _with_status(self, sidecars: list[Sidecar]) -> list[IndexedSidecar]:
+    def _with_status(self, sidecars: builtins.list[Sidecar]) -> builtins.list[IndexedSidecar]:
         if not sidecars:
             return []
         provider = ProviderStore(self.sidecars).get()
@@ -224,12 +226,19 @@ class EvidenceStore:
                     status = "indexed"
                 elif provider.revision != info["provider_revision"]:
                     status = "embedding_pending"
-            result.append(IndexedSidecar(
-                **{**vars(sidecar), "updated_at": max(sidecar.updated_at, info["updated_at"])}, status=status,
-            ))
+            result.append(
+                IndexedSidecar(
+                    sidecar.id,
+                    sidecar.name,
+                    sidecar.source_path,
+                    sidecar.created_at,
+                    max(sidecar.updated_at, info["updated_at"]),
+                    status,
+                )
+            )
         return result
 
-    def _select(self, references: list[str], exact_ids: bool) -> list[IndexedSidecar]:
+    def _select(self, references: builtins.list[str], exact_ids: bool) -> builtins.list[IndexedSidecar]:
         if not references:
             raise StoreError("Select at least one sidecar with --sidecar.")
         selected = {}
@@ -294,8 +303,7 @@ class EvidenceStore:
                 deleted_paths: list[str] = []
                 for relative_path, row in old.items():
                     if relative_path in seen or any(
-                        blocked == "." or relative_path == blocked or relative_path.startswith(blocked + "/")
-                        for blocked in blocked_directories
+                        blocked == "." or relative_path == blocked or relative_path.startswith(blocked + "/") for blocked in blocked_directories
                     ):
                         continue
                     connection.execute("DELETE FROM documents WHERE id = ?", (row["id"],))
@@ -327,19 +335,16 @@ class EvidenceStore:
                             "INSERT INTO passages (id, document_id, start_line, end_line, context, page_number) VALUES (?, ?, ?, ?, ?, ?)",
                             (evidence_id, cursor.lastrowid, start, end, context, page_number),
                         )
-                        connection.execute(
-                            "INSERT INTO passages_fts (evidence_id, context) VALUES (?, ?)", (evidence_id, context)
-                        )
+                        connection.execute("INSERT INTO passages_fts (evidence_id, context) VALUES (?, ?)", (evidence_id, context))
                 passage_count = connection.execute(
                     """SELECT count(*) FROM passages p JOIN documents d ON d.id = p.document_id
-                       WHERE d.sidecar_id = ?""", (sidecar.id,),
+                       WHERE d.sidecar_id = ?""",
+                    (sidecar.id,),
                 ).fetchone()[0]
                 if added or changed or deleted:
                     connection.execute("DELETE FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,))
                 elif provider is not None:
-                    state = connection.execute(
-                        "SELECT * FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,)
-                    ).fetchone()
+                    state = connection.execute("SELECT * FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,)).fetchone()
                     reuse_embeddings = state is not None and (
                         state["provider_revision"] == provider.revision
                         and state["status"] == "complete"
@@ -353,16 +358,21 @@ class EvidenceStore:
                 connection.execute(
                     """UPDATE sidecar_updates SET added = ?, changed = ?, deleted = ?, unchanged = ?,
                        issues_json = ? WHERE sidecar_id = ? AND run_id = ?""",
-                    (added, changed, deleted, unchanged,
-                     json.dumps([*skipped, *(f"Removed source: {path}" for path in deleted_paths)]),
-                     sidecar.id, run_id),
+                    (
+                        added,
+                        changed,
+                        deleted,
+                        unchanged,
+                        json.dumps([*skipped, *(f"Removed source: {path}" for path in deleted_paths)]),
+                        sidecar.id,
+                        run_id,
+                    ),
                 )
         except sqlite3.Error as exc:
             self._finish_update(sidecar.id, run_id, "index_error", [f"Cannot apply sidecar update: {exc}"])
             raise StoreError(f"Cannot index sidecar: {exc}") from exc
         pdf_notices = tuple(
-            f"{document.relative_path}, page {number}: {message}"
-            for document in documents for number, _, message in document.pdf_page_notices
+            f"{document.relative_path}, page {number}: {message}" for document in documents for number, _, message in document.pdf_page_notices
         )
         embedded_count = 0
         embedding_status = "not_configured"
@@ -382,18 +392,26 @@ class EvidenceStore:
                     self._finish_update(sidecar.id, run_id, "embedding_error", [*skipped, message])
                     raise StoreError(message) from exc
                 embedding_status = "error" if provider_error else "complete"
-        final_status = (
-            "index_error" if skipped else "embedding_error" if provider_error
-            else "source_attention" if deleted else "indexed"
-        )
+        final_status = "index_error" if skipped else "embedding_error" if provider_error else "source_attention" if deleted else "indexed"
         self._finish_update(
-            sidecar.id, run_id, final_status,
-            [*skipped, *([provider_error] if provider_error else []),
-             *(f"Removed source: {path}" for path in deleted_paths)],
+            sidecar.id,
+            run_id,
+            final_status,
+            [*skipped, *([provider_error] if provider_error else []), *(f"Removed source: {path}" for path in deleted_paths)],
         )
         return IndexReport(
-            self.sidecar(sidecar.id, exact_id=True), len(documents), passage_count, tuple(skipped), pdf_notices,
-            embedded_count, embedding_status, provider_error, added, changed, deleted, unchanged,
+            self.sidecar(sidecar.id, exact_id=True),
+            len(documents),
+            passage_count,
+            tuple(skipped),
+            pdf_notices,
+            embedded_count,
+            embedding_status,
+            provider_error,
+            added,
+            changed,
+            deleted,
+            unchanged,
             tuple(deleted_paths),
         )
 
@@ -403,7 +421,7 @@ class EvidenceStore:
         if row is None or row["run_id"] != run_id:
             raise UpdateSuperseded("A newer update replaced this sidecar update. Its results were not applied.")
 
-    def _finish_update(self, sidecar_id: str, run_id: str, status: str, issues: list[str]) -> None:
+    def _finish_update(self, sidecar_id: str, run_id: str, status: str, issues: builtins.list[str]) -> None:
         now = _now()
         try:
             with open_search(self.sidecars) as connection:
@@ -428,9 +446,7 @@ class EvidenceStore:
         sidecar = self.sidecar(reference)
         try:
             with open_search(self.sidecars) as connection:
-                row = connection.execute(
-                    "SELECT * FROM sidecar_updates WHERE sidecar_id = ?", (sidecar.id,)
-                ).fetchone()
+                row = connection.execute("SELECT * FROM sidecar_updates WHERE sidecar_id = ?", (sidecar.id,)).fetchone()
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect sidecar update: {exc}") from exc
         return {
@@ -468,8 +484,11 @@ class EvidenceStore:
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect sidecar coverage: {exc}") from exc
         return {
-            "files": row["files"], "text_files": row["text_files"], "pdfs": row["pdfs"],
-            "passages": passages, "latest_indexed_at": row["latest_indexed_at"],
+            "files": row["files"],
+            "text_files": row["text_files"],
+            "pdfs": row["pdfs"],
+            "passages": passages,
+            "latest_indexed_at": row["latest_indexed_at"],
         }
 
     def _build_embeddings(self, sidecar_id: str, provider: ProviderConfig, run_id: str) -> tuple[int, str | None]:
@@ -517,7 +536,7 @@ class EvidenceStore:
                     active = ProviderStore(self.sidecars).get()
                     if active is None or active.revision != provider.revision:
                         raise EmbeddingError("Provider settings changed during indexing. Reindex this sidecar.")
-                    for row, vector in zip(batch, vectors):
+                    for row, vector in zip(batch, vectors, strict=False):
                         connection.execute(
                             """INSERT INTO passage_embeddings (passage_id, provider_revision, vector_json, dimension)
                                VALUES (?, ?, ?, ?) ON CONFLICT(passage_id) DO UPDATE SET
@@ -537,7 +556,8 @@ class EvidenceStore:
                 if active is None or active.revision != provider.revision:
                     raise EmbeddingError("Provider settings changed during indexing. Reindex this sidecar.")
                 connection.execute(
-                    "UPDATE sidecar_embedding_state SET status = 'complete', message = NULL, updated_at = ? WHERE sidecar_id = ? AND provider_revision = ?",
+                    "UPDATE sidecar_embedding_state SET status = 'complete', message = NULL, updated_at = ? "
+                    "WHERE sidecar_id = ? AND provider_revision = ?",
                     (_now(), sidecar_id, provider.revision),
                 )
         except EmbeddingError as exc:
@@ -548,7 +568,8 @@ class EvidenceStore:
                 active = ProviderStore(self.sidecars).get()
                 if active is not None and active.revision == provider.revision:
                     connection.execute(
-                        "UPDATE sidecar_embedding_state SET status = 'error', message = ?, updated_at = ? WHERE sidecar_id = ? AND provider_revision = ?",
+                        "UPDATE sidecar_embedding_state SET status = 'error', message = ?, updated_at = ? "
+                        "WHERE sidecar_id = ? AND provider_revision = ?",
                         (message, _now(), sidecar_id, provider.revision),
                     )
             return embedded_count, message
@@ -556,7 +577,7 @@ class EvidenceStore:
             raise StoreError(f"Cannot store embeddings: {exc}") from exc
         return embedded_count, None
 
-    def pdf_page_notices(self, reference: str) -> list[dict[str, Any]]:
+    def pdf_page_notices(self, reference: str) -> builtins.list[dict[str, Any]]:
         """Return persisted page notices so users can inspect them after restart."""
         sidecar = self.sidecars.get(reference)
         try:
@@ -569,12 +590,9 @@ class EvidenceStore:
                 ).fetchall()
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect PDF page notices: {exc}") from exc
-        return [
-            {"source": row["relative_path"], "page": row["page_number"], "status": row["status"], "message": row["message"]}
-            for row in rows
-        ]
+        return [{"source": row["relative_path"], "page": row["page_number"], "status": row["status"], "message": row["message"]} for row in rows]
 
-    def search(self, references: list[str], query: str, limit: int = 10, *, exact_ids: bool = False) -> list[dict[str, Any]]:
+    def search(self, references: builtins.list[str], query: str, limit: int = 10, *, exact_ids: bool = False) -> builtins.list[dict[str, Any]]:
         self.last_search_warning = None
         selected = self._select(references, exact_ids)
         terms = re.findall(r"\w+", query, flags=re.UNICODE)
@@ -637,7 +655,7 @@ class EvidenceStore:
                     raise EmbeddingError("Stored embedding dimensions differ from the provider. Reindex selected sidecars.")
                 semantic = sorted(
                     (
-                        (sum(left * right for left, right in zip(query_vector, normalize_vector(json.loads(row["vector_json"])))), row)
+                        (sum(left * right for left, right in zip(query_vector, normalize_vector(json.loads(row["vector_json"])), strict=False)), row)
                         for row in vector_rows
                     ),
                     key=lambda item: (-item[0], item[1]["relative_path"], item[1]["id"]),
@@ -647,16 +665,16 @@ class EvidenceStore:
                 mode = "hybrid"
             except (EmbeddingError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 self.last_search_warning = (
-                    str(exc) if isinstance(exc, EmbeddingError)
-                    else "Stored embeddings are invalid; reindex selected sidecars."
+                    str(exc) if isinstance(exc, EmbeddingError) else "Stored embeddings are invalid; reindex selected sidecars."
                 )
         if mode == "hybrid":
             ranked_ids = sorted(
                 candidates,
                 key=lambda evidence_id: (
                     -(1 / (60 + lexical_ranks[evidence_id]) if evidence_id in lexical_ranks else 0)
-                    -(1 / (60 + semantic_ranks[evidence_id]) if evidence_id in semantic_ranks else 0),
-                    candidates[evidence_id]["relative_path"], evidence_id,
+                    - (1 / (60 + semantic_ranks[evidence_id]) if evidence_id in semantic_ranks else 0),
+                    candidates[evidence_id]["relative_path"],
+                    evidence_id,
                 ),
             )[:limit]
             rows = [candidates[evidence_id] for evidence_id in ranked_ids]
@@ -666,10 +684,7 @@ class EvidenceStore:
         for row in rows:
             sidecar = selected_by_id[row["sidecar_id"]]
             path = _source_path(sidecar, row["relative_path"])
-            data, source_status, _ = (
-                read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"
-                else read_source(path, sidecar.source_path)
-            )
+            data, source_status, _ = read_bytes(path, sidecar.source_path) if row["kind"] == "pdf" else read_source(path, sidecar.source_path)
             if data is None:
                 freshness = source_status
             elif row["kind"] == "pdf":
@@ -694,17 +709,17 @@ class EvidenceStore:
             results.append(evidence)
         return self._with_git(results, selected_by_id)
 
-    def retrieve(self, references: list[str], evidence_id: str, *, exact_ids: bool = False) -> dict[str, Any]:
+    def retrieve(self, references: builtins.list[str], evidence_id: str, *, exact_ids: bool = False) -> dict[str, Any]:
         selected = self._select(references, exact_ids)
         selected_by_id = {item.id: item for item in selected}
         return self._with_git([self._read_source(selected_by_id, evidence_id)], selected_by_id)[0]
 
     @staticmethod
-    def _with_git(results: list[dict[str, Any]], selected_by_id: dict[str, IndexedSidecar]) -> list[dict[str, Any]]:
+    def _with_git(results: builtins.list[dict[str, Any]], selected_by_id: dict[str, IndexedSidecar]) -> builtins.list[dict[str, Any]]:
         """Add git provenance to evidence from folders in a repository. Other evidence is unchanged."""
         files = [(selected_by_id[item["sidecar"]["id"]].source_path, item["source"]["relative_path"]) for item in results]
         observed = observe(files)
-        for item, file in zip(results, files):
+        for item, file in zip(results, files, strict=True):
             if file in observed:
                 item["git"] = dict(observed[file])
         return results
@@ -726,10 +741,7 @@ class EvidenceStore:
             raise StoreError("Evidence was not found in the selected sidecars.")
         sidecar = selected_by_id[row["sidecar_id"]]
         path = _source_path(sidecar, row["relative_path"])
-        data, source_status, reason = (
-            read_bytes(path, sidecar.source_path) if row["kind"] == "pdf"
-            else read_source(path, sidecar.source_path)
-        )
+        data, source_status, reason = read_bytes(path, sidecar.source_path) if row["kind"] == "pdf" else read_source(path, sidecar.source_path)
         if data is None:
             evidence = self._evidence(row, sidecar, None, source_status, None)
             evidence["message"] = reason
@@ -768,7 +780,8 @@ class EvidenceStore:
                 "indexed_sha256": row["sha256"],
             },
             "location": (
-                {"kind": "page", "page": row["page_number"]} if row["kind"] == "pdf"
+                {"kind": "page", "page": row["page_number"]}
+                if row["kind"] == "pdf"
                 else {"kind": "lines", "start": row["start_line"], "end": row["end_line"]}
             ),
             "context": context,

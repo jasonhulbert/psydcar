@@ -11,7 +11,6 @@ import tomllib
 import zipfile
 from pathlib import Path
 
-
 REQUIRED_PACKAGE_FILES = {
     "psydcar/__init__.py",
     "psydcar/__main__.py",

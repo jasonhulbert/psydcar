@@ -13,18 +13,23 @@ import os
 import re
 import stat
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .registry import Sidecar, SidecarStore, StoreError
 from .source_scope import (
-    MAX_FILE_BYTES, SUPPORTED_EXTENSIONS, is_hidden, is_ignored_directory, is_link, is_source_root, is_text_source,
+    MAX_FILE_BYTES,
+    SUPPORTED_EXTENSIONS,
+    is_hidden,
+    is_ignored_directory,
+    is_link,
+    is_source_root,
+    is_text_source,
     read_source,
 )
-
 
 MAX_PATH_LENGTH = 1024
 
@@ -45,6 +50,9 @@ _DIFF_MATCH_LIMIT = 2500
 _LINE_BREAK = re.compile(r"(\r\n|\n)")
 
 
+Opcode = tuple[Literal["replace", "delete", "insert", "equal"], int, int, int, int]
+
+
 class LineMatcher(SequenceMatcher):
     """Match only the lines between the identical start and end of two texts.
 
@@ -61,20 +69,22 @@ class LineMatcher(SequenceMatcher):
         while suffix < limit - prefix and old[-1 - suffix] == new[-1 - suffix]:
             suffix += 1
         self.edges = (prefix, len(old) - suffix, len(new) - suffix)
-        super().__init__(None, old[prefix:len(old) - suffix], new[prefix:len(new) - suffix])
+        self.middle = (old[prefix : len(old) - suffix], new[prefix : len(new) - suffix])
+        super().__init__(None, *self.middle)
         self.full = (old, new)
 
-    def get_opcodes(self) -> list[tuple[str, int, int, int, int]]:
+    def get_opcodes(self) -> list[Opcode]:
         prefix, old_end, new_end = self.edges
         old, new = self.full
-        if len(self.a) + len(self.b) > _DIFF_MATCH_LIMIT:
-            middle = [("replace", 0, len(self.a), 0, len(self.b))]
+        old_middle, new_middle = self.middle
+        if len(old_middle) + len(new_middle) > _DIFF_MATCH_LIMIT:
+            middle: list[Opcode] = [("replace", 0, len(old_middle), 0, len(new_middle))]
         else:
             middle = super().get_opcodes()
-        codes = [("equal", 0, prefix, 0, prefix)]
+        codes: list[Opcode] = [("equal", 0, prefix, 0, prefix)]
         codes += [(tag, i1 + prefix, i2 + prefix, j1 + prefix, j2 + prefix) for tag, i1, i2, j1, j2 in middle]
         codes.append(("equal", old_end, len(old), new_end, len(new)))
-        merged: list[tuple[str, int, int, int, int]] = []
+        merged: list[Opcode] = []
         for code in codes:
             if code[1] == code[2] and code[3] == code[4]:
                 continue
@@ -97,7 +107,7 @@ def _keep_mixed_endings(content: str, base: str, newline: str) -> str:
             for offset in range(j2 - j1):
                 if j1 + offset < len(new_lines) - 1:
                     endings[j1 + offset] = old_endings[i1 + offset] or newline
-    return "".join(line + ending for line, ending in zip(new_lines, endings))
+    return "".join(line + ending for line, ending in zip(new_lines, endings, strict=False))
 
 
 def text_bytes(content: str, newline: str, bom: bool, base: bytes = b"") -> bytes:
@@ -182,8 +192,12 @@ class SourceFiles:
         text = data.decode("utf-8-sig")
         newline = "\r\n" if "\r\n" in text else "\n"
         return {
-            "path": clean, "content": text.replace("\r\n", "\n"), "version": _version(data),
-            "newline": newline, "bom": bom, "data": data,
+            "path": clean,
+            "content": text.replace("\r\n", "\n"),
+            "version": _version(data),
+            "newline": newline,
+            "bom": bom,
+            "data": data,
         }
 
     def read_bytes(self, relative_path: Any) -> bytes:
@@ -240,6 +254,6 @@ class ProposalFiles:
         return SourceFiles(self.store.get(sidecar_id, exact_id=True))
 
     @contextmanager
-    def locked(self, sidecar_id: str) -> Iterator[SourceFiles]:
+    def locked(self, sidecar_id: str) -> Generator[SourceFiles]:
         with self.store.file_writes():
             yield self.files(sidecar_id)

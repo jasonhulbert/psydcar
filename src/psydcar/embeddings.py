@@ -12,13 +12,12 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 from .index_tables import mark_cleanup, open_search, open_state, remove_outdated
 from .registry import SidecarStore, StoreError
-
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -71,7 +70,7 @@ class ProviderConfig:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _validate_base_url(value: str, allow_insecure_http: bool) -> str:
@@ -107,8 +106,11 @@ def _validate_env(value: str | None) -> str | None:
 
 def _from_row(row: sqlite3.Row) -> ProviderConfig:
     return ProviderConfig(
-        base_url=row["base_url"], model=row["model"], api_key_env=row["api_key_env"],
-        allow_insecure_http=bool(row["allow_insecure_http"]), revision=row["revision"],
+        base_url=row["base_url"],
+        model=row["model"],
+        api_key_env=row["api_key_env"],
+        allow_insecure_http=bool(row["allow_insecure_http"]),
+        revision=row["revision"],
         configured_at=row["configured_at"],
     )
 
@@ -128,12 +130,15 @@ class ProviderStore:
         return _from_row(row) if row is not None else None
 
     @staticmethod
-    def validate(base_url: str, model: str, api_key_env: str | None = None,
-                 allow_insecure_http: bool = False) -> ProviderConfig:
+    def validate(base_url: str, model: str, api_key_env: str | None = None, allow_insecure_http: bool = False) -> ProviderConfig:
         """Validate a provider draft without changing the active configuration."""
         return ProviderConfig(
-            _validate_base_url(base_url, allow_insecure_http), _validate_model(model),
-            _validate_env(api_key_env), allow_insecure_http, "", "",
+            _validate_base_url(base_url, allow_insecure_http),
+            _validate_model(model),
+            _validate_env(api_key_env),
+            allow_insecure_http,
+            "",
+            "",
         )
 
     def set(self, base_url: str, model: str, api_key_env: str | None = None, allow_insecure_http: bool = False) -> ProviderConfig:

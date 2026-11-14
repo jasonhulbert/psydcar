@@ -10,12 +10,12 @@ import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from unittest.mock import patch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -26,11 +26,16 @@ from psydcar.proposal_files import ProposalFiles
 from psydcar.proposals import Proposals
 from psydcar.registry import SidecarStore
 
-
 PROBE_SECRET = "DASHBOARD_TEST_CREDENTIAL_DO_NOT_DISPLAY"
 
 
+class GatewayServer(ThreadingHTTPServer):
+    state: dict[str, Any]
+
+
 class ProviderProbeHandler(BaseHTTPRequestHandler):
+    server: GatewayServer  # ty: ignore[incompatible-mutable-override]
+
     def do_POST(self) -> None:
         state = self.server.state
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -46,7 +51,7 @@ class ProviderProbeHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response)
 
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
 
@@ -75,8 +80,9 @@ class DashboardTests(unittest.TestCase):
         self.thread.join(timeout=5)
         self.server.stop()
 
-    def http(self, method: str, path: str, body: dict | None = None, *, token: str | None = None,
-             origin: str | None = None, host: str | None = None) -> tuple[int, dict]:
+    def http(
+        self, method: str, path: str, body: dict | None = None, *, token: str | None = None, origin: str | None = None, host: str | None = None
+    ) -> tuple[int, dict]:
         headers = {"Accept": "application/json", "Host": host or f"127.0.0.1:{self.server.server_port}"}
         data = None
         if body is not None:
@@ -96,8 +102,7 @@ class DashboardTests(unittest.TestCase):
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(PROJECT_ROOT / "src")
         environment["PSYDCAR_HOME"] = str(self.database.parent)
-        return subprocess.run([sys.executable, "-m", "psydcar", *args], cwd=self.work,
-                              env=environment, capture_output=True, text=True, check=False)
+        return subprocess.run([sys.executable, "-m", "psydcar", *args], cwd=self.work, env=environment, capture_output=True, text=True, check=False)
 
     def wait_for(self, predicate, description: str) -> None:
         deadline = time.monotonic() + 8
@@ -117,8 +122,10 @@ class DashboardTests(unittest.TestCase):
         status, created = self.http("POST", "/api/sidecars", {"name": "Research", "source": str(self.source)})
         self.assertEqual(status, 201)
         sidecar_id = created["id"]
-        self.wait_for(lambda: self.entry(sidecar_id)["coverage"]["passages"] == 1
-                      and self.entry(sidecar_id)["state"] == "current", "browser create did not index")
+        self.wait_for(
+            lambda: self.entry(sidecar_id)["coverage"]["passages"] == 1 and self.entry(sidecar_id)["state"] == "current",
+            "browser create did not index",
+        )
         entry = self.entry(sidecar_id)
         self.assertEqual(entry["coverage"]["files"], 1)
         self.assertEqual(entry["state"], "current")
@@ -137,9 +144,13 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("Name: Browser rename", self.cli("sidecar", "show", sidecar_id).stdout)
 
         (self.source / "notes.md").write_text("quiet orchard changed\n")
-        self.wait_for(lambda: bool(self.cli("search", "--sidecar", sidecar_id, "changed").stdout.strip().startswith("["))
-                      and len(json.loads(self.cli("search", "--sidecar", sidecar_id, "changed").stdout)) > 0,
-                      "dashboard watcher did not refresh changed source")
+        self.wait_for(
+            lambda: (
+                bool(self.cli("search", "--sidecar", sidecar_id, "changed").stdout.strip().startswith("["))
+                and len(json.loads(self.cli("search", "--sidecar", sidecar_id, "changed").stdout)) > 0
+            ),
+            "dashboard watcher did not refresh changed source",
+        )
         self.assertEqual(self.entry(sidecar_id)["state"], "current")
         (self.source / "notes.md").unlink()
         self.wait_for(lambda: self.entry(sidecar_id)["status"] == "source_attention", "source deletion was not visible")
@@ -177,8 +188,10 @@ class DashboardTests(unittest.TestCase):
     def test_failed_source_keeps_coverage_and_exposes_recovery(self) -> None:
         (self.source / "keep.md").write_text("still searchable\n")
         sidecar_id = self.http("POST", "/api/sidecars", {"name": "Fragile", "source": str(self.source)})[1]["id"]
-        self.wait_for(lambda: self.entry(sidecar_id)["coverage"]["passages"] == 1
-                      and self.entry(sidecar_id)["state"] == "current", "initial update did not complete")
+        self.wait_for(
+            lambda: self.entry(sidecar_id)["coverage"]["passages"] == 1 and self.entry(sidecar_id)["state"] == "current",
+            "initial update did not complete",
+        )
         moved = self.root / "temporarily-moved"
         self.source.rename(moved)
         self.wait_for(lambda: self.entry(sidecar_id)["status"] == "index_error", "missing source was not reported")
@@ -196,10 +209,9 @@ class DashboardTests(unittest.TestCase):
         source_secret = "PRIVATE_SOURCE_TEXT_MUST_NOT_REACH_PROVIDER_TEST"
         (self.source / "private.md").write_text(source_secret)
         sidecar = self.server.store.create("Private notes", self.source)
-        self.wait_for(lambda: self.entry(sidecar.id)["coverage"]["passages"] == 1,
-                      "private source was not indexed before provider test")
+        self.wait_for(lambda: self.entry(sidecar.id)["coverage"]["passages"] == 1, "private source was not indexed before provider test")
         try:
-            gateway = ThreadingHTTPServer(("127.0.0.1", 0), ProviderProbeHandler)
+            gateway = GatewayServer(("127.0.0.1", 0), ProviderProbeHandler)
         except PermissionError as exc:
             self.skipTest(f"Local gateway is unavailable: {exc}")
         gateway.state = {"requests": [], "status": 200}
@@ -208,17 +220,27 @@ class DashboardTests(unittest.TestCase):
         self.addCleanup(gateway_thread.join, 5)
         self.addCleanup(gateway.server_close)
         self.addCleanup(gateway.shutdown)
-        draft = {"base_url": f"http://127.0.0.1:{gateway.server_port}/v1", "model": "demo-model",
-                 "api_key_env": "PSYDCAR_DASHBOARD_TEST_KEY", "allow_insecure_http": False}
+        draft = {
+            "base_url": f"http://127.0.0.1:{gateway.server_port}/v1",
+            "model": "demo-model",
+            "api_key_env": "PSYDCAR_DASHBOARD_TEST_KEY",
+            "allow_insecure_http": False,
+        }
         with patch.dict(os.environ, {"PSYDCAR_DASHBOARD_TEST_KEY": PROBE_SECRET}):
             self.assertEqual(self.http("GET", "/api/bootstrap")[1]["provider"]["state"], "unconfigured")
             status, tested = self.http("POST", "/api/provider/test", draft)
             self.assertEqual(status, 200, tested)
             self.assertEqual(tested["dimensions"], 2)
-            self.assertEqual(gateway.state["requests"], [{
-                "path": "/v1/embeddings", "body": {"model": "demo-model", "input": ["Psydcar provider connection test."]},
-                "authorization": f"Bearer {PROBE_SECRET}",
-            }])
+            self.assertEqual(
+                gateway.state["requests"],
+                [
+                    {
+                        "path": "/v1/embeddings",
+                        "body": {"model": "demo-model", "input": ["Psydcar provider connection test."]},
+                        "authorization": f"Bearer {PROBE_SECRET}",
+                    }
+                ],
+            )
             self.assertNotIn(source_secret, json.dumps(gateway.state["requests"]))
             self.assertIsNone(self.server.provider.get())
             status, saved = self.http("POST", "/api/provider", draft)
@@ -228,8 +250,7 @@ class DashboardTests(unittest.TestCase):
             self.assertNotIn(PROBE_SECRET, json.dumps(saved) + json.dumps(self.http("GET", "/api/bootstrap")[1]))
             self.assertIn("Model: demo-model", self.cli("provider", "show").stdout)
             if importlib.util.find_spec("mcp"):
-                status, preview = self.http("POST", "/api/connections/preview",
-                                            {"name": "private_project", "sidecar_ids": [sidecar.id]})
+                status, preview = self.http("POST", "/api/connections/preview", {"name": "private_project", "sidecar_ids": [sidecar.id]})
                 self.assertEqual(status, 200, preview)
                 copied = json.dumps(preview["config"])
                 self.assertNotIn(PROBE_SECRET, copied)
@@ -237,7 +258,8 @@ class DashboardTests(unittest.TestCase):
 
             invalid = dict(draft, base_url="http://user:pass@example.com/v1")
             self.assertEqual(self.http("POST", "/api/provider", invalid)[0], 400)
-            self.assertEqual(self.server.provider.get().base_url, draft["base_url"])
+            saved = self.server.provider.get()
+            self.assertEqual(saved and saved.base_url, draft["base_url"])
             invalid = dict(draft, base_url="http://example.com/v1")
             status, invalid_response = self.http("POST", "/api/provider", invalid)
             self.assertEqual(status, 400)
@@ -266,10 +288,8 @@ class DashboardTests(unittest.TestCase):
         sidecar = store.create("Research", self.source)
         base = ProposalFiles(store).files(sidecar.id).read("notes.md")
         proposals = Proposals(store)
-        approve = proposals.submit(sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n",
-                                   "Add the meadow.", "Review assistant")
-        reject = proposals.submit(sidecar.id, "notes.md", base["version"], "replaced\n",
-                                  "Replace the note.", "Review assistant")
+        approve = proposals.submit(sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n", "Add the meadow.", "Review assistant")
+        reject = proposals.submit(sidecar.id, "notes.md", base["version"], "replaced\n", "Replace the note.", "Review assistant")
         self.assertEqual(self.entry(sidecar.id)["pending_proposals"], 2)
         base_path = f"/api/sidecars/{sidecar.id}/proposals"
         self.assertIn("+lantern meadow", self.http("GET", f"{base_path}/{approve['id']}")[1]["diff"])
@@ -280,8 +300,9 @@ class DashboardTests(unittest.TestCase):
 
         queue = self.http("GET", base_path)[1]
         self.assertEqual((queue["pending"], [item["status"] for item in queue["reviewed"]]), ([], ["approved", "rejected"]))
-        self.wait_for(lambda: len(json.loads(self.cli("search", "--sidecar", sidecar.id, "meadow").stdout or "[]")) == 1,
-                      "approved text was not searchable")
+        self.wait_for(
+            lambda: len(json.loads(self.cli("search", "--sidecar", sidecar.id, "meadow").stdout or "[]")) == 1, "approved text was not searchable"
+        )
 
     @unittest.skipUnless(shutil.which("git"), "git is not installed")
     def test_owner_turns_on_the_git_record_and_an_approval_becomes_a_commit(self) -> None:
@@ -293,8 +314,9 @@ class DashboardTests(unittest.TestCase):
         store = self.server.store
         sidecar = store.create("Research", self.source)
         base = ProposalFiles(store).files(sidecar.id).read("notes.md")
-        proposal = Proposals(store).submit(sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n",
-                                           "Add the meadow.", "Review assistant")
+        proposal = Proposals(store).submit(
+            sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n", "Add the meadow.", "Review assistant"
+        )
         base_path = f"/api/sidecars/{sidecar.id}"
         self.assertEqual(self.http("POST", f"{base_path}/git-record", {"enabled": True})[0], 200)
 
@@ -323,12 +345,14 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(entry["args"], ["-m", "psydcar", "mcp", "--sidecar-id", one.id])
         self.assertEqual(entry["env"], {"PSYDCAR_HOME": str(self.database.parent)})
         self.assertNotIn(two.id, json.dumps(preview))
-        status, combined = self.http("POST", "/api/connections/preview",
-                                     {"name": "project_b", "sidecar_ids": [one.id, two.id], "proposal_ids": [two.id]})
+        status, combined = self.http(
+            "POST", "/api/connections/preview", {"name": "project_b", "sidecar_ids": [one.id, two.id], "proposal_ids": [two.id]}
+        )
         self.assertEqual(status, 200)
-        self.assertEqual(combined["entry"]["args"],
-                         ["-m", "psydcar", "mcp", "--sidecar-id", one.id, "--sidecar-id", two.id,
-                          "--propose-sidecar-id", two.id, "--agent-name", "project_b"])
+        self.assertEqual(
+            combined["entry"]["args"],
+            ["-m", "psydcar", "mcp", "--sidecar-id", one.id, "--sidecar-id", two.id, "--propose-sidecar-id", two.id, "--agent-name", "project_b"],
+        )
 
     def test_connection_preview_uses_installed_command_on_path(self) -> None:
         one = self.server.store.create("One", self.source)
@@ -336,16 +360,25 @@ class DashboardTests(unittest.TestCase):
         scripts.mkdir()
         command = scripts / "psydcar"
         command.write_text("#!/bin/sh\n")
-        with patch("psydcar.dashboard.shutil.which", return_value=str(command)), \
-                patch("psydcar.dashboard._script_dirs", return_value={scripts.resolve()}):
+        with (
+            patch("psydcar.dashboard.shutil.which", return_value=str(command)),
+            patch("psydcar.dashboard._script_dirs", return_value={scripts.resolve()}),
+        ):
             status, preview = self.http("POST", "/api/connections/preview", {"name": "project_a", "sidecar_ids": [one.id]})
         self.assertEqual(status, 200, preview)
         self.assertEqual(preview["entry"]["command"], str(command.absolute()))
         self.assertEqual(preview["entry"]["args"], ["mcp", "--sidecar-id", one.id])
 
     def test_static_assets_and_package_data(self) -> None:
-        for path in ("/", "/assets/brand.svg", "/assets/design-system.css", "/assets/dashboard.css",
-                     "/assets/dashboard.js", "/assets/Geist-Variable.woff2", "/assets/GeistMono-Variable.woff2"):
+        for path in (
+            "/",
+            "/assets/brand.svg",
+            "/assets/design-system.css",
+            "/assets/dashboard.css",
+            "/assets/dashboard.js",
+            "/assets/Geist-Variable.woff2",
+            "/assets/GeistMono-Variable.woff2",
+        ):
             request = Request(self.server.url + path)
             with urlopen(request, timeout=3) as response:
                 self.assertEqual(response.status, 200)

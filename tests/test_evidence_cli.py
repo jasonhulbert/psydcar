@@ -13,7 +13,6 @@ from pathlib import Path
 
 from git_sandbox import git, use_sandbox
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -136,9 +135,7 @@ class EvidenceCliTests(unittest.TestCase):
         self.assertTrue((self.source_a / "guide.md").exists())
         self.assertEqual(self.cli("search", "--sidecar", "A", "green").returncode, 2)
         with closing(sqlite3.connect(self.store / "search.sqlite3")) as connection, connection:
-            indexed_sidecar_ids = {
-                row[0] for row in connection.execute("SELECT DISTINCT sidecar_id FROM documents")
-            }
+            indexed_sidecar_ids = {row[0] for row in connection.execute("SELECT DISTINCT sidecar_id FROM documents")}
             self.assertEqual(len(indexed_sidecar_ids), 1)
             self.assertEqual(connection.execute("SELECT count(*) FROM passages_fts").fetchone()[0], 1)
 
@@ -165,8 +162,10 @@ class EvidenceCliTests(unittest.TestCase):
         hits = json.loads(self.cli("search", "--sidecar", "B", "comet").stdout)
         self.assertEqual(
             {hit["source"]["relative_path"]: hit["git"] for hit in hits},
-            {"guide.md": {"commit": commit, "uncommitted": False, "tracked": True},
-             "draft.md": {"commit": commit, "uncommitted": True, "tracked": True}},
+            {
+                "guide.md": {"commit": commit, "uncommitted": False, "tracked": True},
+                "draft.md": {"commit": commit, "uncommitted": True, "tracked": True},
+            },
         )
         draft = next(hit for hit in hits if hit["source"]["relative_path"] == "draft.md")
         retrieved = json.loads(self.cli("retrieve", "--sidecar", "B", draft["evidence_id"]).stdout)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from .evidence import EvidenceStore, IndexReport, UpdateSuperseded
 from .registry import Sidecar, SidecarStore, StoreError
@@ -76,10 +76,7 @@ class SidecarWatcher:
             previous = self._snapshots.get(sidecar.id)
         if previous is not None and snapshot == previous and not full:
             return None
-        reason = (
-            "startup" if startup else "new_sidecar" if previous is None else
-            "source_changed" if snapshot != previous else "periodic"
-        )
+        reason = "startup" if startup else "new_sidecar" if previous is None else "source_changed" if snapshot != previous else "periodic"
         event: WatchEvent | None
         try:
             if self.update_lock is None:

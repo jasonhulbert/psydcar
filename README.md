@@ -15,7 +15,7 @@ Point Psydcar at a folder of notes, code, or PDFs and it builds a local search i
 
 ## Install
 
-Psydcar needs Python 3.10 or newer and runs on macOS and Linux. Install it as a standalone command with [pipx](https://pipx.pypa.io) or [uv](https://docs.astral.sh/uv/):
+Psydcar needs Python 3.11 or newer and runs on macOS and Linux. Install it as a standalone command with [pipx](https://pipx.pypa.io) or [uv](https://docs.astral.sh/uv/):
 
 ```console
 pipx install psydcar

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import hashlib
 import sqlite3
 import subprocess
 import sys
@@ -12,12 +12,8 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-try:
-    from pypdf import PdfReader, PdfWriter
-    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
-except ImportError:
-    PdfReader = PdfWriter = None
-
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,19 +21,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def write_pdf(path: Path, page_texts: list[str | None]) -> None:
     """Create a small PDF with real extractable text and optional blank pages."""
     writer = PdfWriter()
-    font = DictionaryObject({
-        NameObject("/Type"): NameObject("/Font"),
-        NameObject("/Subtype"): NameObject("/Type1"),
-        NameObject("/BaseFont"): NameObject("/Helvetica"),
-    })
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
     font_ref = writer._add_object(font)
     for text in page_texts:
         page = writer.add_blank_page(width=612, height=792)
         if text is None:
             continue
-        page[NameObject("/Resources")] = DictionaryObject({
-            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})
-        })
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})})
         content = DecodedStreamObject()
         content.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii"))
         page[NameObject("/Contents")] = writer._add_object(content)
@@ -46,12 +42,11 @@ def write_pdf(path: Path, page_texts: list[str | None]) -> None:
     with path.open("rb") as source:
         reader = PdfReader(source)
         self_check = [page.extract_text() for page in reader.pages]
-    for expected, actual in zip(page_texts, self_check):
+    for expected, actual in zip(page_texts, self_check, strict=True):
         if expected is not None and expected not in actual:
             raise AssertionError("PDF test fixture did not contain extractable text")
 
 
-@unittest.skipUnless(PdfReader is not None, "pypdf is not installed in this Python environment")
 class PdfCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -191,9 +186,7 @@ class PdfCliTests(unittest.TestCase):
                 "INSERT INTO passages (id, document_id, start_line, end_line, context) VALUES (?, ?, ?, ?, ?)",
                 (old_id, document.lastrowid, 1, 1, "Text archive nebula"),
             )
-            connection.execute(
-                "INSERT INTO passages_fts (evidence_id, context) VALUES (?, ?)", (old_id, "Text archive nebula")
-            )
+            connection.execute("INSERT INTO passages_fts (evidence_id, context) VALUES (?, ?)", (old_id, "Text archive nebula"))
         hits = json.loads(self.cli("search", "--sidecar", "Library", "nebula").stdout)
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["evidence_id"], old_id)

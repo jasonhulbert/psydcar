@@ -8,30 +8,10 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 - Grant individual MCP connections permission to propose edits per sidecar. A proposed edit waits in a local queue and doesn't reach disk unless it's approved.
 - Local state and search now live in separate SQLite databases. The upgrade preserves sidecar and evidence IDs and keeps the original database as a backup.
-- Markdown links open other files in the sidecar. ⌘-click (Ctrl-click on Linux) a relative link such as `../ideas.md` or `notes/plan#next-steps` to open that file. A link without an extension matches a Markdown file of that name, and a `#heading` part scrolls to that heading. ⌘Enter opens the link under the cursor. Hovering a link shows where it points.
-- Markdown front matter shows as a properties list in Reading mode. Lists render as chips and tags as `#tag` links. Switch to Edit or Source to edit the YAML. Psydcar never rewrites front matter.
-- Tags from front matter filter the file list. Click a tag, or type `#tag` in the filter, to list the files with that tag. Nested tags such as `#project/q4` also match `#project`.
-- Markdown tables render as tables in Reading mode. Wide tables can use the space beside the text column on large screens and scroll sideways on small ones. Switch to Edit or Source to edit the table's source.
-- Images in Markdown render in Reading mode. Local images, such as `![Chart](images/chart.png)`, load from the sidecar's folder. Images on the web aren't loaded and show their alt text. ⌘-click an image to open its file.
-- The file list shows image files. Open one to view it with its size and dimensions, and rename, move, or delete it like any other file. Images aren't indexed.
-- The Markdown view switcher offers Edit, Reading, and Source. Reading renders the whole file, keeps it read-only, and follows links on a plain click.
-- An outline lists the open Markdown file's headings. Click a heading to scroll to it. The section you're reading is highlighted. Open it with the outline button in the editor toolbar.
-- Sections under top-level headings fold in Reading mode. Click the arrow beside a heading to fold or unfold it.
-- Callouts such as `> [!note]` and `> [!warning] Title` render as colored boxes with an icon. GitHub's five alert types and Obsidian's callout types are recognized.
-- Footnotes render in Reading mode. A reference such as `[^1]` shows as a number. Following it scrolls to the footnote, and following the footnote's number scrolls back.
-- Wiki links such as `[[Project plan]]`, `[[Project plan|the plan]]`, and `[[Project plan#Goals]]` open the file of that name anywhere in the sidecar. `![[photo.png]]` embeds an image, and `![[photo.png|300]]` sets its width.
-- HTML blocks render in Reading mode through an allowlist of safe elements. Scripts, styles, forms, and embedded content are removed.
 
-### Fixed
+### Removed
 
-- Markdown editing keeps its layout stable across caret movement, selection, and focus changes. Rendered block spacing follows CodeMirror’s layout requirements.
-
-### Changed
-
-- Edit mode keeps Markdown text in place while navigating, selecting, and typing. Source has line numbers. Tab moves focus in prose and indents code. Prose no longer inserts automatic closing brackets.
-- Lists in Reading mode are easier to read. Nested items are indented with guide lines, and wrapped text lines up under the item's first line. Text no longer shifts when the cursor reaches a list marker, and a task's checkbox stands in for its bullet.
-- Markdown opens in stable formatted editing, with visible syntax. Reading mode provides the fully rendered document.
-- Reading mode hides the underline of `===` and `---` headings, hides the backslash in escapes such as `\*`, and shows entities such as `&copy;` as the characters they stand for.
+- The dashboard no longer edits files. The file list, the editor, and creating, renaming, moving, and deleting files and folders from the dashboard are gone. Your files belong to you, and the editor you already use writes to them. While `psydcar watch` or the dashboard is running, Psydcar picks up those changes and re-indexes them. Removing the editor keeps Psydcar focused on giving agents evidence from your folders and on controlling what each agent can see and change. It also removes the dashboard's JavaScript build, so building and releasing Psydcar needs only Python.
 
 ## [0.3.0] - 2026-11-07
 

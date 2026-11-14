@@ -40,19 +40,11 @@ The dashboard in `src/psydcar/dashboard_assets` is plain HTML, CSS, and JavaScri
 - **Icons:** `icons.svg` is a sprite with only the [Lucide](https://lucide.dev) icons the dashboard uses. The server inlines it into the page, and markup references an icon as `<use href="#NAME">`. To add one, put its name in `ICONS` in `scripts/build-dashboard-icons.py` and regenerate the sprite:
 
 ```console
-npm pack lucide-static && mkdir lucide && tar -xzf lucide-static-*.tgz -C lucide
-python scripts/build-dashboard-icons.py lucide/package
+curl -fsSL https://registry.npmjs.org/lucide-static/-/lucide-static-1.70.0.tgz | tar -xz
+python scripts/build-dashboard-icons.py package
 ```
 
-- **Editor:** `editor.js` is a bundle of [CodeMirror 6](https://codemirror.net) plus Psydcar's formatted editing and rendered reading view, built from the `editor/` folder. The dashboard loads it only when a file is opened. Its third-party licenses are in `editor-licenses.txt`. Both files are committed, so installing Psydcar never needs Node. After changing `editor/src` or its dependencies, rebuild both files with Node 18 or newer:
-
-```console
-cd editor
-npm ci
-npm run build
-```
-
-CodeMirror adds its base styles in a `<style>` element. The dashboard's content security policy admits that element through a per-page nonce, which the server puts in a `<meta>` tag for the editor.
+The sprite was built from Lucide 1.70.0. Use the same version unless you mean to update every icon.
 
 ## Pull requests
 

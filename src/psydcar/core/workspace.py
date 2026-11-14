@@ -1,4 +1,4 @@
-"""Sidecar file access shared by the dashboard and agent proposals."""
+"""Sidecar file access for agent proposals."""
 
 from __future__ import annotations
 

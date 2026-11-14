@@ -19,12 +19,10 @@ from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
-from .core.workspace import Workspace
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
-from .evidence import MAX_FILE_BYTES, EvidenceStore
-from .files import FileConflict
+from .evidence import EvidenceStore
 from .mcp_server import proposal_scope, selected_ids
 from .store import SidecarStore, StoreError
 from .watcher import SidecarWatcher, WatchEvent
@@ -32,19 +30,14 @@ from .watcher import SidecarWatcher, WatchEvent
 
 _SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update)$")
 _SIDECAR_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})$")
-_SIDECAR_FILES = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(file|files|files/move|image)$")
 _CONNECTION_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 _MAX_BODY = 16384
-# JSON escaping can grow text several times over; the decoded file is still held to MAX_FILE_BYTES.
-_MAX_FILE_BODY = 6 * MAX_FILE_BYTES
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/assets/brand.svg": ("brand.svg", "image/svg+xml"),
     "/assets/design-system.css": ("design-system.css", "text/css; charset=utf-8"),
     "/assets/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
     "/assets/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
-    "/assets/editor.css": ("editor.css", "text/css; charset=utf-8"),
-    "/assets/editor.js": ("editor.js", "text/javascript; charset=utf-8"),
     "/assets/Geist-Variable.woff2": ("Geist-Variable.woff2", "font/woff2"),
     "/assets/GeistMono-Variable.woff2": ("GeistMono-Variable.woff2", "font/woff2"),
 }
@@ -139,7 +132,6 @@ class DashboardServer(ThreadingHTTPServer):
         if not 0 <= port <= 65535:
             raise StoreError("Dashboard port must be between 0 and 65535.")
         self.store = store or SidecarStore()
-        self.workspace = Workspace(self.store)
         self.evidence = EvidenceStore(self.store)
         self.provider = ProviderStore(self.store)
         self.csrf_token = secrets.token_urlsafe(32)
@@ -270,7 +262,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         pass
 
-    def _headers(self, status: int, content_type: str, length: int, style_nonce: str | None = None) -> None:
+    def _headers(self, status: int, content_type: str, length: int) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
@@ -278,33 +270,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        # The editor injects its base stylesheet at runtime, so the page allows one nonce for it.
-        style_src = f"'self' 'nonce-{style_nonce}'" if style_nonce else "'self'"
         self.send_header(
             "Content-Security-Policy",
-            f"default-src 'self'; script-src 'self'; style-src {style_src}; connect-src 'self'; "
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
             "img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         )
         self.end_headers()
-
-    def _image(self, path: Path, content_type: str, etag: str) -> None:
-        """Send an image that only this dashboard can embed, with scripts disabled when opened directly."""
-        # The browser revalidates each time, so an unchanged image costs a 304 instead of a download.
-        unchanged = self.headers.get("If-None-Match") == etag
-        body = b"" if unchanged else path.read_bytes()
-        self.send_response(HTTPStatus.NOT_MODIFIED if unchanged else HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        if not unchanged:
-            self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "private, no-cache")
-        self.send_header("ETag", etag)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-        self.send_header("Referrer-Policy", "no-referrer")
-        # An SVG is a document that can carry scripts. The sandbox keeps it inert even when opened in its own tab.
-        self.send_header("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox")
-        self.end_headers()
-        self.wfile.write(body)
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -328,7 +299,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _body(self, limit: int = _MAX_BODY) -> dict[str, Any] | None:
+    def _body(self) -> dict[str, Any] | None:
         if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
             self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "Send JSON for dashboard changes."})
             return None
@@ -336,7 +307,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
             length = -1
-        if not 0 <= length <= limit:
+        if not 0 <= length <= _MAX_BODY:
             self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Dashboard request is too large or has no valid length."})
             return None
         try:
@@ -360,28 +331,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/sidecars":
                 self._json(HTTPStatus.OK, self.server.snapshot())
                 return
-            match = _SIDECAR_FILES.fullmatch(path)
-            if match and match.group(2) in ("file", "files", "image"):
-                sources = self.server.workspace.files(match.group(1))
-                if match.group(2) == "files":
-                    self._json(HTTPStatus.OK, sources.tree())
-                elif match.group(2) == "image":
-                    query = parse_qs(urlsplit(self.path).query)
-                    self._image(*sources.image(query.get("path", [""])[0]))
-                else:
-                    query = parse_qs(urlsplit(self.path).query)
-                    self._json(HTTPStatus.OK, sources.read(query.get("path", [""])[0]))
-                return
             if path in _ASSETS:
                 filename, content_type = _ASSETS[path]
                 assets = files("psydcar").joinpath("dashboard_assets")
                 body = assets.joinpath(filename).read_bytes()
-                nonce = None
                 if filename == "index.html":
-                    nonce = secrets.token_urlsafe(18)
                     body = body.replace(b"<!-- psydcar:icons -->", assets.joinpath("icons.svg").read_bytes())
-                    body = body.replace(b"psydcar:style-nonce", nonce.encode("ascii"))
-                self._headers(HTTPStatus.OK, content_type, len(body), nonce)
+                self._headers(HTTPStatus.OK, content_type, len(body))
                 self.wfile.write(body)
                 return
             self._json(HTTPStatus.NOT_FOUND, {"error": "Page not found."})
@@ -397,20 +353,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            match = _SIDECAR_FILES.fullmatch(path)
-            if match and match.group(2) == "files":
-                with self.server.workspace.edit(match.group(1)) as sources:
-                    result = sources.create(payload.get("path"), payload.get("type"))
-                self.server.schedule_update(match.group(1))
-                noun = "Folder" if result["type"] == "folder" else "File"
-                self._json(HTTPStatus.CREATED, {**result, "message": f"{noun} {result['path']} created."})
-                return
-            if match and match.group(2) == "files/move":
-                with self.server.workspace.edit(match.group(1)) as sources:
-                    result = sources.move(payload.get("from"), payload.get("to"))
-                self.server.schedule_update(match.group(1))
-                self._json(HTTPStatus.OK, {**result, "message": f"Moved {result['from']} to {result['path']}."})
-                return
             if path == "/api/provider/test":
                 draft = _provider_draft(self.server.provider, payload)
                 try:
@@ -462,47 +404,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except StoreError as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
-    def do_PUT(self) -> None:
-        if not self._valid_host() or not self._mutation_allowed():
-            return
-        match = _SIDECAR_FILES.fullmatch(urlsplit(self.path).path)
-        if match is None or match.group(2) != "file":
-            self._json(HTTPStatus.NOT_FOUND, {"error": "Action not found."})
-            return
-        payload = self._body(_MAX_FILE_BODY)
-        if payload is None:
-            return
-        try:
-            with self.server.workspace.edit(match.group(1)) as sources:
-                result = sources.write(
-                    payload.get("path"), payload.get("content"), payload.get("version"),
-                    payload.get("newline", "\n"), payload.get("bom", False),
-                )
-            self.server.schedule_update(match.group(1))
-            self._json(HTTPStatus.OK, {**result, "message": f"Saved {result['path']}."})
-        except FileConflict as exc:
-            self._json(HTTPStatus.CONFLICT, {"error": str(exc), "conflict": True, "version": exc.version})
-        except StoreError as exc:
-            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-
     def do_DELETE(self) -> None:
         if not self._valid_host() or not self._mutation_allowed():
             return
         payload = self._body()
         if payload is None:
-            return
-        match = _SIDECAR_FILES.fullmatch(urlsplit(self.path).path)
-        if match and match.group(2) == "files":
-            if payload.get("confirm_path") != payload.get("path"):
-                self._json(HTTPStatus.BAD_REQUEST, {"error": "Confirm the path before deleting it."})
-                return
-            try:
-                with self.server.workspace.edit(match.group(1)) as sources:
-                    result = sources.delete(payload.get("path"))
-                self.server.schedule_update(match.group(1))
-                self._json(HTTPStatus.OK, {**result, "message": f"Deleted {result['path']}."})
-            except StoreError as exc:
-                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
         if urlsplit(self.path).path == "/api/provider":
             if payload.get("confirm") != "clear":

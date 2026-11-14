@@ -11,7 +11,6 @@ Point Psydcar at a folder and it builds a local search index called a **sidecar*
 - **Answers come with sources.** Every result names its file and location, and says whether the file has changed since it was indexed.
 - **Stays current.** A built-in watcher re-indexes files as they change.
 - **CLI and browser dashboard.** Manage sidecars whichever way you prefer.
-- **Edit in the browser.** The dashboard includes formatted Markdown editing, a rendered reading view, and a code editor. A saved change is searchable by your agents right away.
 
 ## Install
 
@@ -43,7 +42,7 @@ Search prints JSON results. Each result includes the matching text, the file pat
 psydcar retrieve --sidecar "My notes" EVIDENCE_ID
 ```
 
-Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, edit their files, and prepare agent connections. Press Ctrl-C to stop it.
+Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, set up embeddings, and prepare agent connections. Press Ctrl-C to stop it.
 
 ## Connect a coding agent
 
@@ -92,27 +91,6 @@ Run `psydcar sidecar update NAME` after files change. It reports what was added,
 To update automatically, leave `psydcar watch` or `psydcar dashboard` running. Both watch every sidecar's folder and catch up on anything that changed while Psydcar was stopped. `psydcar watch --once` catches up once and exits. Psydcar doesn't install a background service, so changes are only picked up while one of these commands is running.
 
 `psydcar sidecar show NAME` reports the last update, any files that need attention, and PDF pages without searchable text.
-
-## Edit files in the dashboard
-
-Select a sidecar in the dashboard and choose **Browse and edit files**. The file list shows the sidecar's indexed text and code files, plus its images. Open a file to edit it.
-
-- **Markdown** opens in **Edit**, with styled headings and emphasis and visible Markdown markers. Moving the caret or selecting text keeps the document layout stable. **Reading** renders the whole file and makes it read-only. **Source** shows monospace text and line numbers. The file on disk is always plain Markdown, and Psydcar never reformats it.
-- **Outline and folding.** The outline button in the editor toolbar lists the file's headings. Click one to scroll to it. In Reading mode, click the arrow beside a top-level heading to fold its section.
-- **Properties and tags.** In Reading mode, YAML front matter at the top of a Markdown file shows as a list of properties. Switch to Edit or Source to change the YAML. Click a tag, or type `#tag` in the file filter, to list the files with that tag.
-- **Tables** render as tables in Reading mode. Wide tables can use the space beside the text, and scroll sideways on small screens. Switch to Edit or Source to change the table's Markdown.
-- **Images** in Reading mode render when they're files in the sidecar's folder, such as `![Chart](images/chart.png)` or `![[chart.png]]`. Images on the web aren't loaded.
-- **Callouts, footnotes, and HTML.** In Reading mode, callouts such as `> [!tip] Title` render as colored boxes. Footnote references such as `[^1]` show as numbers that link to the footnote. HTML blocks render with scripts, styles, and forms removed.
-- **Links.** ⌘-click (Ctrl-click on Linux) a link or image to open it, or press ⌘Enter with the cursor on it. In Reading mode, a plain click opens it. Web links open in a new tab. Relative links, such as `../ideas.md#next-steps`, open that file in the editor and scroll to the heading. A link without an extension matches a Markdown file of that name.
-- **Wiki links** such as `[[Project plan]]`, `[[Project plan|the plan]]`, or `[[Project plan#Goals]]` find the file by name. A path from the sidecar's folder wins, then a file in the same folder, then the match with the shortest path. Names match without regard to case, and `.md` is optional.
-- **Code and other text files** open in a code editor with syntax highlighting, line numbers, and search.
-- **Image files** open in a viewer that shows their size and dimensions. PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, and ICO files up to 20 MiB are supported. Images aren't indexed.
-- **Saving.** Press **Save** or ⌘S (Ctrl+S on Linux). The file is written in place, and Psydcar re-indexes it right away. Line endings and a UTF-8 byte order mark are kept as they were.
-- **Changes from other apps.** If a file changes on disk while it's open, the editor reloads it. If you also have unsaved edits, you choose between reloading and keeping your version.
-- **File list.** The panel button in the editor toolbar hides the file list. On narrow screens, the file list opens as a drawer over the editor.
-- **Managing files.** Create files and folders, and rename or move them, from the file list. Press F2 to rename the selected item. Deleting a file is permanent, and only empty folders can be deleted.
-
-The editor works with the same files Psydcar indexes. Hidden files, symbolic links, skipped folders, and files over 2 MiB can't be opened or created there. The CLI and MCP server stay read-only.
 
 ## Better results with embeddings (optional)
 

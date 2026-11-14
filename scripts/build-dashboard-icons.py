@@ -2,9 +2,10 @@
 
 Usage: python scripts/build-dashboard-icons.py PATH_TO_LUCIDE_STATIC
 
-PATH_TO_LUCIDE_STATIC is an unpacked lucide-static npm package, for example
-from `npm pack lucide-static`. Add an icon to ICONS, rerun, and reference it in
-the dashboard as `#NAME`. The server inlines the sprite into index.html.
+PATH_TO_LUCIDE_STATIC is an unpacked lucide-static package, for example the
+`package` folder of a tarball downloaded from the npm registry. Add an icon to
+ICONS, rerun, and reference it in the dashboard as `#NAME`. The server inlines
+the sprite into index.html.
 """
 
 from __future__ import annotations
@@ -18,36 +19,18 @@ from pathlib import Path
 ICONS = [
     "book-open",
     "check",
-    "chevron-right",
     "circle-alert",
     "circle-check",
-    "code",
     "copy",
-    "eye",
-    "file",
-    "file-code",
-    "file-plus",
-    "file-text",
-    "folder",
-    "folder-open",
     "folder-plus",
-    "image",
     "info",
     "layers",
-    "lightbulb",
     "loader-circle",
-    "message-square-warning",
-    "octagon-alert",
-    "panel-left-close",
-    "panel-left-open",
     "pencil",
     "plug",
     "plus",
     "refresh-cw",
-    "save",
     "search",
-    "table-of-contents",
-    "tag",
     "trash-2",
     "triangle-alert",
     "x",

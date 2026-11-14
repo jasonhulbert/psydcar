@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from psydcar.core.proposals import Proposals
+from psydcar.core.workspace import Workspace
 from psydcar.evidence import EvidenceStore
 from psydcar.store import SidecarStore
 
@@ -132,6 +133,17 @@ class MCPTests(unittest.TestCase):
         self.assertEqual([(item["agent_name"], item["summary"]) for item in queued],
                          [("Review assistant", "Add the latest field note.")])
         self.assertEqual(path.read_bytes(), original)
+
+    def test_approved_proposal_keeps_line_endings_and_byte_order_mark(self) -> None:
+        sidecar = self.sidecars[0]
+        path = self.sources[0] / "note.md"
+        path.write_bytes(b"\xef\xbb\xbfsharedterm alphaonly\r\n")
+        proposals = Proposals(self.store)
+        base = Workspace(self.store).files(sidecar.id).read("note.md")
+        queued = proposals.submit(sidecar.id, "note.md", base["version"], "Lantern meadow\n",
+                                  "Add the latest field note.", "Review assistant")
+        proposals.review(sidecar.id, queued["id"], "approved")
+        self.assertEqual(path.read_bytes(), b"\xef\xbb\xbfLantern meadow\r\n")
 
     def test_protocol_selection_discovery_structured_evidence_and_freshness(self) -> None:
         alpha, beta, private = self.sidecars

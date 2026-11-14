@@ -27,6 +27,10 @@ CHUNK_OVERLAP = 5
 INITIAL_STATUS = "not_indexed"
 
 
+class UpdateSuperseded(StoreError):
+    """A later update of the same sidecar started, and it will index everything this one would have."""
+
+
 @dataclass(frozen=True)
 class IndexedSidecar(Sidecar):
     """A registered sidecar with the status of its index."""
@@ -388,7 +392,7 @@ class EvidenceStore:
     def _check_run(connection: sqlite3.Connection, sidecar_id: str, run_id: str) -> None:
         row = connection.execute("SELECT run_id FROM sidecar_updates WHERE sidecar_id = ?", (sidecar_id,)).fetchone()
         if row is None or row["run_id"] != run_id:
-            raise StoreError("A newer update replaced this sidecar update. Its results were not applied.")
+            raise UpdateSuperseded("A newer update replaced this sidecar update. Its results were not applied.")
 
     def _finish_update(self, sidecar_id: str, run_id: str, status: str, issues: list[str]) -> None:
         now = _now()

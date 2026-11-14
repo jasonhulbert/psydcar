@@ -18,11 +18,17 @@ from pathlib import Path
 
 ICONS = [
     "book-open",
+    "bot",
     "check",
+    "chevron-left",
+    "chevron-right",
     "circle-alert",
     "circle-check",
+    "circle-x",
     "copy",
     "folder-plus",
+    "git-pull-request",
+    "inbox",
     "info",
     "layers",
     "loader-circle",

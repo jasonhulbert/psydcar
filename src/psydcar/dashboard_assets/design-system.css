@@ -411,6 +411,7 @@ strong { font-weight: 600; }
 }
 .dialog-md { width: min(540px, calc(100vw - 32px)); }
 .dialog-lg { width: min(640px, calc(100vw - 32px)); }
+.dialog-xl { width: min(920px, calc(100vw - 32px)); }
 .dialog::backdrop { background: var(--backdrop); }
 .dialog[open] { animation: dialog-in 0.14s ease-out; }
 .dialog[open]::backdrop { animation: fade-in 0.14s ease-out; }

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from difflib import unified_diff
+from difflib import SequenceMatcher
 from typing import Any, Literal
 
+from .evidence import EvidenceStore, UpdateSuperseded
 from .proposal_files import FileConflict, Workspace, text_bytes
 from .registry import SidecarStore, StoreError
 from .storage import Tables, connect
@@ -18,6 +20,8 @@ from .storage import Tables, connect
 
 MAX_PENDING = 50
 MAX_SUMMARY_LENGTH = 500
+MIN_ID_PREFIX = 4
+_ID_PREFIX = re.compile(r"[0-9a-f-]+")
 _FIELDS = "id, path, agent_name, summary, status, created_at, decided_at"
 _TABLES = Tables("proposals", "file_proposals", ((
     """CREATE TABLE file_proposals (
@@ -42,21 +46,82 @@ _TABLES = Tables("proposals", "file_proposals", ((
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Milliseconds keep decisions made within one second in order.
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-def text_diff(before: str, proposed: str) -> str | None:
-    # Bound the work for long files or pathological line sequences.
-    if len(before) + len(proposed) > 128 * 1024:
-        return None
-    old_lines = before.splitlines(keepends=True)
-    new_lines = proposed.splitlines(keepends=True)
-    if len(old_lines) + len(new_lines) > 2500:
-        return None
-    return "".join(
-        line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
-        for line in unified_diff(old_lines, new_lines, n=3)
-    )
+_DIFF_CONTEXT = 3
+_DIFF_MATCH_LIMIT = 2500
+
+
+class _TrimmedMatcher(SequenceMatcher):
+    """Match only the lines between the identical start and end of two texts.
+
+    An edit in a long file then costs little, and a rewrite too long to match line by
+    line is shown as one replaced region.
+    """
+
+    def __init__(self, old: list[str], new: list[str]):
+        limit = min(len(old), len(new))
+        prefix = 0
+        while prefix < limit and old[prefix] == new[prefix]:
+            prefix += 1
+        suffix = 0
+        while suffix < limit - prefix and old[-1 - suffix] == new[-1 - suffix]:
+            suffix += 1
+        self.edges = (prefix, len(old) - suffix, len(new) - suffix)
+        super().__init__(None, old[prefix:len(old) - suffix], new[prefix:len(new) - suffix])
+        self.full = (old, new)
+
+    def get_opcodes(self) -> list[tuple[str, int, int, int, int]]:
+        prefix, old_end, new_end = self.edges
+        old, new = self.full
+        if len(self.a) + len(self.b) > _DIFF_MATCH_LIMIT:
+            middle = [("replace", 0, len(self.a), 0, len(self.b))]
+        else:
+            middle = super().get_opcodes()
+        codes = [("equal", 0, prefix, 0, prefix)]
+        codes += [(tag, i1 + prefix, i2 + prefix, j1 + prefix, j2 + prefix) for tag, i1, i2, j1, j2 in middle]
+        codes.append(("equal", old_end, len(old), new_end, len(new)))
+        merged: list[tuple[str, int, int, int, int]] = []
+        for code in codes:
+            if code[1] == code[2] and code[3] == code[4]:
+                continue
+            if merged and code[0] == "equal" == merged[-1][0]:
+                merged[-1] = ("equal", merged[-1][1], code[2], merged[-1][3], code[4])
+            else:
+                merged.append(code)
+        return merged
+
+
+def _unified_range(start: int, stop: int) -> str:
+    length = stop - start
+    if length == 1:
+        return str(start + 1)
+    return f"{start + 1 if length else start},{length}"
+
+
+def text_diff(before: str, proposed: str, path: str) -> str:
+    """Return a unified diff of a proposal, with paths relative to the sidecar folder."""
+    old = before.splitlines(keepends=True)
+    new = proposed.splitlines(keepends=True)
+    lines = [f"--- a/{path}\n", f"+++ b/{path}\n"]
+    for group in _TrimmedMatcher(old, new).get_grouped_opcodes(_DIFF_CONTEXT):
+        lines.append(f"@@ -{_unified_range(group[0][1], group[-1][2])} +{_unified_range(group[0][3], group[-1][4])} @@\n")
+        for tag, i1, i2, j1, j2 in group:
+            if tag == "equal":
+                lines.extend(" " + line for line in old[i1:i2])
+                continue
+            lines.extend("-" + line for line in old[i1:i2])
+            lines.extend("+" + line for line in new[j1:j2])
+    return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in lines)
+
+
+def _conflict(row: sqlite3.Row, current: str | None) -> FileConflict:
+    path, agent = row["path"], row["agent_name"]
+    if current is None:
+        return FileConflict(f"{path} was moved or deleted, or can't be read. Ask {agent} for a new proposal.", None)
+    return FileConflict(f"{path} changed after {agent} read it. Ask {agent} for a new proposal.", current)
 
 
 def _summary(row: sqlite3.Row) -> dict[str, Any]:
@@ -134,17 +199,15 @@ class Proposals:
                         ORDER BY decided_at DESC, rowid DESC LIMIT 50""",
                     (sidecar_id,),
                 ).fetchall()
-            else:
-                rows = state.execute(
-                    f"""SELECT {_FIELDS} FROM file_proposals
-                        WHERE sidecar_id = ? AND status IN ('pending', 'applying')
-                        ORDER BY created_at DESC, rowid DESC""",
-                    (sidecar_id,),
-                ).fetchall()
-            return {
-                "items": [_summary(row) for row in rows],
-                "pending_count": self._pending_count(state, sidecar_id) if reviewed else len(rows),
-            }
+                return {"items": [_summary(row) for row in rows], "pending_count": self._pending_count(state, sidecar_id)}
+            rows = state.execute(
+                f"""SELECT {_FIELDS}, sidecar_id, base_version FROM file_proposals
+                    WHERE sidecar_id = ? AND status IN ('pending', 'applying')
+                    ORDER BY created_at DESC, rowid DESC""",
+                (sidecar_id,),
+            ).fetchall()
+        items = [{**_summary(row), "stale": self._current_version(row) != row["base_version"]} for row in rows]
+        return {"items": items, "pending_count": len(rows)}
 
     @staticmethod
     def _find(state: sqlite3.Connection, sidecar_id: str, proposal_id: str) -> sqlite3.Row:
@@ -170,48 +233,115 @@ class Proposals:
         except (StoreError, OSError):
             return None
 
-    def _load(self, sidecar_id: str, proposal_id: str) -> sqlite3.Row:
+    def pending_counts(self) -> dict[str, int]:
+        """Count proposals waiting for review in every sidecar that has any."""
+        with self._state() as state:
+            rows = state.execute(
+                """SELECT sidecar_id, count(*) FROM file_proposals
+                   WHERE status IN ('pending', 'applying') GROUP BY sidecar_id"""
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def find(self, reference: str) -> dict[str, str]:
+        """Resolve a full proposal ID, or a unique prefix of one, to its sidecar and ID."""
+        reference = reference.strip().lower()
+        if len(reference) < MIN_ID_PREFIX or not _ID_PREFIX.fullmatch(reference):
+            raise StoreError(f"Enter a proposal ID or at least its first {MIN_ID_PREFIX} characters.")
+        with self._state() as state:
+            rows = state.execute(
+                "SELECT sidecar_id, id FROM file_proposals WHERE id LIKE ? LIMIT 2", (reference + "%",),
+            ).fetchall()
+        if not rows:
+            raise StoreError(f'No proposal is identified by "{reference}".')
+        if len(rows) > 1:
+            raise StoreError(f'"{reference}" matches more than one proposal. Enter more of its ID.')
+        return {"sidecar_id": rows[0]["sidecar_id"], "id": rows[0]["id"]}
+
+    def _load(self, sidecar_id: str, proposal_id: str) -> tuple[sqlite3.Row, bool]:
+        """Return the proposal, and whether an interrupted approval was just completed."""
         with self._state() as state:
             row = self._find(state, sidecar_id, proposal_id)
         if row["status"] != "applying":
-            return row
+            return row, False
         # An approval was recorded before the atomic file replacement. Recover
         # the completed write by hash, or leave it pending for another review.
         if self._current_version(row) == row["result_version"]:
-            return self._finish(row, "approved")
+            return self._finish(row, "approved"), True
         with self._state() as state:
             state.execute("UPDATE file_proposals SET status = 'pending' WHERE id = ?", (proposal_id,))
-            return self._find(state, sidecar_id, proposal_id)
+            return self._find(state, sidecar_id, proposal_id), False
+
+    def _recover(self, sidecar_id: str, proposal_id: str) -> sqlite3.Row:
+        with self.store.file_writes():
+            row, recovered = self._load(sidecar_id, proposal_id)
+        if recovered:
+            self._after_approval(row)
+        return row
 
     def detail(self, sidecar_id: str, proposal_id: str) -> dict[str, Any]:
-        with self.store.file_writes():
-            row = self._load(sidecar_id, proposal_id)
-            stale = row["status"] == "pending" and self._current_version(row) != row["base_version"]
+        row = self._recover(sidecar_id, proposal_id)
+        current = self._current_version(row) if row["status"] == "pending" else row["base_version"]
+        stale = current != row["base_version"]
         before, proposed = row["before_text"], row["proposed_text"]
-        diff = text_diff(before, proposed) if before is not None and proposed is not None else None
         return {
-            **_summary(row), "stale": stale, "diff": diff,
-            "before": before if diff is None else None,
-            "proposed": proposed if diff is None else None,
+            **_summary(row), "stale": stale, "stale_message": str(_conflict(row, current)) if stale else None,
+            # A decision clears the stored text, so only pending proposals have a diff.
+            "diff": text_diff(before, proposed, row["path"]) if before is not None and proposed is not None else None,
         }
 
     def review(self, sidecar_id: str, proposal_id: str, decision: Literal["approved", "rejected"]) -> dict[str, Any]:
+        """Record the owner's decision. An approval writes the file, then runs the steps that follow it."""
         if decision not in ("approved", "rejected"):
             raise StoreError("Choose whether to approve or reject the proposal.")
+        self._recover(sidecar_id, proposal_id)
+        written = False
         with self.store.file_writes():
-            row = self._load(sidecar_id, proposal_id)
-            if row["status"] == decision:
-                return _summary(row)
-            if row["status"] != "pending":
-                raise StoreError("This proposal has already been reviewed.")
-            if decision == "rejected":
-                return _summary(self._finish(row, decision))
-            current = self._current_version(row)
-            if current != row["base_version"]:
-                raise FileConflict("The file changed or is unavailable. Ask the agent for a new proposal.", current)
-            with self._state() as state:
-                state.execute("UPDATE file_proposals SET status = 'applying' WHERE id = ?", (proposal_id,))
-            self.workspace.files(sidecar_id).write(
+            row, _ = self._load(sidecar_id, proposal_id)
+            if row["status"] not in ("pending", decision):
+                raise StoreError(f"This proposal was already {row['status']}.")
+            if row["status"] == "pending":
+                if decision == "approved":
+                    self._write(row)
+                    written = True
+                row = self._finish(row, decision)
+        result = _summary(row)
+        if written:
+            result.update(self._after_approval(row))
+        return result
+
+    def _write(self, row: sqlite3.Row) -> None:
+        current = self._current_version(row)
+        if current != row["base_version"]:
+            raise _conflict(row, current)
+        with self._state() as state:
+            state.execute("UPDATE file_proposals SET status = 'applying' WHERE id = ?", (row["id"],))
+        try:
+            self.workspace.files(row["sidecar_id"]).write(
                 row["path"], row["proposed_text"], row["base_version"], row["newline"], bool(row["bom"]),
             )
-            return _summary(self._finish(row, decision))
+        except Exception as exc:
+            # The atomic replacement did not happen, so the proposal waits for another review.
+            with self._state() as state:
+                state.execute("UPDATE file_proposals SET status = 'pending' WHERE id = ?", (row["id"],))
+            if isinstance(exc, FileConflict):
+                raise _conflict(row, exc.version) from exc
+            if isinstance(exc, OSError):
+                raise StoreError(
+                    f"Couldn't write {row['path']}: {exc.strerror or exc}. "
+                    "The file was not changed, and the proposal is still pending."
+                ) from exc
+            raise
+
+    def _after_approval(self, row: sqlite3.Row) -> dict[str, Any]:
+        """Run the steps that follow an approved write. The approval stands whatever they report."""
+        try:
+            report = EvidenceStore(self.store).update(row["sidecar_id"])
+        except UpdateSuperseded:
+            # A later update started after the write, so it indexes the approved text.
+            return {"index_notice": None}
+        except StoreError as exc:
+            reason = str(exc).rstrip(".")
+            return {"index_notice": f"The search index wasn't updated: {reason}. Update the sidecar to make the change searchable."}
+        if report.provider_error:
+            return {"index_notice": f"Keyword search finds the change, but its embeddings weren't refreshed: {report.provider_error}"}
+        return {"index_notice": None}

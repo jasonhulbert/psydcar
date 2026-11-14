@@ -8,6 +8,7 @@ import signal
 import sys
 import threading
 from collections.abc import Sequence
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 
 from .access import connect_agent
@@ -16,6 +17,7 @@ from .dashboard import run_dashboard
 from .evidence import EvidenceStore, IndexedSidecar
 from .freshness import SidecarWatcher, WatchEvent
 from .mcp_server import run_mcp
+from .proposals import Proposals
 from .registry import SidecarStore, StoreError
 
 
@@ -67,6 +69,20 @@ def _parser() -> argparse.ArgumentParser:
     update = actions.add_parser("update", help="Refresh added, changed, and deleted source files")
     update.add_argument("reference", help="Sidecar name or ID")
 
+    proposal = commands.add_parser("proposal", help="Review edits that agents proposed")
+    proposal_actions = proposal.add_subparsers(dest="proposal_action", required=True)
+    proposal_list = proposal_actions.add_parser("list", help="List proposals waiting for review")
+    proposal_list.add_argument("sidecar", nargs="?", metavar="SIDECAR", help="Sidecar name or ID (default: every sidecar)")
+    proposal_list.add_argument("--reviewed", action="store_true", help="List recent decisions instead")
+    for action, description in (
+        ("show", "Show a proposal with its diff"),
+        ("approve", "Write a proposal to its file and update the search index"),
+        ("reject", "Reject a proposal; the file is not changed"),
+    ):
+        proposal_actions.add_parser(action, help=description).add_argument(
+            "proposal", metavar="ID", help="Proposal ID, or its first characters as shown by 'proposal list'",
+        )
+
     provider = commands.add_parser("provider", help="Configure and inspect embedding access")
     provider_actions = provider.add_subparsers(dest="provider_action", required=True)
     configure = provider_actions.add_parser("set", help="Configure an OpenAI-compatible embeddings route")
@@ -101,6 +117,86 @@ def _parser() -> argparse.ArgumentParser:
                      help="Allow proposals for this selected sidecar; repeat for each grant")
     mcp.add_argument("--agent-name", metavar="NAME", help="Name shown with this connection's proposals")
     return parser
+
+
+def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+    widths = [max(len(row[index]) for row in [headers, *rows]) for index in range(len(headers))]
+    for row in [headers, *rows]:
+        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip())
+
+
+def _short_time(value: str | None) -> str:
+    """Show a stored UTC timestamp in local time, to the minute."""
+    if not value:
+        return ""
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value
+
+
+def _proposal_command(store: SidecarStore, args: argparse.Namespace) -> int:
+    proposals = Proposals(store)
+    if args.proposal_action == "list":
+        sidecars = [store.get(args.sidecar)] if args.sidecar else store.list()
+        rows = []
+        for sidecar in sidecars:
+            for item in proposals.list(sidecar.id, reviewed=args.reviewed)["items"]:
+                rows.append((item, sidecar.name))
+        if not rows:
+            scope = f' in "{sidecars[0].name}"' if args.sidecar else ""
+            print(f"No reviewed proposals{scope} yet." if args.reviewed else f"No proposals{scope} are waiting for review.")
+            return 0
+        if args.reviewed:
+            rows.sort(key=lambda pair: pair[0]["decided_at"] or "", reverse=True)
+            _table(("ID", "SIDECAR", "FILE", "AGENT", "DECISION", "DECIDED", "REASON"), [
+                (item["id"][:8], name, item["path"], item["agent_name"], item["status"].capitalize(),
+                 _short_time(item["decided_at"]), item["summary"]) for item, name in rows
+            ])
+        else:
+            rows.sort(key=lambda pair: pair[0]["created_at"])
+            _table(("ID", "SIDECAR", "FILE", "AGENT", "PROPOSED", "STATUS", "REASON"), [
+                (item["id"][:8], name, item["path"], item["agent_name"], _short_time(item["created_at"]),
+                 "Out of date" if item["stale"] else "Pending", item["summary"])
+                for item, name in rows
+            ])
+            print("\nShow one with 'psydcar proposal show ID', then approve or reject it.")
+        return 0
+    found = proposals.find(args.proposal)
+    sidecar = store.get(found["sidecar_id"], exact_id=True)
+    if args.proposal_action == "show":
+        detail = proposals.detail(sidecar.id, found["id"])
+        status = "Out of date" if detail["stale"] else detail["status"].capitalize()
+        print("\n".join((
+            f"Proposal: {detail['id']}",
+            f"Sidecar: {sidecar.name}",
+            f"File: {detail['path']}",
+            f"Agent: {detail['agent_name']}",
+            f"Reason: {detail['summary']}",
+            f"Proposed: {_short_time(detail['created_at'])}",
+            f"Status: {status}",
+        )))
+        if detail["decided_at"]:
+            print(f"Decided: {_short_time(detail['decided_at'])}")
+        if detail["stale"]:
+            print(f"Out of date: {detail['stale_message']}")
+        if detail["diff"] is not None:
+            print(f"\n{detail['diff']}", end="")
+        return 0
+    decision = "approved" if args.proposal_action == "approve" else "rejected"
+    result = proposals.review(sidecar.id, found["id"], decision)
+    if decision == "rejected":
+        print(f'Rejected proposal {result["id"][:8]} for {result["path"]} in "{sidecar.name}". The file was not changed.')
+        return 0
+    if "index_notice" not in result:
+        print(f'Proposal {result["id"][:8]} was already approved.')
+        return 0
+    notice = result["index_notice"]
+    print(f'Approved proposal {result["id"][:8]}. Wrote {result["path"]} in "{sidecar.name}"'
+          + ("." if notice else " and updated the search index."), flush=True)
+    if notice:
+        print(notice, file=sys.stderr)
+    return 0
 
 
 def _watch_event(event: WatchEvent) -> None:
@@ -212,6 +308,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print("Embedding processing is incomplete; lexical evidence remains available.", file=sys.stderr)
                 if report.skipped or report.provider_error:
                     return 1
+        elif args.command == "proposal":
+            return _proposal_command(store, args)
         elif args.command == "provider":
             provider = ProviderStore(store)
             if args.provider_action == "set":

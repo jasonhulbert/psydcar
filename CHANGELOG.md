@@ -6,7 +6,7 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ### Added
 
-- Grant individual MCP connections permission to propose edits per sidecar. A proposed edit waits in a local queue and doesn't reach disk unless it's approved.
+- Grant individual MCP connections permission to propose edits per sidecar. A proposed edit waits in a local queue and doesn't reach disk unless you approve it. Review proposals in the dashboard, which shows each agent's name, reason, and diff and keeps a list of recent decisions, or from the CLI with `psydcar proposal list`, `show`, `approve`, and `reject`. An approved edit is written in one step with its line endings and byte order mark preserved, and it's searchable right away. A proposal for a file that changed after the agent read it is marked out of date and can't be approved.
 - Local state and search now live in separate SQLite databases. The upgrade preserves sidecar and evidence IDs and keeps the original database as a backup.
 
 ### Removed

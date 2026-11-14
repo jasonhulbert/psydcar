@@ -25,11 +25,15 @@ from . import access
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
 from .evidence import EvidenceStore
 from .freshness import SidecarWatcher, WatchEvent
+from .proposal_files import FileConflict
+from .proposals import Proposals
 from .registry import SidecarStore, StoreError
 
 
 _SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update)$")
 _SIDECAR_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})$")
+_PROPOSAL_LIST = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals$")
+_PROPOSAL_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals/([0-9a-f-]{36})$")
 _CONNECTION_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 _MAX_BODY = 16384
 _ASSETS = {
@@ -134,6 +138,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.store = store or SidecarStore()
         self.evidence = EvidenceStore(self.store)
         self.provider = ProviderStore(self.store)
+        self.proposals = Proposals(self.store)
         self.csrf_token = secrets.token_urlsafe(32)
         self.operation_lock = threading.Lock()
         self._pending_lock = threading.Lock()
@@ -207,6 +212,7 @@ class DashboardServer(ThreadingHTTPServer):
         with self._pending_lock:
             queued = set(self._pending)
             errors = dict(self._errors)
+        pending_proposals = self.proposals.pending_counts()
         entries = []
         for sidecar in sidecars:
             update = self.evidence.update_state(sidecar.id)
@@ -226,6 +232,7 @@ class DashboardServer(ThreadingHTTPServer):
                 "embedding": embedding, "queued": sidecar.id in queued,
                 "error": errors.get(sidecar.id),
                 "pdf_pages": self.evidence.pdf_page_notices(sidecar.id),
+                "pending_proposals": pending_proposals.get(sidecar.id, 0),
             })
         return {"sidecars": entries, "watching": self._watch_thread.is_alive(),
                 "provider_configured": provider_configured, "provider": provider,
@@ -331,6 +338,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/sidecars":
                 self._json(HTTPStatus.OK, self.server.snapshot())
                 return
+            match = _PROPOSAL_LIST.fullmatch(path)
+            if match:
+                sidecar_id = match.group(1)
+                self._json(HTTPStatus.OK, {
+                    "pending": self.server.proposals.list(sidecar_id)["items"],
+                    "reviewed": self.server.proposals.list(sidecar_id, reviewed=True)["items"],
+                })
+                return
+            match = _PROPOSAL_ITEM.fullmatch(path)
+            if match:
+                self._json(HTTPStatus.OK, self.server.proposals.detail(*match.groups()))
+                return
             if path in _ASSETS:
                 filename, content_type = _ASSETS[path]
                 assets = files("psydcar").joinpath("dashboard_assets")
@@ -385,6 +404,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     sidecar = self.server.store.create(name, source)
                 self.server.schedule_update(sidecar.id)
                 self._json(HTTPStatus.CREATED, {"id": sidecar.id, "message": f'Created "{sidecar.name}". Indexing has started.'})
+                return
+            match = _PROPOSAL_ITEM.fullmatch(path)
+            if match:
+                try:
+                    with self.server.operation_lock:
+                        result = self.server.proposals.review(*match.groups(), payload.get("decision"))
+                except FileConflict as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc), "stale": True})
+                    return
+                self._json(HTTPStatus.OK, result)
                 return
             match = _SIDECAR_ACTION.fullmatch(path)
             if match:

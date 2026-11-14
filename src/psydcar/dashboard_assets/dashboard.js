@@ -9,6 +9,8 @@
     token: null, sidecars: [], selectedId: null, filter: "", statusFilter: "all",
     watching: false, loading: false, toastTimer: null, provider: { configured: false },
     connectionPreview: null, snapshotKey: "", renderedAt: 0,
+    proposals: { sidecarId: null, key: "", pending: [], reviewed: [], loaded: false, expanded: false },
+    review: null,
   };
 
   // DOM helpers
@@ -93,6 +95,7 @@
     return parsed.toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { dateStyle: "medium" });
   }
 
+  const ago = (value) => { const text = relative(value); return text === "Just now" ? "just now" : text; };
   const count = (value) => Number(value || 0).toLocaleString();
   const plural = (value, word) => `${count(value)} ${word}${Number(value) === 1 ? "" : "s"}`;
 
@@ -121,11 +124,19 @@
     byId("toast-text").textContent = text;
     byId("toast-icon").setAttribute("href", `${ICONS}#${error ? "circle-alert" : "circle-check"}`);
     toast.classList.toggle("is-error", error);
-    toast.hidden = true;
+    hideToast();
     void toast.offsetWidth;
     toast.hidden = false;
+    // As a popover the toast joins the top layer, so it shows above an open dialog.
+    if (toast.showPopover) toast.showPopover();
     clearTimeout(model.toastTimer);
-    model.toastTimer = setTimeout(() => { toast.hidden = true; }, 5000);
+    model.toastTimer = setTimeout(hideToast, 5000);
+  }
+
+  function hideToast() {
+    const toast = byId("toast");
+    toast.hidden = true;
+    if (toast.hidePopover && toast.matches(":popover-open")) toast.hidePopover();
   }
 
   function banner(text) {
@@ -173,6 +184,7 @@
     byId("footer-version").textContent = snapshot.version ? `Psydcar ${snapshot.version}` : "Psydcar";
     byId("footer-data-dir").textContent = snapshot.data_dir || "—";
     render();
+    syncProposals();
   }
 
   async function refresh(first = false, force = false) {
@@ -194,6 +206,7 @@
   function render() {
     const focusKey = document.activeElement?.dataset?.focusKey;
     renderCounts();
+    renderReviewCallout();
     renderSetup();
     renderList();
     renderDetail();
@@ -228,6 +241,7 @@
     model.selectedId = id;
     renderList();
     renderDetail();
+    syncProposals();
     if (reveal && stacked.matches) document.querySelector(".layout-side").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -253,6 +267,16 @@
       const link = button(name, "row-link", sidecar.name, { focusKey: `row:${sidecar.id}` });
       link.setAttribute("aria-current", String(selected));
       link.addEventListener("keydown", (event) => moveSelection(event, items, sidecar.id));
+      if (sidecar.pending_proposals) {
+        const line = element("div", "row-name-line");
+        name.prepend(line);
+        line.append(link);
+        const pill = add(line, "span", "review-pill");
+        pill.title = `${plural(sidecar.pending_proposals, "proposed edit")} to review`;
+        pill.append(icon("git-pull-request"));
+        add(pill, "span", "", count(sidecar.pending_proposals)).setAttribute("aria-hidden", "true");
+        add(pill, "span", "visually-hidden", pill.title);
+      }
       const path = add(name, "span", "row-path");
       add(path, "bdi", "", sidecar.source_path);
       path.title = sidecar.source_path;
@@ -380,6 +404,8 @@
       add(stat, "span", "stat-value", count(value));
       add(stat, "span", "stat-label", label);
     }
+
+    renderProposals(target, sidecar);
 
     const updates = section(target, "Updates");
     props(updates, [
@@ -582,6 +608,309 @@
     byId("connection-name").focus();
   }
 
+  // Proposals
+
+  const byCreated = (a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0);
+  const pendingTotal = () => model.sidecars.reduce((total, item) => total + Number(item.pending_proposals || 0), 0);
+
+  function renderReviewCallout() {
+    const total = pendingTotal();
+    const waiting = model.sidecars.filter((item) => item.pending_proposals);
+    byId("review-callout").hidden = total === 0;
+    document.title = total ? `(${total}) Sidecars · Psydcar` : "Sidecars · Psydcar";
+    if (!total) return;
+    byId("review-callout-title").textContent = `${plural(total, "proposed edit")} ${total === 1 ? "is" : "are"} waiting for review`;
+    const names = waiting.map((item) => item.name);
+    const where = names.length <= 2 ? names.join(" and ") : `${names.slice(0, 2).join(", ")}, and ${plural(names.length - 2, "other sidecar")}`;
+    byId("review-callout-text").textContent = `Agents proposed changes in ${where}. Files change only when you approve.`;
+  }
+
+  function syncProposals() {
+    // A changed snapshot can mean a new or decided proposal, or a source edit that
+    // leaves a proposal out of date, so reload the selected sidecar's queue with it.
+    const sidecar = model.sidecars.find((item) => item.id === model.selectedId);
+    if (!sidecar) return;
+    const key = `${sidecar.id}:${model.snapshotKey}`;
+    if (key !== model.proposals.key) loadProposals(sidecar.id, key);
+  }
+
+  async function loadProposals(sidecarId, key) {
+    if (model.proposals.sidecarId !== sidecarId) {
+      model.proposals = { sidecarId, key, pending: [], reviewed: [], loaded: false, expanded: false };
+    } else {
+      model.proposals.key = key;
+    }
+    try {
+      const result = await request(`/api/sidecars/${sidecarId}/proposals`);
+      if (model.proposals.sidecarId !== sidecarId) return;
+      model.proposals.pending = (result.pending || []).sort(byCreated);
+      model.proposals.reviewed = result.reviewed || [];
+      model.proposals.loaded = true;
+    } catch (error) {
+      if (model.proposals.sidecarId !== sidecarId) return;
+      model.proposals.key = "";
+      model.proposals.error = error.message;
+    }
+    if (model.selectedId === sidecarId) {
+      const focusKey = document.activeElement?.dataset?.focusKey;
+      renderDetail();
+      if (focusKey) document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    }
+  }
+
+  function agentLine(parent, item, verb, when) {
+    const line = add(parent, "span", "proposal-meta");
+    line.append(icon("bot"));
+    add(line, "span", "proposal-agent", item.agent_name);
+    const time = add(line, "span", "", `${verb} ${ago(when)}`);
+    time.title = date(when);
+    return line;
+  }
+
+  function renderProposals(parent, sidecar) {
+    const state = model.proposals.sidecarId === sidecar.id ? model.proposals : null;
+    const block = add(parent, "section", "detail-section proposals");
+    const head = add(block, "div", "proposals-head");
+    add(head, "h3", "", "Proposed edits");
+    const waiting = Number(sidecar.pending_proposals || 0);
+    if (waiting) add(head, "span", "counter counter-pop", count(waiting));
+
+    if (!state || (!state.loaded && !state.error)) {
+      add(block, "p", "proposal-empty", waiting ? "Loading proposals…" : "No edits are waiting for review.");
+      return;
+    }
+    if (state.error) {
+      flash(block, "danger", "Proposals could not be loaded", { text: `${state.error} Reload the page to try again.` });
+      return;
+    }
+
+    if (state.pending.length) {
+      const list = add(block, "ul", "proposal-list");
+      for (const item of state.pending) {
+        const entry = button(add(list, "li"), "proposal-item", "", {
+          focusKey: `proposal:${item.id}`, onClick: () => openReview(sidecar.id, item.id),
+        });
+        entry.setAttribute("aria-label", `Review ${item.path}${item.stale ? " (out of date)" : ""}: ${item.summary}, proposed by ${item.agent_name}`);
+        const body = add(entry, "span", "proposal-body");
+        const top = add(body, "span", "proposal-top");
+        add(top, "span", "proposal-path", item.path).title = item.path;
+        if (item.stale) add(top, "span", "badge badge-warning proposal-badge", "Out of date");
+        add(body, "span", "proposal-reason", item.summary);
+        agentLine(body, item, "proposed", item.created_at);
+        entry.append(icon("chevron-right", "proposal-chevron"));
+      }
+    } else {
+      const empty = add(block, "p", "proposal-empty");
+      empty.append(icon("inbox"));
+      add(empty, "span", "", "No edits are waiting for review. Agents you allow to propose edits for this sidecar queue them here.");
+    }
+
+    if (state.reviewed.length) {
+      add(block, "h4", "proposals-subhead", "Recent decisions");
+      const shown = state.expanded ? state.reviewed : state.reviewed.slice(0, 5);
+      const list = add(block, "ul", "decision-list");
+      for (const item of shown) {
+        const row = add(list, "li", "decision");
+        const top = add(row, "div", "decision-top");
+        const approved = item.status === "approved";
+        add(top, "span", `badge decision-badge${approved ? " badge-success" : ""}`, approved ? "Approved" : "Rejected");
+        add(top, "span", "proposal-path", item.path).title = item.path;
+        add(row, "span", "proposal-reason", item.summary);
+        agentLine(row, item, "decided", item.decided_at);
+      }
+      if (state.reviewed.length > 5) {
+        button(block, "btn btn-sm decision-more", state.expanded ? "Show fewer" : `Show all ${count(state.reviewed.length)}`, {
+          focusKey: "detail:decisions-more",
+          onClick: () => { model.proposals.expanded = !model.proposals.expanded; renderDetail(); },
+        });
+      }
+    }
+  }
+
+  // Review dialog
+
+  function diffTable(target, diff) {
+    const table = add(target, "table", "diff");
+    const body = add(table, "tbody");
+    let oldLine = 0;
+    let newLine = 0;
+    let added = 0;
+    let removed = 0;
+    for (const line of diff.split("\n")) {
+      if (line === "" || line.startsWith("--- ") || line.startsWith("+++ ")) continue;
+      const row = add(body, "tr");
+      const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (hunk) {
+        oldLine = Number(hunk[1]);
+        newLine = Number(hunk[2]);
+        row.className = "diff-hunk";
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-code", line);
+        continue;
+      }
+      if (line.startsWith("\\")) {
+        row.className = "diff-note";
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-code", line.slice(2));
+        continue;
+      }
+      const sign = line[0];
+      row.className = sign === "+" ? "diff-add" : sign === "-" ? "diff-del" : "";
+      add(row, "td", "diff-num", sign === "+" ? "" : oldLine++);
+      add(row, "td", "diff-num", sign === "-" ? "" : newLine++);
+      const code = add(row, "td", "diff-code");
+      add(code, "span", "diff-sign", sign === " " ? " " : sign).setAttribute("aria-label", sign === "+" ? "Added" : sign === "-" ? "Removed" : "Unchanged");
+      code.append(document.createTextNode(line.slice(1)));
+      if (sign === "+") added++;
+      if (sign === "-") removed++;
+    }
+    return { added, removed };
+  }
+
+  function reviewQueue() {
+    return model.proposals.sidecarId === model.review?.sidecarId ? model.proposals.pending.map((item) => item.id) : [];
+  }
+
+  function renderReviewNav() {
+    const queue = reviewQueue();
+    const index = queue.indexOf(model.review?.proposalId);
+    byId("review-position").textContent = index >= 0 && queue.length > 1 ? `${index + 1} of ${queue.length}` : "";
+    byId("review-prev").hidden = byId("review-next").hidden = queue.length < 2 || index < 0;
+    byId("review-prev").disabled = index <= 0;
+    byId("review-next").disabled = index < 0 || index >= queue.length - 1;
+  }
+
+  function setReviewBusy(busy) {
+    const detail = model.review?.detail;
+    const pending = detail && detail.status === "pending";
+    byId("review-approve").disabled = busy || !pending || detail.stale;
+    byId("review-reject").disabled = busy || !pending;
+  }
+
+  function renderReview() {
+    const target = byId("review-body");
+    target.replaceChildren();
+    renderReviewNav();
+    const review = model.review;
+    const detail = review?.detail;
+    if (!detail) {
+      if (review?.loadError) flash(target, "danger", "This proposal could not be opened", { text: review.loadError });
+      else add(target, "p", "review-loading", "Loading proposal…");
+      setReviewBusy(true);
+      return;
+    }
+    const sidecar = model.sidecars.find((item) => item.id === review.sidecarId);
+    const head = add(target, "div", "review-head");
+    const meta = add(head, "div", "review-byline");
+    meta.append(icon("bot"));
+    const byline = add(meta, "span");
+    add(byline, "strong", "proposal-agent", detail.agent_name);
+    byline.append(document.createTextNode(` proposed an edit${sidecar ? ` in ${sidecar.name}` : ""} ${ago(detail.created_at)}`));
+    byline.title = date(detail.created_at);
+    add(head, "p", "review-reason", detail.summary);
+
+    if (detail.status !== "pending") {
+      flash(target, "info", `This proposal was ${detail.status}`, { text: detail.decided_at ? `Decided ${ago(detail.decided_at)}. Nothing is left to review.` : "" });
+    } else if (review.error) {
+      flash(target, "danger", review.error.title, { text: review.error.text });
+    } else if (detail.stale) {
+      flash(target, "warning", "Out of date", { text: `${detail.stale_message} Approving is unavailable, but you can reject it to clear it from the queue.` });
+    }
+
+    const block = add(target, "div", "code-block review-diff");
+    const header = add(block, "div", "code-block-header");
+    const file = add(header, "span", "review-file", detail.path);
+    file.title = detail.path;
+    const stats = add(header, "span", "review-stats");
+    if (detail.diff) {
+      const scroller = add(block, "div", "diff-scroll");
+      scroller.tabIndex = 0;
+      scroller.setAttribute("role", "region");
+      scroller.setAttribute("aria-label", `Changes to ${detail.path}`);
+      const { added, removed } = diffTable(scroller, detail.diff);
+      add(stats, "span", "change-added-text", `+${count(added)}`);
+      add(stats, "span", "change-removed-text", `−${count(removed)}`);
+    } else {
+      add(block, "p", "review-kept", "Psydcar keeps the proposed text only until a decision.");
+    }
+    setReviewBusy(false);
+  }
+
+  async function showProposal(proposalId) {
+    const review = model.review;
+    if (!review) return;
+    review.proposalId = proposalId;
+    review.detail = null;
+    review.error = null;
+    review.loadError = null;
+    renderReview();
+    try {
+      const detail = await request(`/api/sidecars/${review.sidecarId}/proposals/${proposalId}`);
+      if (model.review !== review || review.proposalId !== proposalId) return;
+      review.detail = detail;
+    } catch (error) {
+      if (model.review !== review || review.proposalId !== proposalId) return;
+      review.loadError = error.message;
+    }
+    renderReview();
+    byId("review-body").querySelector(".diff-scroll")?.focus({ preventScroll: true });
+  }
+
+  async function openReview(sidecarId, proposalId) {
+    if (model.proposals.sidecarId !== sidecarId || !model.proposals.loaded) {
+      await loadProposals(sidecarId, `${sidecarId}:${model.snapshotKey}`);
+    }
+    const target = proposalId || model.proposals.pending[0]?.id;
+    if (!target) { message("No edits are waiting for review in this sidecar."); return; }
+    model.review = { sidecarId, proposalId: target, detail: null };
+    const dialog = byId("review-dialog");
+    if (!dialog.open) dialog.showModal();
+    await showProposal(target);
+  }
+
+  async function decide(decision) {
+    const review = model.review;
+    const detail = review?.detail;
+    if (!detail) return;
+    const queue = reviewQueue();
+    const position = queue.indexOf(detail.id);
+    setReviewBusy(true);
+    review.error = null;
+    try {
+      const result = await request(`/api/sidecars/${review.sidecarId}/proposals/${detail.id}`, {
+        method: "POST", body: JSON.stringify({ decision }),
+      });
+      if (decision === "rejected") message(`Rejected. ${result.path} was not changed.`);
+      else if (result.index_notice) message(`Approved and saved ${result.path}. ${result.index_notice}`, true);
+      else message(`Approved. ${result.path} was saved and is searchable now.`);
+      await refresh(false, true);
+      await loadProposals(review.sidecarId, `${review.sidecarId}:${model.snapshotKey}`);
+      if (model.review !== review) return;
+      const remaining = reviewQueue();
+      if (!remaining.length) { byId("review-dialog").close(); return; }
+      await showProposal(remaining[Math.min(Math.max(position, 0), remaining.length - 1)]);
+    } catch (error) {
+      if (model.review !== review) return;
+      if (error.status === 409) {
+        detail.stale = true;
+        detail.stale_message = error.message;
+        review.error = { title: "This edit can't be approved", text: `${error.message} The file was not changed.` };
+      } else {
+        review.error = { title: decision === "approved" ? "Approval failed" : "Rejection failed", text: error.message };
+      }
+      renderReview();
+    }
+  }
+
+  function startReview() {
+    const sidecar = visibleSidecars().find((item) => item.pending_proposals) || model.sidecars.find((item) => item.pending_proposals);
+    if (!sidecar) return;
+    if (model.selectedId !== sidecar.id) select(sidecar.id, false);
+    openReview(sidecar.id);
+  }
+
   // Events
 
   byId("create-button").addEventListener("click", openCreate);
@@ -611,7 +940,21 @@
   document.querySelectorAll("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   }));
-  byId("toast").addEventListener("click", () => { byId("toast").hidden = true; });
+  byId("toast").addEventListener("click", hideToast);
+  byId("review-callout-button").addEventListener("click", startReview);
+  byId("review-approve").addEventListener("click", () => decide("approved"));
+  byId("review-reject").addEventListener("click", () => decide("rejected"));
+  byId("review-prev").addEventListener("click", () => {
+    const queue = reviewQueue();
+    const index = queue.indexOf(model.review?.proposalId);
+    if (index > 0) showProposal(queue[index - 1]);
+  });
+  byId("review-next").addEventListener("click", () => {
+    const queue = reviewQueue();
+    const index = queue.indexOf(model.review?.proposalId);
+    if (index >= 0 && index < queue.length - 1) showProposal(queue[index + 1]);
+  });
+  byId("review-dialog").addEventListener("close", () => { model.review = null; });
 
   byId("provider-form").addEventListener("input", () => { byId("provider-test-result").hidden = true; formError("provider-error", ""); });
   byId("connection-form").addEventListener("input", () => { byId("connection-result").hidden = true; model.connectionPreview = null; formError("connection-error", ""); });

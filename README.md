@@ -82,7 +82,28 @@ The agent can't widen its selection. Psydcar returns evidence, not answers, so t
 
 In the dashboard's **Prepare an MCP connection** dialog, select a sidecar and check **Allow proposals** beside it. Generate the configuration, add it to the MCP client, and restart the client. The connection name identifies its proposals. To configure a connection by hand, add `--propose-sidecar-id SIDECAR_ID --agent-name "My agent"` to its arguments. Each proposal grant must also have a corresponding `--sidecar-id` argument. Repeat the grant for each sidecar where the agent can propose edits.
 
-For those sidecars the agent can call `read_editable_file` to get an existing text file and its version, then call `propose_edit` with the complete replacement text and a one-line reason. Proposals wait in the local queue until you decide.
+For those sidecars the agent can call `read_editable_file` to get an existing text file and its version, then call `propose_edit` with the complete replacement text and a one-line reason. Proposals wait in the local queue until you decide. Agents can only change existing text files. They can't create, move, or delete files.
+
+## Review proposed edits
+
+Every proposal shows the agent's name, its one-line reason, the file, and a diff. Approving writes the new text to the file in one step and keeps the file's line endings and byte order mark. Psydcar then updates the sidecar's index, so agents can search the new text right away. Rejecting leaves the file unchanged. Either way the decision is final, and Psydcar keeps a list of recent decisions.
+
+If the file changed after the agent read it, the proposal is marked **Out of date** and can't be approved. Psydcar won't overwrite your changes. Reject it and ask the agent for a new proposal.
+
+**In the dashboard,** a banner at the top of the page counts the edits waiting for review, and each sidecar with pending proposals has a marker in the list. Select a sidecar to see its **Proposed edits** and **Recent decisions**. Choose a proposal to open its diff, then select **Approve** or **Reject**.
+
+**From the CLI:**
+
+```console
+psydcar proposal list                 # edits waiting for review in every sidecar
+psydcar proposal list "My notes"      # only one sidecar
+psydcar proposal show 3f2a9c1e        # details and the diff
+psydcar proposal approve 3f2a9c1e     # write the file and update the index
+psydcar proposal reject 3f2a9c1e      # leave the file unchanged
+psydcar proposal list --reviewed      # recent decisions
+```
+
+Commands accept a proposal's full ID or the first characters that `proposal list` shows.
 
 ## Keep sidecars up to date
 
@@ -152,7 +173,7 @@ Psydcar keeps its index in one per-user folder:
 
 To use a different folder, set `PSYDCAR_HOME` to an absolute path. If you do, set the same value for the CLI, the dashboard, and your MCP client.
 
-The data folder contains `state.sqlite3` for sidecar registrations and provider settings and `search.sqlite3` for indexed documents and embeddings. The first run upgrades an existing `psydcar.sqlite3` database automatically and retains it as a pre-upgrade backup. Existing sidecar IDs and indexed evidence IDs carry over. Stop running Psydcar processes before upgrading so all interfaces switch to the new stores together.
+The data folder contains `state.sqlite3` for sidecar registrations, provider settings, and proposed edits and `search.sqlite3` for indexed documents and embeddings. The first run upgrades an existing `psydcar.sqlite3` database automatically and retains it as a pre-upgrade backup. Existing sidecar IDs and indexed evidence IDs carry over. Stop running Psydcar processes before upgrading so all interfaces switch to the new stores together.
 
 ## Upgrade and uninstall
 

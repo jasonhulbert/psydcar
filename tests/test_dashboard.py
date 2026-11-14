@@ -20,6 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from psydcar.dashboard import DashboardServer
+from psydcar.proposal_files import Workspace
+from psydcar.proposals import Proposals
 from psydcar.registry import SidecarStore
 
 
@@ -255,6 +257,29 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(self.http("DELETE", "/api/provider", {"confirm": "wrong"})[0], 400)
             self.assertEqual(self.http("DELETE", "/api/provider", {"confirm": "clear"})[0], 200)
             self.assertEqual(self.http("GET", "/api/sidecars")[1]["provider"]["state"], "unconfigured")
+
+    def test_owner_reviews_proposals_and_an_approval_becomes_searchable(self) -> None:
+        (self.source / "notes.md").write_text("quiet orchard\n")
+        store = self.server.store
+        sidecar = store.create("Research", self.source)
+        base = Workspace(store).files(sidecar.id).read("notes.md")
+        proposals = Proposals(store)
+        approve = proposals.submit(sidecar.id, "notes.md", base["version"], "quiet orchard\nlantern meadow\n",
+                                   "Add the meadow.", "Review assistant")
+        reject = proposals.submit(sidecar.id, "notes.md", base["version"], "replaced\n",
+                                  "Replace the note.", "Review assistant")
+        self.assertEqual(self.entry(sidecar.id)["pending_proposals"], 2)
+        base_path = f"/api/sidecars/{sidecar.id}/proposals"
+        self.assertIn("+lantern meadow", self.http("GET", f"{base_path}/{approve['id']}")[1]["diff"])
+
+        self.assertEqual(self.http("POST", f"{base_path}/{reject['id']}", {"decision": "rejected"})[0], 200)
+        status, approved = self.http("POST", f"{base_path}/{approve['id']}", {"decision": "approved"})
+        self.assertEqual((status, approved["index_notice"]), (200, None))
+
+        queue = self.http("GET", base_path)[1]
+        self.assertEqual((queue["pending"], [item["status"] for item in queue["reviewed"]]), ([], ["approved", "rejected"]))
+        self.wait_for(lambda: len(json.loads(self.cli("search", "--sidecar", sidecar.id, "meadow").stdout or "[]")) == 1,
+                      "approved text was not searchable")
 
     def test_connection_preview_uses_exact_ids_and_local_store(self) -> None:
         which = patch("psydcar.dashboard.shutil.which", return_value=None)

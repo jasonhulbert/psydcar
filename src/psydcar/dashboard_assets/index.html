@@ -36,6 +36,15 @@
       <button class="btn btn-primary" id="create-button" type="button"><svg class="icon" aria-hidden="true"><use href="#plus"/></svg>New sidecar</button>
     </div>
 
+    <section id="review-callout" class="review-callout" aria-labelledby="review-callout-title" hidden>
+      <span class="setting-icon setting-icon-pop" aria-hidden="true"><svg class="icon"><use href="#git-pull-request"/></svg></span>
+      <div class="review-callout-body">
+        <h2 id="review-callout-title"></h2>
+        <p id="review-callout-text"></p>
+      </div>
+      <button class="btn btn-primary" id="review-callout-button" type="button">Review</button>
+    </section>
+
     <div id="banner" class="flash flash-danger" role="alert" hidden><svg class="icon" aria-hidden="true"><use href="#triangle-alert"/></svg><span id="banner-text"></span></div>
 
     <div class="layout" id="layout">
@@ -221,7 +230,25 @@
     </div>
   </dialog>
 
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden><svg class="icon" aria-hidden="true"><use id="toast-icon" href="#check"/></svg><span id="toast-text"></span></div>
+  <dialog id="review-dialog" class="dialog dialog-xl" aria-labelledby="review-title">
+    <div class="dialog-header">
+      <h2 id="review-title">Review proposed edit</h2>
+      <div class="review-nav">
+        <span class="review-position" id="review-position"></span>
+        <button class="btn-icon" id="review-prev" type="button" aria-label="Previous proposal" title="Previous proposal"><svg class="icon" aria-hidden="true"><use href="#chevron-left"/></svg></button>
+        <button class="btn-icon" id="review-next" type="button" aria-label="Next proposal" title="Next proposal"><svg class="icon" aria-hidden="true"><use href="#chevron-right"/></svg></button>
+        <button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button>
+      </div>
+    </div>
+    <div class="dialog-body" id="review-body"></div>
+    <div class="dialog-footer">
+      <button class="btn btn-danger-quiet btn-push" id="review-reject" type="button"><svg class="icon" aria-hidden="true"><use href="#circle-x"/></svg>Reject</button>
+      <button class="btn" type="button" data-close>Close</button>
+      <button class="btn btn-primary" id="review-approve" type="button"><svg class="icon" aria-hidden="true"><use href="#check"/></svg>Approve</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" popover="manual" hidden><svg class="icon" aria-hidden="true"><use id="toast-icon" href="#check"/></svg><span id="toast-text"></span></div>
   <noscript><div class="noscript">The dashboard needs JavaScript. The <code>psydcar</code> CLI works without it.</div></noscript>
 </body>
 </html>

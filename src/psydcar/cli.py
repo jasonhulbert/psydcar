@@ -8,21 +8,25 @@ import signal
 import sys
 import threading
 from collections.abc import Sequence
+from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
 
-from .embeddings import ProviderStore
-from .evidence import EvidenceStore
+from .access import connect_agent
 from .dashboard import run_dashboard
+from .embeddings import ProviderStore
+from .evidence import EvidenceStore, IndexedSidecar
+from .freshness import SidecarWatcher, WatchEvent
+from .git_record import GitRecord
 from .mcp_server import run_mcp
-from .store import Sidecar, SidecarStore, StoreError
-from .watcher import SidecarWatcher, WatchEvent
+from .proposals import Proposals
+from .registry import SidecarStore, StoreError
 
 
 def _display_status(status: str) -> str:
     return status.replace("_", " ").capitalize()
 
 
-def _details(sidecar: Sidecar) -> str:
+def _details(sidecar: IndexedSidecar) -> str:
     return "\n".join(
         (
             f"Name: {sidecar.name}",
@@ -34,7 +38,7 @@ def _details(sidecar: Sidecar) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="psydcar", description="Manage local knowledge sidecars.")
+    parser = argparse.ArgumentParser(prog="psydcar", description="Give coding agents evidence from local folders, and review the edits they propose.")
     try:
         installed_version = version("psydcar")
     except PackageNotFoundError:
@@ -66,6 +70,26 @@ def _parser() -> argparse.ArgumentParser:
     update = actions.add_parser("update", help="Refresh added, changed, and deleted source files")
     update.add_argument("reference", help="Sidecar name or ID")
 
+    record = actions.add_parser("git-record", help="Show, or turn on or off, recording approvals as git commits")
+    record.add_argument("reference", help="Sidecar name or ID")
+    record.add_argument("state", nargs="?", choices=("on", "off"), help="Turn the record on or off (default: show it)")
+
+    proposal = commands.add_parser("proposal", help="Review edits that agents proposed")
+    proposal_actions = proposal.add_subparsers(dest="proposal_action", required=True)
+    proposal_list = proposal_actions.add_parser("list", help="List proposals waiting for review")
+    proposal_list.add_argument("sidecar", nargs="?", metavar="SIDECAR", help="Sidecar name or ID (default: every sidecar)")
+    proposal_list.add_argument("--reviewed", action="store_true", help="List recent decisions instead")
+    for action, description in (
+        ("show", "Show a proposal with its diff"),
+        ("approve", "Write a proposal to its file, update the search index, and commit it if the git record is on"),
+        ("reject", "Reject a proposal; the file is not changed"),
+    ):
+        proposal_actions.add_parser(action, help=description).add_argument(
+            "proposal",
+            metavar="ID",
+            help="Proposal ID, or its first characters as shown by 'proposal list'",
+        )
+
     provider = commands.add_parser("provider", help="Configure and inspect embedding access")
     provider_actions = provider.add_subparsers(dest="provider_action", required=True)
     configure = provider_actions.add_parser("set", help="Configure an OpenAI-compatible embeddings route")
@@ -96,7 +120,151 @@ def _parser() -> argparse.ArgumentParser:
 
     mcp = commands.add_parser("mcp", help="Serve selected sidecars to one MCP client over stdio")
     mcp.add_argument("--sidecar-id", action="append", default=[], metavar="ID", help="Stable sidecar ID to expose; repeat to select several")
+    mcp.add_argument(
+        "--propose-sidecar-id", action="append", default=[], metavar="ID", help="Allow proposals for this selected sidecar; repeat for each grant"
+    )
+    mcp.add_argument("--agent-name", metavar="NAME", help="Name shown with this connection's proposals")
     return parser
+
+
+def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
+    widths = [max(len(row[index]) for row in [headers, *rows]) for index in range(len(headers))]
+    for row in [headers, *rows]:
+        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip())
+
+
+def _short_time(value: str | None) -> str:
+    """Show a stored UTC timestamp in local time, to the minute."""
+    if not value:
+        return ""
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value
+
+
+def _proposal_command(store: SidecarStore, args: argparse.Namespace) -> int:
+    proposals = Proposals(store)
+    if args.proposal_action == "list":
+        sidecars = [store.get(args.sidecar)] if args.sidecar else store.list()
+        rows = []
+        for sidecar in sidecars:
+            for item in proposals.list(sidecar.id, reviewed=args.reviewed)["items"]:
+                rows.append((item, sidecar.name))
+        if not rows:
+            scope = f' in "{sidecars[0].name}"' if args.sidecar else ""
+            print(f"No reviewed proposals{scope} yet." if args.reviewed else f"No proposals{scope} are waiting for review.")
+            return 0
+        if args.reviewed:
+            rows.sort(key=lambda pair: pair[0]["decided_at"] or "", reverse=True)
+            commits = any(item["commit_id"] for item, _ in rows)
+            _table(
+                ("ID", "SIDECAR", "FILE", "AGENT", "DECISION", "DECIDED", *(("COMMIT",) if commits else ()), "REASON"),
+                [
+                    (
+                        item["id"][:8],
+                        name,
+                        item["path"],
+                        item["agent_name"],
+                        item["status"].capitalize(),
+                        _short_time(item["decided_at"]),
+                        *(((item["commit_id"] or "-")[:7],) if commits else ()),
+                        item["summary"],
+                    )
+                    for item, name in rows
+                ],
+            )
+        else:
+            rows.sort(key=lambda pair: pair[0]["created_at"])
+            _table(
+                ("ID", "SIDECAR", "FILE", "AGENT", "PROPOSED", "STATUS", "REASON"),
+                [
+                    (
+                        item["id"][:8],
+                        name,
+                        item["path"],
+                        item["agent_name"],
+                        _short_time(item["created_at"]),
+                        "Out of date" if item["stale"] else "Pending",
+                        item["summary"],
+                    )
+                    for item, name in rows
+                ],
+            )
+            print("\nShow one with 'psydcar proposal show ID', then approve or reject it.")
+        return 0
+    found = proposals.find(args.proposal)
+    sidecar = store.get(found["sidecar_id"], exact_id=True)
+    if args.proposal_action == "show":
+        detail = proposals.detail(sidecar.id, found["id"])
+        status = "Out of date" if detail["stale"] else detail["status"].capitalize()
+        print(
+            "\n".join(
+                (
+                    f"Proposal: {detail['id']}",
+                    f"Sidecar: {sidecar.name}",
+                    f"File: {detail['path']}",
+                    f"Agent: {detail['agent_name']}",
+                    f"Reason: {detail['summary']}",
+                    f"Proposed: {_short_time(detail['created_at'])}",
+                    f"Status: {status}",
+                )
+            )
+        )
+        if detail["decided_at"]:
+            print(f"Decided: {_short_time(detail['decided_at'])}")
+        if detail["commit_id"]:
+            print(f"Commit: {detail['commit_id']}")
+        if detail["stale"]:
+            print(f"Out of date: {detail['stale_message']}")
+        if detail["diff"] is not None:
+            print(f"\n{detail['diff']}", end="")
+        return 0
+    decision = "approved" if args.proposal_action == "approve" else "rejected"
+    result = proposals.review(sidecar.id, found["id"], decision)
+    if decision == "rejected":
+        print(f'Rejected proposal {result["id"][:8]} for {result["path"]} in "{sidecar.name}". The file was not changed.')
+        return 0
+    if "index_notice" not in result:
+        print(f"Proposal {result['id'][:8]} was already approved.")
+        return 0
+    notice = result["index_notice"]
+    print(
+        f'Approved proposal {result["id"][:8]}. Wrote {result["path"]} in "{sidecar.name}"' + ("." if notice else " and updated the search index."),
+        flush=True,
+    )
+    if result["commit_id"]:
+        print(f"Recorded commit {result['commit_id'][:7]} on {result['commit_branch']}.", flush=True)
+    for line in (result["commit_notice"], notice):
+        if line:
+            print(line, file=sys.stderr)
+    return 0
+
+
+def _git_record_lines(state: dict) -> list[str]:
+    if not state["available"]:
+        return [
+            "Git record: Not available (the folder isn't in a git repository)"
+            if not state["enabled"]
+            else "Git record: On, but the folder is no longer in a git repository"
+        ]
+    where = f"{state['repository']}" + (f" on branch {state['branch']}" if state["branch"] else "")
+    return [f"Git record: {'On' if state['enabled'] else 'Off'}", f"Repository: {where}"]
+
+
+def _git_record_command(store: SidecarStore, args: argparse.Namespace) -> int:
+    record = GitRecord(store)
+    if args.state is None:
+        print("\n".join(_git_record_lines(record.state(store.get(args.reference)))))
+        return 0
+    sidecar, state = record.set(args.reference, args.state == "on")
+    if args.state == "off":
+        print(f'Git record is off for "{sidecar.name}". Approvals write files without making commits.')
+        return 0
+    branch = f" (now {state['branch']})" if state["branch"] else ""
+    print(f'Git record is on for "{sidecar.name}". Each approval becomes a commit on the checked-out branch{branch} in {state["repository"]}.')
+    print("Psydcar never pulls or pushes. Move commits between devices with your own git commands.")
+    return 0
 
 
 def _watch_event(event: WatchEvent) -> None:
@@ -107,8 +275,8 @@ def _watch_event(event: WatchEvent) -> None:
     report = event.report
     print(
         f'Watch {event.reason}: "{report.sidecar.name}". {report.added} added, '
-        f'{report.changed} changed, {report.deleted} deleted; '
-        f'status {_display_status(report.sidecar.status)}.',
+        f"{report.changed} changed, {report.deleted} deleted; "
+        f"status {_display_status(report.sidecar.status)}.",
         flush=True,
     )
     for issue in (
@@ -116,44 +284,47 @@ def _watch_event(event: WatchEvent) -> None:
         *([report.provider_error] if report.provider_error else []),
         *(f"Removed source: {path}" for path in report.deleted_paths),
     ):
-        print(f'Needs attention: {issue}', file=sys.stderr, flush=True)
+        print(f"Needs attention: {issue}", file=sys.stderr, flush=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         store = SidecarStore()
+        if args.command == "sidecar" and args.action == "git-record":
+            return _git_record_command(store, args)
         if args.command == "sidecar":
             if args.action == "create":
-                sidecar = store.create(args.name, args.source)
+                sidecar = EvidenceStore(store).sidecar(store.create(args.name, args.source).id, exact_id=True)
                 print(f'Created sidecar "{sidecar.name}".\n{_details(sidecar)}')
             elif args.action == "list":
-                sidecars = store.list()
+                sidecars = EvidenceStore(store).list()
                 if not sidecars:
                     print("No sidecars yet. Use 'psydcar sidecar create NAME DIRECTORY' to add one.")
                 else:
-                    headers = ("NAME", "ID", "SOURCE", "STATUS")
-                    rows = [(item.name, item.id, str(item.source_path), _display_status(item.status)) for item in sidecars]
-                    widths = [max(len(str(row[index])) for row in [headers, *rows]) for index in range(4)]
-                    for row in [headers, *rows]:
-                        print("  ".join(str(value).ljust(widths[index]) for index, value in enumerate(row)).rstrip())
+                    _table(
+                        ("NAME", "ID", "SOURCE", "STATUS"),
+                        [(item.name, item.id, str(item.source_path), _display_status(item.status)) for item in sidecars],
+                    )
             elif args.action == "show":
-                sidecar = store.get(args.reference)
-                print(_details(sidecar))
                 evidence_store = EvidenceStore(store)
+                sidecar = evidence_store.sidecar(args.reference)
+                print(_details(sidecar))
                 update_state = evidence_store.update_state(sidecar.id)
                 state_label = {
-                    "current": "Current", "pending": "Pending", "attention": "Needs attention",
+                    "current": "Current",
+                    "pending": "Pending",
+                    "attention": "Needs attention",
                     "not_indexed": "Not indexed",
                 }[update_state["state"]]
                 print(f"Update state: {state_label}")
                 if update_state["started_at"]:
-                    print(f'Last update started: {update_state["started_at"]}')
-                    print(f'Last update completed: {update_state["completed_at"] or "Pending"}')
-                    print(f'Last successful update: {update_state["last_success_at"] or "None"}')
+                    print(f"Last update started: {update_state['started_at']}")
+                    print(f"Last update completed: {update_state['completed_at'] or 'Pending'}")
+                    print(f"Last successful update: {update_state['last_success_at'] or 'None'}")
                     print(
-                        f'Changes: {update_state["added"]} added, {update_state["changed"]} changed, '
-                        f'{update_state["deleted"]} deleted, {update_state["unchanged"]} unchanged'
+                        f"Changes: {update_state['added']} added, {update_state['changed']} changed, "
+                        f"{update_state['deleted']} deleted, {update_state['unchanged']} unchanged"
                     )
                     for issue in update_state["issues"]:
                         print(f"Needs attention: {issue}")
@@ -164,30 +335,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 elif state is None:
                     print("Embeddings: Pending (reindex this sidecar)")
                 else:
-                    print(f'Embeddings: {state["status"].capitalize()} ({state["embedded_count"]}/{state["expected_count"]})')
+                    print(f"Embeddings: {state['status'].capitalize()} ({state['embedded_count']}/{state['expected_count']})")
                     if state["message"]:
-                        print(f'Embedding note: {state["message"]}')
+                        print(f"Embedding note: {state['message']}")
                 for notice in evidence_store.pdf_page_notices(sidecar.id):
-                    print(f'PDF page: {notice["source"]}, page {notice["page"]}: {notice["message"]}')
+                    print(f"PDF page: {notice['source']}, page {notice['page']}: {notice['message']}")
+                print("\n".join(_git_record_lines(GitRecord(store).state(store.get(sidecar.id, exact_id=True)))))
             elif args.action == "rename":
-                sidecar = store.rename(args.reference, args.new_name)
+                sidecar = EvidenceStore(store).sidecar(store.rename(args.reference, args.new_name).id, exact_id=True)
                 print(f'Renamed sidecar to "{sidecar.name}".\n{_details(sidecar)}')
             elif args.action == "remove":
-                sidecar = store.remove(args.reference)
+                sidecar = EvidenceStore(store).remove(args.reference)
                 print(f'Removed sidecar "{sidecar.name}" (ID: {sidecar.id}). Source files were not changed.')
             elif args.action in {"index", "update"}:
                 report = EvidenceStore(store).update(args.reference)
                 if args.action == "index":
                     print(f'Indexed {report.files} files and {report.passages} passages in "{report.sidecar.name}".')
                 else:
-                    print(
-                        f'Updated "{report.sidecar.name}": scanned {report.files} readable files; '
-                        f'the index contains {report.passages} passages.'
-                    )
-                print(
-                    f'Changes: {report.added} added, {report.changed} changed, '
-                    f'{report.deleted} deleted, {report.unchanged} unchanged.'
-                )
+                    print(f'Updated "{report.sidecar.name}": scanned {report.files} readable files; the index contains {report.passages} passages.')
+                print(f"Changes: {report.added} added, {report.changed} changed, {report.deleted} deleted, {report.unchanged} unchanged.")
                 if report.embedding_status == "not_configured":
                     print("Embeddings: Not configured; lexical index is available.")
                 else:
@@ -208,6 +374,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print("Embedding processing is incomplete; lexical evidence remains available.", file=sys.stderr)
                 if report.skipped or report.provider_error:
                     return 1
+        elif args.command == "proposal":
+            return _proposal_command(store, args)
         elif args.command == "provider":
             provider = ProviderStore(store)
             if args.provider_action == "set":
@@ -228,7 +396,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         print("Credential: None (gateway without authentication)")
             elif args.provider_action == "clear":
                 provider.clear()
-                print("Embedding provider cleared. Stored embeddings removed; lexical evidence remains available.")
+                print("Embedding provider cleared. Lexical evidence remains available.")
         elif args.command == "search":
             evidence = EvidenceStore(store)
             results = evidence.search(args.sidecar, args.query, args.limit)
@@ -258,7 +426,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "dashboard":
             run_dashboard(store, args.port, not args.no_open)
         elif args.command == "mcp":
-            run_mcp(store, args.sidecar_id)
+            access = connect_agent(store, args.sidecar_id, proposal_ids=args.propose_sidecar_id, agent_name=args.agent_name)
+            run_mcp(store, access)
     except StoreError as exc:
         print(f"psydcar: {exc}", file=sys.stderr)
         return 2

@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -33,8 +32,12 @@ class UpdateCliTests(unittest.TestCase):
         env["PSYDCAR_HOME"] = str(self.store)
         env["PYTHONPATH"] = str(PROJECT_ROOT / "src")
         return subprocess.run(
-            [sys.executable, "-m", "psydcar", *args], cwd=self.other_work,
-            env=env, capture_output=True, text=True, check=False,
+            [sys.executable, "-m", "psydcar", *args],
+            cwd=self.other_work,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     def search(self, term: str) -> list[dict]:

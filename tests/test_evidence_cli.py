@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
+from git_sandbox import git, use_sandbox
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -131,10 +134,8 @@ class EvidenceCliTests(unittest.TestCase):
         self.assertEqual(self.cli("sidecar", "remove", "A").returncode, 0)
         self.assertTrue((self.source_a / "guide.md").exists())
         self.assertEqual(self.cli("search", "--sidecar", "A", "green").returncode, 2)
-        with sqlite3.connect(self.store / "psydcar.sqlite3") as connection:
-            indexed_sidecar_ids = {
-                row[0] for row in connection.execute("SELECT DISTINCT sidecar_id FROM documents")
-            }
+        with closing(sqlite3.connect(self.store / "search.sqlite3")) as connection, connection:
+            indexed_sidecar_ids = {row[0] for row in connection.execute("SELECT DISTINCT sidecar_id FROM documents")}
             self.assertEqual(len(indexed_sidecar_ids), 1)
             self.assertEqual(connection.execute("SELECT count(*) FROM passages_fts").fetchone()[0], 1)
 
@@ -146,6 +147,29 @@ class EvidenceCliTests(unittest.TestCase):
         self.assertIn("Status: Index error", self.cli("sidecar", "show", "A").stdout)
         good_hits = json.loads(self.cli("search", "--sidecar", "A", "comet").stdout)
         self.assertTrue(good_hits)
+
+    @unittest.skipUnless(shutil.which("git"), "git is not installed")
+    def test_evidence_from_a_repository_reports_its_commit_and_uncommitted_changes(self) -> None:
+        use_sandbox(self, self.root)
+        (self.source_b / "draft.md").write_text("A red comet draft.\n")
+        git(self.source_b, "init", "-q")
+        git(self.source_b, "add", ".")
+        git(self.source_b, "commit", "-q", "-m", "Notes")
+        commit = git(self.source_b, "rev-parse", "HEAD")
+        (self.source_b / "draft.md").write_text("A red comet draft, revised.\n")
+        self.assertEqual(self.cli("sidecar", "update", "B").returncode, 0)
+
+        hits = json.loads(self.cli("search", "--sidecar", "B", "comet").stdout)
+        self.assertEqual(
+            {hit["source"]["relative_path"]: hit["git"] for hit in hits},
+            {
+                "guide.md": {"commit": commit, "uncommitted": False, "tracked": True},
+                "draft.md": {"commit": commit, "uncommitted": True, "tracked": True},
+            },
+        )
+        draft = next(hit for hit in hits if hit["source"]["relative_path"] == "draft.md")
+        retrieved = json.loads(self.cli("retrieve", "--sidecar", "B", draft["evidence_id"]).stdout)
+        self.assertEqual(retrieved["git"], draft["git"])
 
 
 if __name__ == "__main__":

@@ -19,28 +19,29 @@ from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
+from . import access
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
-from .evidence import MAX_FILE_BYTES, EvidenceStore
-from .files import FileConflict, SourceFiles
-from .mcp_server import selected_ids
-from .store import SidecarStore, StoreError
-from .watcher import SidecarWatcher, WatchEvent
+from .evidence import EvidenceStore, UpdateSuperseded
+from .freshness import SidecarWatcher, WatchEvent
+from .git_record import GitRecord
+from .proposal_files import FileConflict
+from .proposals import Proposals
+from .registry import SidecarStore, StoreError
 
-
-_SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update)$")
+_SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update|git-record)$")
 _SIDECAR_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})$")
-_SIDECAR_FILES = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(file|files|files/move|image)$")
+_PROPOSAL_LIST = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals$")
+_PROPOSAL_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals/([0-9a-f-]{36})$")
 _CONNECTION_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 _MAX_BODY = 16384
-# JSON escaping can grow text several times over; the decoded file is still held to MAX_FILE_BYTES.
-_MAX_FILE_BODY = 6 * MAX_FILE_BYTES
 _ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
+    "/assets/brand.svg": ("brand.svg", "image/svg+xml"),
+    "/assets/design-system.css": ("design-system.css", "text/css; charset=utf-8"),
     "/assets/dashboard.css": ("dashboard.css", "text/css; charset=utf-8"),
     "/assets/dashboard.js": ("dashboard.js", "text/javascript; charset=utf-8"),
-    "/assets/editor.js": ("editor.js", "text/javascript; charset=utf-8"),
     "/assets/Geist-Variable.woff2": ("Geist-Variable.woff2", "font/woff2"),
     "/assets/GeistMono-Variable.woff2": ("GeistMono-Variable.woff2", "font/woff2"),
 }
@@ -58,9 +59,12 @@ def _provider_view(config: ProviderConfig | None) -> dict[str, Any]:
         return {"configured": False, "state": "unconfigured"}
     available = config.credential_available
     return {
-        "configured": True, "state": "ready" if available else "missing_credential",
-        "base_url": config.base_url, "model": config.model,
-        "api_key_env": config.api_key_env, "credential_available": available,
+        "configured": True,
+        "state": "ready" if available else "missing_credential",
+        "base_url": config.base_url,
+        "model": config.model,
+        "api_key_env": config.api_key_env,
+        "credential_available": available,
         "allow_insecure_http": config.allow_insecure_http,
         "configured_at": config.configured_at,
     }
@@ -72,9 +76,12 @@ def _provider_draft(provider: ProviderStore, payload: dict[str, Any]) -> Provide
     if api_key_env == "":
         api_key_env = None
     allow_insecure_http = payload.get("allow_insecure_http", False)
-    if not isinstance(base_url, str) or not isinstance(model, str) or (
-        api_key_env is not None and not isinstance(api_key_env, str)
-    ) or not isinstance(allow_insecure_http, bool):
+    if (
+        not isinstance(base_url, str)
+        or not isinstance(model, str)
+        or (api_key_env is not None and not isinstance(api_key_env, str))
+        or not isinstance(allow_insecure_http, bool)
+    ):
         raise StoreError("Enter a provider base URL, model, and optional credential variable name.")
     try:
         return provider.validate(base_url, model, api_key_env, allow_insecure_http)
@@ -89,8 +96,10 @@ def _provider_test_hint(error: EmbeddingError) -> str:
     if "credential is missing" in detail:
         return "Set that environment variable before starting the dashboard and MCP client, then restart the dashboard and test again."
     if "HTTP 401" in detail or "HTTP 403" in detail:
-        return ("Check the credential variable, model, and provider URL. A gateway, proxy, "
-                "or firewall in front of the provider may also have rejected the request.")
+        return (
+            "Check the credential variable, model, and provider URL. A gateway, proxy, "
+            "or firewall in front of the provider may also have rejected the request."
+        )
     if "HTTP 5" in detail:
         return "The provider is unavailable. Check its service or gateway, then retry."
     if "could not be reached" in detail:
@@ -137,6 +146,8 @@ class DashboardServer(ThreadingHTTPServer):
         self.store = store or SidecarStore()
         self.evidence = EvidenceStore(self.store)
         self.provider = ProviderStore(self.store)
+        self.proposals = Proposals(self.store)
+        self.git_record = GitRecord(self.store)
         self.csrf_token = secrets.token_urlsafe(32)
         self.operation_lock = threading.Lock()
         self._pending_lock = threading.Lock()
@@ -174,6 +185,15 @@ class DashboardServer(ThreadingHTTPServer):
             with self._pending_lock:
                 self._errors.pop(event.sidecar_id, None)
 
+    def follow_approval(self, sidecar_id: str) -> None:
+        """Let the watcher see the approved write now, so the sidecar doesn't read as changed until its next pass."""
+        try:
+            event = self.watcher.catch_up(sidecar_id)
+        except StoreError:
+            return
+        if event is not None:
+            self._watch_event(event)
+
     def schedule_update(self, sidecar_id: str) -> bool:
         sidecar = self.store.get(sidecar_id)
         if sidecar.id != sidecar_id:
@@ -190,6 +210,8 @@ class DashboardServer(ThreadingHTTPServer):
                     self.evidence.update(sidecar_id)
                 with self._pending_lock:
                     self._errors.pop(sidecar_id, None)
+            except UpdateSuperseded:
+                pass  # A newer update from another process indexes everything this one would have.
             except StoreError as exc:
                 with self._pending_lock:
                     self._errors[sidecar_id] = str(exc)
@@ -204,12 +226,13 @@ class DashboardServer(ThreadingHTTPServer):
         return True
 
     def snapshot(self) -> dict[str, Any]:
-        sidecars = self.store.list()
+        sidecars = self.evidence.list()
         provider = _provider_view(self.provider.get())
         provider_configured = provider["configured"]
         with self._pending_lock:
             queued = set(self._pending)
             errors = dict(self._errors)
+        pending_proposals = self.proposals.pending_counts()
         entries = []
         for sidecar in sidecars:
             update = self.evidence.update_state(sidecar.id)
@@ -217,37 +240,52 @@ class DashboardServer(ThreadingHTTPServer):
             embedding = self.provider.sidecar_state(sidecar.id) if provider_configured else None
             source_drift = self.watcher.source_changed(sidecar)
             state = "pending" if sidecar.id in queued else update["state"]
-            freshness = (
-                "not_indexed" if state == "not_indexed" else
-                "stale" if state != "current" or source_drift else "current"
+            freshness = "not_indexed" if state == "not_indexed" else "stale" if state != "current" or source_drift else "current"
+            entries.append(
+                {
+                    "id": sidecar.id,
+                    "name": sidecar.name,
+                    "source_path": str(sidecar.source_path),
+                    "status": sidecar.status,
+                    "state": state,
+                    "freshness": freshness,
+                    "source_drift": source_drift,
+                    "created_at": sidecar.created_at,
+                    "updated_at": sidecar.updated_at,
+                    "update": update,
+                    "coverage": coverage,
+                    "embedding": embedding,
+                    "queued": sidecar.id in queued,
+                    "error": errors.get(sidecar.id),
+                    "pdf_pages": self.evidence.pdf_page_notices(sidecar.id),
+                    "pending_proposals": pending_proposals.get(sidecar.id, 0),
+                }
             )
-            entries.append({
-                "id": sidecar.id, "name": sidecar.name, "source_path": str(sidecar.source_path),
-                "status": sidecar.status, "state": state, "freshness": freshness,
-                "source_drift": source_drift, "created_at": sidecar.created_at,
-                "updated_at": sidecar.updated_at, "update": update, "coverage": coverage,
-                "embedding": embedding, "queued": sidecar.id in queued,
-                "error": errors.get(sidecar.id),
-                "pdf_pages": self.evidence.pdf_page_notices(sidecar.id),
-            })
-        return {"sidecars": entries, "watching": self._watch_thread.is_alive(),
-                "provider_configured": provider_configured, "provider": provider,
-                "version": _installed_version(), "data_dir": str(self.store.db_path.parent)}
+        return {
+            "sidecars": entries,
+            "watching": self._watch_thread.is_alive(),
+            "provider_configured": provider_configured,
+            "provider": provider,
+            "version": _installed_version(),
+            "data_dir": str(self.store.db_path.parent),
+        }
 
-    def source_files(self, sidecar_id: str) -> SourceFiles:
-        sidecar = self.store.get(sidecar_id)
-        if sidecar.id != sidecar_id:
-            raise StoreError("Sidecar ID is invalid.")
-        return SourceFiles(sidecar)
-
-    def connection_preview(self, name: Any, references: Any) -> dict[str, Any]:
+    def connection_preview(self, name: Any, references: Any, proposal_ids: Any = None) -> dict[str, Any]:
         if not isinstance(name, str) or not _CONNECTION_NAME.fullmatch(name):
             raise StoreError("Connection name must start with a letter and use up to 64 letters, numbers, dashes, or underscores.")
         if not isinstance(references, list) or any(not isinstance(item, str) for item in references):
             raise StoreError("Select one or more sidecars for this connection.")
-        ids = selected_ids(self.store, references)
+        ids = access.select(self.store, references)
+        if proposal_ids is None:
+            proposal_ids = []
+        if not isinstance(proposal_ids, list) or any(not isinstance(item, str) for item in proposal_ids):
+            raise StoreError("Select the sidecars where this connection can propose edits.")
+        grants = access.grant(ids, proposal_ids)
         command, prefix = _mcp_launcher()
         args = [*prefix, "mcp", *(part for sidecar_id in ids for part in ("--sidecar-id", sidecar_id))]
+        if grants:
+            args.extend(part for sidecar_id in grants for part in ("--propose-sidecar-id", sidecar_id))
+            args.extend(("--agent-name", name))
         entry = {"command": command, "args": args, "env": {"PSYDCAR_HOME": str(self.store.db_path.parent)}}
         return {
             "name": name,
@@ -258,12 +296,13 @@ class DashboardServer(ThreadingHTTPServer):
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
-    server: DashboardServer
+    # The handler only ever runs under DashboardServer.
+    server: DashboardServer  # ty: ignore[incompatible-mutable-override]
 
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
-    def _headers(self, status: int, content_type: str, length: int, style_nonce: str | None = None) -> None:
+    def _headers(self, status: int, content_type: str, length: int) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
@@ -271,33 +310,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        # The editor injects its base stylesheet at runtime, so the page allows one nonce for it.
-        style_src = f"'self' 'nonce-{style_nonce}'" if style_nonce else "'self'"
         self.send_header(
             "Content-Security-Policy",
-            f"default-src 'self'; script-src 'self'; style-src {style_src}; connect-src 'self'; "
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
             "img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         )
         self.end_headers()
-
-    def _image(self, path: Path, content_type: str, etag: str) -> None:
-        """Send an image that only this dashboard can embed, with scripts disabled when opened directly."""
-        # The browser revalidates each time, so an unchanged image costs a 304 instead of a download.
-        unchanged = self.headers.get("If-None-Match") == etag
-        body = b"" if unchanged else path.read_bytes()
-        self.send_response(HTTPStatus.NOT_MODIFIED if unchanged else HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        if not unchanged:
-            self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "private, no-cache")
-        self.send_header("ETag", etag)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
-        self.send_header("Referrer-Policy", "no-referrer")
-        # An SVG is a document that can carry scripts. The sandbox keeps it inert even when opened in its own tab.
-        self.send_header("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox")
-        self.end_headers()
-        self.wfile.write(body)
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -321,7 +339,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _body(self, limit: int = _MAX_BODY) -> dict[str, Any] | None:
+    def _body(self) -> dict[str, Any] | None:
         if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
             self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "Send JSON for dashboard changes."})
             return None
@@ -329,7 +347,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", ""))
         except ValueError:
             length = -1
-        if not 0 <= length <= limit:
+        if not 0 <= length <= _MAX_BODY:
             self._json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "Dashboard request is too large or has no valid length."})
             return None
         try:
@@ -353,28 +371,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/sidecars":
                 self._json(HTTPStatus.OK, self.server.snapshot())
                 return
-            match = _SIDECAR_FILES.fullmatch(path)
-            if match and match.group(2) in ("file", "files", "image"):
-                sources = self.server.source_files(match.group(1))
-                if match.group(2) == "files":
-                    self._json(HTTPStatus.OK, sources.tree())
-                elif match.group(2) == "image":
-                    query = parse_qs(urlsplit(self.path).query)
-                    self._image(*sources.image(query.get("path", [""])[0]))
-                else:
-                    query = parse_qs(urlsplit(self.path).query)
-                    self._json(HTTPStatus.OK, sources.read(query.get("path", [""])[0]))
+            match = _PROPOSAL_LIST.fullmatch(path)
+            if match:
+                sidecar_id = match.group(1)
+                self._json(
+                    HTTPStatus.OK,
+                    {
+                        "pending": self.server.proposals.list(sidecar_id)["items"],
+                        "reviewed": self.server.proposals.list(sidecar_id, reviewed=True)["items"],
+                        "git_record": self.server.git_record.state(self.server.store.get(sidecar_id, exact_id=True)),
+                    },
+                )
+                return
+            match = _PROPOSAL_ITEM.fullmatch(path)
+            if match:
+                self._json(HTTPStatus.OK, self.server.proposals.detail(*match.groups()))
                 return
             if path in _ASSETS:
                 filename, content_type = _ASSETS[path]
                 assets = files("psydcar").joinpath("dashboard_assets")
                 body = assets.joinpath(filename).read_bytes()
-                nonce = None
                 if filename == "index.html":
-                    nonce = secrets.token_urlsafe(18)
                     body = body.replace(b"<!-- psydcar:icons -->", assets.joinpath("icons.svg").read_bytes())
-                    body = body.replace(b"psydcar:style-nonce", nonce.encode("ascii"))
-                self._headers(HTTPStatus.OK, content_type, len(body), nonce)
+                self._headers(HTTPStatus.OK, content_type, len(body))
                 self.wfile.write(body)
                 return
             self._json(HTTPStatus.NOT_FOUND, {"error": "Page not found."})
@@ -390,18 +409,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
-            match = _SIDECAR_FILES.fullmatch(path)
-            if match and match.group(2) == "files":
-                result = self.server.source_files(match.group(1)).create(payload.get("path"), payload.get("type"))
-                self.server.schedule_update(match.group(1))
-                noun = "Folder" if result["type"] == "folder" else "File"
-                self._json(HTTPStatus.CREATED, {**result, "message": f"{noun} {result['path']} created."})
-                return
-            if match and match.group(2) == "files/move":
-                result = self.server.source_files(match.group(1)).move(payload.get("from"), payload.get("to"))
-                self.server.schedule_update(match.group(1))
-                self._json(HTTPStatus.OK, {**result, "message": f"Moved {result['from']} to {result['path']}."})
-                return
             if path == "/api/provider/test":
                 draft = _provider_draft(self.server.provider, payload)
                 try:
@@ -409,19 +416,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except EmbeddingError as exc:
                     self._json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "hint": _provider_test_hint(exc)})
                     return
-                self._json(HTTPStatus.OK, {"message": "Provider responded to a sample-text embedding request.",
-                                           "dimensions": len(vectors[0])})
+                self._json(HTTPStatus.OK, {"message": "Provider responded to a sample-text embedding request.", "dimensions": len(vectors[0])})
                 return
             if path == "/api/provider":
                 draft = _provider_draft(self.server.provider, payload)
                 with self.server.operation_lock:
-                    config = self.server.provider.set(draft.base_url, draft.model, draft.api_key_env,
-                                                      draft.allow_insecure_http)
-                self._json(HTTPStatus.OK, {"provider": _provider_view(config),
-                                           "message": "Provider saved. Update sidecars to build embeddings with these settings."})
+                    config = self.server.provider.set(draft.base_url, draft.model, draft.api_key_env, draft.allow_insecure_http)
+                self._json(
+                    HTTPStatus.OK,
+                    {"provider": _provider_view(config), "message": "Provider saved. Update sidecars to build embeddings with these settings."},
+                )
                 return
             if path == "/api/connections/preview":
-                preview = self.server.connection_preview(payload.get("name"), payload.get("sidecar_ids"))
+                preview = self.server.connection_preview(
+                    payload.get("name"),
+                    payload.get("sidecar_ids"),
+                    payload.get("proposal_ids"),
+                )
                 self._json(HTTPStatus.OK, preview)
                 return
             if path == "/api/sidecars":
@@ -432,6 +443,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     sidecar = self.server.store.create(name, source)
                 self.server.schedule_update(sidecar.id)
                 self._json(HTTPStatus.CREATED, {"id": sidecar.id, "message": f'Created "{sidecar.name}". Indexing has started.'})
+                return
+            match = _PROPOSAL_ITEM.fullmatch(path)
+            if match:
+                try:
+                    with self.server.operation_lock:
+                        result = self.server.proposals.review(*match.groups(), payload.get("decision"))
+                except FileConflict as exc:
+                    self._json(HTTPStatus.CONFLICT, {"error": str(exc), "stale": True})
+                    return
+                if "index_notice" in result:
+                    self.server.follow_approval(match.group(1))
+                self._json(HTTPStatus.OK, result)
                 return
             match = _SIDECAR_ACTION.fullmatch(path)
             if match:
@@ -444,32 +467,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         sidecar = self.server.store.rename(sidecar_id, name)
                     self._json(HTTPStatus.OK, {"id": sidecar.id, "message": f'Renamed sidecar to "{sidecar.name}".'})
                     return
+                if action == "git-record":
+                    enabled = payload.get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise StoreError("Choose whether to turn the git record on or off.")
+                    with self.server.operation_lock:
+                        sidecar, state = self.server.git_record.set(sidecar_id, enabled)
+                    message = (
+                        f'Approvals in "{sidecar.name}" now become commits.' if enabled else f'Approvals in "{sidecar.name}" no longer make commits.'
+                    )
+                    self._json(HTTPStatus.OK, {"git_record": state, "message": message})
+                    return
                 queued = self.server.schedule_update(sidecar_id)
                 self._json(HTTPStatus.ACCEPTED, {"id": sidecar_id, "message": "Update queued." if queued else "Update already queued."})
                 return
             self._json(HTTPStatus.NOT_FOUND, {"error": "Action not found."})
-        except StoreError as exc:
-            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-
-    def do_PUT(self) -> None:
-        if not self._valid_host() or not self._mutation_allowed():
-            return
-        match = _SIDECAR_FILES.fullmatch(urlsplit(self.path).path)
-        if match is None or match.group(2) != "file":
-            self._json(HTTPStatus.NOT_FOUND, {"error": "Action not found."})
-            return
-        payload = self._body(_MAX_FILE_BODY)
-        if payload is None:
-            return
-        try:
-            result = self.server.source_files(match.group(1)).write(
-                payload.get("path"), payload.get("content"), payload.get("version"),
-                payload.get("newline", "\n"), payload.get("bom", False),
-            )
-            self.server.schedule_update(match.group(1))
-            self._json(HTTPStatus.OK, {**result, "message": f"Saved {result['path']}."})
-        except FileConflict as exc:
-            self._json(HTTPStatus.CONFLICT, {"error": str(exc), "conflict": True, "version": exc.version})
         except StoreError as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
@@ -479,18 +491,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         payload = self._body()
         if payload is None:
             return
-        match = _SIDECAR_FILES.fullmatch(urlsplit(self.path).path)
-        if match and match.group(2) == "files":
-            if payload.get("confirm_path") != payload.get("path"):
-                self._json(HTTPStatus.BAD_REQUEST, {"error": "Confirm the path before deleting it."})
-                return
-            try:
-                result = self.server.source_files(match.group(1)).delete(payload.get("path"))
-                self.server.schedule_update(match.group(1))
-                self._json(HTTPStatus.OK, {**result, "message": f"Deleted {result['path']}."})
-            except StoreError as exc:
-                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-            return
         if urlsplit(self.path).path == "/api/provider":
             if payload.get("confirm") != "clear":
                 self._json(HTTPStatus.BAD_REQUEST, {"error": "Confirm provider removal before clearing its stored embeddings."})
@@ -498,8 +498,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 with self.server.operation_lock:
                     self.server.provider.clear()
-                self._json(HTTPStatus.OK, {"provider": _provider_view(None),
-                                           "message": "Provider removed. Lexical evidence remains available."})
+                self._json(HTTPStatus.OK, {"provider": _provider_view(None), "message": "Provider removed. Lexical evidence remains available."})
             except StoreError as exc:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
@@ -513,7 +512,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         try:
             with self.server.operation_lock:
-                sidecar = self.server.store.remove(sidecar_id)
+                sidecar = self.server.evidence.remove(sidecar_id)
             self._json(HTTPStatus.OK, {"message": f'Removed "{sidecar.name}". Source files were not changed.'})
         except StoreError as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})

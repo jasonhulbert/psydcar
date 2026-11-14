@@ -8,21 +8,22 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from psydcar.evidence import EvidenceStore
-from psydcar.store import SidecarStore
-from psydcar.watcher import SidecarWatcher
+from psydcar.evidence import EvidenceStore, IndexReport
+from psydcar.freshness import SidecarWatcher, WatchEvent
+from psydcar.registry import SidecarStore
+from test_pdf_cli import write_pdf
 
-try:
-    from test_pdf_cli import PdfReader, write_pdf
-except ImportError:
-    PdfReader = None
+
+def report_of(event: WatchEvent) -> IndexReport:
+    assert event.report is not None
+    return event.report
 
 
 class WatcherCliTests(unittest.TestCase):
@@ -47,8 +48,12 @@ class WatcherCliTests(unittest.TestCase):
 
     def cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, "-m", "psydcar", *args], cwd=self.work,
-            env=self.environment(), capture_output=True, text=True, check=False,
+            [sys.executable, "-m", "psydcar", *args],
+            cwd=self.work,
+            env=self.environment(),
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     def hits(self, query: str) -> list[dict]:
@@ -67,7 +72,11 @@ class WatcherCliTests(unittest.TestCase):
     def test_running_watcher_converges_after_close_add_change_delete_events(self) -> None:
         process = subprocess.Popen(
             [sys.executable, "-m", "psydcar", "watch", "--interval", "0.1", "--reconcile-interval", "0.5"],
-            cwd=self.work, env=self.environment(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cwd=self.work,
+            env=self.environment(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             self.wait_until(lambda: bool(self.hits("pear")), "startup reconciliation did not index source")
@@ -76,8 +85,7 @@ class WatcherCliTests(unittest.TestCase):
             (self.source / "added.md").write_text("aurora added\n")
             (self.source / "remove.py").unlink()
             self.wait_until(
-                lambda: bool(self.hits("plum")) and bool(self.hits("aurora"))
-                and not self.hits("pear") and not self.hits("sunrise_removed"),
+                lambda: bool(self.hits("plum")) and bool(self.hits("aurora")) and not self.hits("pear") and not self.hits("sunrise_removed"),
                 "watcher did not converge to the final files",
             )
             self.assertEqual(self.hits("plum")[0]["freshness"], "current")
@@ -96,8 +104,8 @@ class WatcherCliTests(unittest.TestCase):
         (self.source / "base.md").write_text("mango plum\n")
         (self.source / "new.md").write_text("restart aurora\n")
         (self.source / "remove.py").unlink()
-        with sqlite3.connect(self.store_dir / "psydcar.sqlite3") as connection:
-            connection.execute("UPDATE sidecars SET status = 'update_pending'")
+        with closing(sqlite3.connect(self.store_dir / "search.sqlite3")) as connection, connection:
+            connection.execute("UPDATE sidecar_index SET status = 'update_pending'")
             connection.execute("UPDATE sidecar_updates SET completed_at = NULL")
         stale = self.hits("pear")[0]
         self.assertEqual(stale["freshness"], "changed")
@@ -129,23 +137,23 @@ class WatcherCliTests(unittest.TestCase):
         changed = watcher.step()
         self.assertEqual(len(changed), 1)
         self.assertEqual(changed[0].reason, "source_changed")
-        self.assertEqual(changed[0].report.changed, 1)
+        self.assertEqual(report_of(changed[0]).changed, 1)
         self.assertEqual(EvidenceStore(store).search(["Library"], "plum")[0]["freshness"], "current")
 
         # Simulate a metadata check that missed a change. The full pass still compares bytes.
         (self.source / "base.md").write_text("mango kiwi\n")
         sidecar = store.get("Library")
-        with patch("psydcar.watcher.source_snapshot", return_value=watcher._snapshots[sidecar.id]):
+        with patch("psydcar.freshness.source_snapshot", return_value=watcher._snapshots[sidecar.id]):
             watcher._last_reconcile = time.monotonic() - 11
             periodic = watcher.step()
         self.assertEqual(periodic[0].reason, "periodic")
-        self.assertEqual(periodic[0].report.changed, 1)
+        self.assertEqual(report_of(periodic[0]).changed, 1)
         self.assertEqual(EvidenceStore(store).search(["Library"], "kiwi")[0]["freshness"], "current")
 
         self.source.rename(self.root / "moved-source")
         failed = watcher.step()
         self.assertEqual(len(failed), 1)
-        self.assertIn("missing", failed[0].error)
+        self.assertIn("missing", failed[0].error or "")
         self.assertEqual(EvidenceStore(store).update_state("Library")["state"], "attention")
         missing_hit = EvidenceStore(store).search(["Library"], "kiwi")[0]
         self.assertEqual(missing_hit["freshness"], "missing")
@@ -153,9 +161,8 @@ class WatcherCliTests(unittest.TestCase):
         (self.root / "moved-source").rename(self.source)
         recovered = watcher.step()
         self.assertEqual(len(recovered), 1)
-        self.assertEqual(recovered[0].report.sidecar.status, "indexed")
+        self.assertEqual(report_of(recovered[0]).sidecar.status, "indexed")
 
-    @unittest.skipUnless(PdfReader is not None, "pypdf is not installed in this Python environment")
     def test_pdf_events_use_the_shared_update_path(self) -> None:
         store = SidecarStore(self.store_dir / "psydcar.sqlite3")
         watcher = SidecarWatcher(store, interval=0.05, reconcile_interval=10)
@@ -163,20 +170,20 @@ class WatcherCliTests(unittest.TestCase):
         pdf = self.source / "guide.pdf"
         write_pdf(pdf, ["solar archive"])
         added = watcher.step()[0]
-        self.assertEqual(added.report.added, 1)
+        self.assertEqual(report_of(added).added, 1)
         first = self.hits("solar")[0]
         self.assertEqual(first["location"], {"kind": "page", "page": 1})
 
         write_pdf(pdf, ["lunar archive"])
         changed = watcher.step()[0]
-        self.assertEqual(changed.report.changed, 1)
+        self.assertEqual(report_of(changed).changed, 1)
         self.assertFalse(self.hits("solar"))
         self.assertEqual(self.hits("lunar")[0]["freshness"], "current")
 
         pdf.unlink()
         deleted = watcher.step()[0]
-        self.assertEqual(deleted.report.deleted, 1)
-        self.assertEqual(deleted.report.sidecar.status, "source_attention")
+        self.assertEqual(report_of(deleted).deleted, 1)
+        self.assertEqual(report_of(deleted).sidecar.status, "source_attention")
         self.assertFalse(self.hits("lunar"))
         self.assertEqual(self.cli("retrieve", "--sidecar", "Library", first["evidence_id"]).returncode, 2)
 

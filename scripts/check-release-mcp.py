@@ -16,16 +16,14 @@ def request_json(url: str, data: dict | None = None, token: str | None = None) -
     if token:
         headers["X-Psydcar-Token"] = token
         headers["Origin"] = url.split("/api/", 1)[0]
-    request = Request(url, data=json.dumps(data).encode() if data is not None else None,
-                      headers=headers)
+    request = Request(url, data=json.dumps(data).encode() if data is not None else None, headers=headers)
     with urlopen(request, timeout=10) as response:
         return json.load(response)
 
 
 def save(url: str, home: Path, store: Path, sidecar_id: str, output: Path) -> None:
     token = request_json(url + "/api/bootstrap")["token"]
-    preview = request_json(url + "/api/connections/preview",
-                           {"name": "release_probe", "sidecar_ids": [sidecar_id]}, token)
+    preview = request_json(url + "/api/connections/preview", {"name": "release_probe", "sidecar_ids": [sidecar_id]}, token)
     entry = preview["config"]["mcpServers"]["release_probe"]
     assert preview["selected"] == [{"id": sidecar_id, "name": "Release test"}]
     assert entry == {
@@ -41,17 +39,24 @@ def check(config_path: Path, home: Path, store: Path, sidecar_id: str) -> None:
     assert entry["command"] == str(home / ".local/bin/psydcar")
     assert entry["env"] == {"PSYDCAR_HOME": str(store.resolve())}
     environment = {"HOME": str(home), "PATH": "/usr/bin:/bin", **entry["env"]}
-    process = subprocess.Popen([entry["command"], *entry["args"]],
-                               cwd=config_path.parent, env=environment,
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, bufsize=1)
+    process = subprocess.Popen(
+        [entry["command"], *entry["args"]],
+        cwd=config_path.parent,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
     responses: queue.Queue[str] = queue.Queue()
-    assert process.stdin is not None and process.stdout is not None
-    threading.Thread(target=lambda: [responses.put(line) for line in process.stdout], daemon=True).start()
+    stdin, stdout = process.stdin, process.stdout
+    assert stdin is not None and stdout is not None
+    threading.Thread(target=lambda: [responses.put(line) for line in stdout], daemon=True).start()
 
     def send(payload: dict) -> None:
-        process.stdin.write(json.dumps(payload) + "\n")
-        process.stdin.flush()
+        stdin.write(json.dumps(payload) + "\n")
+        stdin.flush()
 
     def call(request_id: int, method: str, params: dict | None = None) -> dict:
         payload = {"jsonrpc": "2.0", "id": request_id, "method": method}
@@ -67,10 +72,15 @@ def check(config_path: Path, home: Path, store: Path, sidecar_id: str) -> None:
                 return response
 
     try:
-        initialized = call(1, "initialize", {
-            "protocolVersion": "2025-06-18", "capabilities": {},
-            "clientInfo": {"name": "release-probe", "version": "1"},
-        })
+        initialized = call(
+            1,
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "release-probe", "version": "1"},
+            },
+        )
         assert initialized["result"]["serverInfo"]["name"] == "psydcar", initialized
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         tools = call(2, "tools/list")["result"]["tools"]

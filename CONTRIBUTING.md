@@ -4,17 +4,17 @@ Thanks for your interest in improving Psydcar. Bug reports, ideas, and pull requ
 
 ## Development setup
 
-You need Python 3.10 or newer. Clone the repository and install it in editable mode in a virtual environment:
+You need Python 3.11 or newer. Clone the repository and install it in editable mode in a virtual environment:
 
 ```console
 git clone https://github.com/jasonhulbert/psydcar.git
 cd psydcar
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e . --group dev
 ```
 
-With uv, `uv venv && uv pip install -e .` does the same.
+The `dev` group adds [Ruff](https://docs.astral.sh/ruff/) and [ty](https://docs.astral.sh/ty/). Installing a dependency group needs pip 25.1 or newer. With uv, `uv venv && uv pip install -e . --group dev` does the same.
 
 To keep experiments away from your real sidecars, point `PSYDCAR_HOME` at a scratch folder:
 
@@ -30,7 +30,45 @@ The tests use the standard library's `unittest` and need no extra packages:
 python -m unittest discover -s tests
 ```
 
-CI runs the suite on macOS and Linux for every supported Python version. Some tests start local HTTP servers on `127.0.0.1`, so a sandbox that blocks loopback sockets will skip them.
+CI runs the suite on macOS and Linux for every supported Python version. Some tests start local HTTP servers on `127.0.0.1`, so a sandbox that blocks loopback sockets will skip them. Tests of git provenance and the git record need `git` and are skipped without it.
+
+## Linting, formatting, and type checking
+
+Ruff lints and formats the code, and ty checks types. Their settings are in `pyproject.toml`. Run all three from the repository root before you open a pull request:
+
+```console
+ruff check .
+ruff format .
+ty check
+```
+
+`ruff check --fix .` applies the safe fixes. ty reads the packages installed in `.venv`, so run it with the virtual environment in place. CI runs the same checks and fails on any finding.
+
+## How the code is organized
+
+`src/psydcar` is one flat package. Each module belongs to a layer, listed here from the center outward:
+
+| Layer | Modules |
+| --- | --- |
+| Storage helpers | `storage` |
+| Registry | `registry` |
+| Source scope | `source_scope`, with the readers `pdf_text` and `git_state` |
+| Evidence index | `index_tables`, `embeddings`, `evidence` |
+| Freshness | `freshness` |
+| Agent access | `access` |
+| Proposals and the git record | `proposal_files`, `proposals`, `git_record` |
+| Transports | `mcp_server`, `dashboard`, and `cli`, which starts the other two |
+
+Six rules keep the layers apart:
+
+1. Each layer imports only the layers beneath it.
+2. `source_scope` decides which files count as source. Indexing, proposals, and the watcher all ask it.
+3. No module imports another module's private names.
+4. Each layer owns its tables and offers operations on them. No other layer reads or writes them.
+5. Selection and grant rules live in `access`. The MCP server, the CLI, and the dashboard call it.
+6. State and search stay in separate databases. `state.sqlite3` holds what the owner owns. `search.sqlite3` can be deleted and rebuilt by indexing again.
+
+A layer declares its tables as a `storage.Tables` value: an owner name, the first table, and a tuple of upgrade steps. It opens its own connection with `storage.connect(path, tables)`, which creates or upgrades those tables first. To change a layer's tables, append a step. Never edit a step that has shipped.
 
 ## Dashboard assets
 
@@ -40,19 +78,11 @@ The dashboard in `src/psydcar/dashboard_assets` is plain HTML, CSS, and JavaScri
 - **Icons:** `icons.svg` is a sprite with only the [Lucide](https://lucide.dev) icons the dashboard uses. The server inlines it into the page, and markup references an icon as `<use href="#NAME">`. To add one, put its name in `ICONS` in `scripts/build-dashboard-icons.py` and regenerate the sprite:
 
 ```console
-npm pack lucide-static && mkdir lucide && tar -xzf lucide-static-*.tgz -C lucide
-python scripts/build-dashboard-icons.py lucide/package
+curl -fsSL https://registry.npmjs.org/lucide-static/-/lucide-static-1.70.0.tgz | tar -xz
+python scripts/build-dashboard-icons.py package
 ```
 
-- **Editor:** `editor.js` is a bundle of [CodeMirror 6](https://codemirror.net) plus Psydcar's Markdown live preview, built from the `editor/` folder. The dashboard loads it only when a file is opened. Its third-party licenses are in `editor-licenses.txt`. Both files are committed, so installing Psydcar never needs Node. After changing `editor/src` or its dependencies, rebuild both files with Node 18 or newer:
-
-```console
-cd editor
-npm ci
-npm run build
-```
-
-CodeMirror adds its base styles in a `<style>` element. The dashboard's content security policy admits that element through a per-page nonce, which the server puts in a `<meta>` tag for the editor.
+The sprite was built from Lucide 1.70.0. Use the same version unless you mean to update every icon.
 
 ## Pull requests
 

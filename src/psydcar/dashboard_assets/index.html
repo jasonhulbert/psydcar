@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="psydcar-style-nonce" content="psydcar:style-nonce">
   <title>Sidecars · Psydcar</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236236e8'/%3E%3Crect x='7' y='8' width='12' height='16' rx='2.5' fill='none' stroke='%23fff' stroke-width='2.4'/%3E%3Crect x='21.5' y='12' width='4' height='8' rx='2' fill='%23ff3d8b'/%3E%3C/svg%3E">
+  <link rel="icon" href="/assets/brand.svg">
+  <link rel="stylesheet" href="/assets/design-system.css">
   <link rel="stylesheet" href="/assets/dashboard.css">
   <script src="/assets/dashboard.js" defer></script>
 </head>
@@ -15,13 +15,11 @@
   <header class="app-header">
     <div class="app-header-inner">
       <a class="brand" href="/" aria-label="Psydcar dashboard">
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect class="brand-mark-bg" width="32" height="32" rx="7"/><rect class="brand-mark-body" x="7" y="8" width="12" height="16" rx="2.5"/><rect class="brand-mark-car" x="21.5" y="12" width="4" height="8" rx="2"/></svg>
+        <img class="brand-mark" src="/assets/brand.svg" alt="" width="24" height="24">
         <span class="brand-name">Psydcar</span>
       </a>
       <span class="header-divider" aria-hidden="true">/</span>
-      <a class="header-context" id="header-sidecars" href="#">Sidecars</a>
-      <span class="header-divider" id="header-sidecar-divider" aria-hidden="true" hidden>/</span>
-      <span class="header-context header-current" id="header-sidecar" hidden></span>
+      <span class="header-context">Sidecars</span>
       <div class="header-end">
         <span class="watch-status" id="watch-status" role="status"><span class="status-dot" aria-hidden="true"></span><span id="watch-label">Connecting</span></span>
         <a class="header-link" href="https://github.com/jasonhulbert/psydcar#readme" target="_blank" rel="noopener noreferrer"><svg class="icon" aria-hidden="true"><use href="#book-open"/></svg><span>Docs</span></a>
@@ -37,6 +35,15 @@
       </div>
       <button class="btn btn-primary" id="create-button" type="button"><svg class="icon" aria-hidden="true"><use href="#plus"/></svg>New sidecar</button>
     </div>
+
+    <section id="review-callout" class="review-callout" aria-labelledby="review-callout-title" hidden>
+      <span class="setting-icon setting-icon-pop" aria-hidden="true"><svg class="icon"><use href="#git-pull-request"/></svg></span>
+      <div class="review-callout-body">
+        <h2 id="review-callout-title"></h2>
+        <p id="review-callout-text"></p>
+      </div>
+      <button class="btn btn-primary" id="review-callout-button" type="button">Review</button>
+    </section>
 
     <div id="banner" class="flash flash-danger" role="alert" hidden><svg class="icon" aria-hidden="true"><use href="#triangle-alert"/></svg><span id="banner-text"></span></div>
 
@@ -129,83 +136,6 @@
     </footer>
   </main>
 
-  <div class="workspace" id="files-view" hidden>
-    <aside class="file-pane" id="file-pane" aria-labelledby="files-title">
-      <div class="file-pane-head">
-        <div class="file-pane-title">
-          <h1 id="files-title">Files</h1>
-          <span class="file-pane-root" id="files-root"></span>
-        </div>
-        <div class="file-pane-actions">
-          <button class="btn-icon" id="new-file-button" type="button" aria-label="New file" title="New file"><svg class="icon" aria-hidden="true"><use href="#file-plus"/></svg></button>
-          <button class="btn-icon" id="new-folder-button" type="button" aria-label="New folder" title="New folder"><svg class="icon" aria-hidden="true"><use href="#folder-plus"/></svg></button>
-          <button class="btn-icon" id="reload-tree-button" type="button" aria-label="Refresh file list" title="Refresh file list"><svg class="icon" aria-hidden="true"><use href="#refresh-cw"/></svg></button>
-        </div>
-      </div>
-      <label class="search-input file-filter">
-        <svg class="icon" aria-hidden="true"><use href="#search"/></svg>
-        <span class="visually-hidden">Filter files by path, or by tag with #</span>
-        <input id="file-filter" type="search" placeholder="Filter files or #tags" autocomplete="off" spellcheck="false">
-      </label>
-      <div class="file-tree" id="file-tree" role="tree" aria-labelledby="files-title"></div>
-      <div class="blankslate blankslate-compact" id="file-tree-empty" hidden>
-        <h3>No text files yet</h3>
-        <p>Create a Markdown or text file to start writing.</p>
-        <button class="btn btn-sm" id="empty-new-file-button" type="button"><svg class="icon" aria-hidden="true"><use href="#file-plus"/></svg>New file</button>
-      </div>
-      <p class="file-pane-note" id="file-tree-note" hidden></p>
-    </aside>
-
-    <div class="file-drawer-backdrop" id="file-drawer-backdrop" hidden></div>
-
-    <section class="editor-pane" aria-label="Editor">
-      <div class="editor-toolbar" id="editor-toolbar" hidden>
-        <button class="btn-icon editor-files-toggle" id="files-toggle-button" type="button" aria-controls="file-pane" aria-expanded="true" aria-label="Hide files" title="Hide files"><svg class="icon" aria-hidden="true"><use href="#panel-left-close"/></svg></button>
-        <div class="editor-path">
-          <svg class="icon" aria-hidden="true"><use id="editor-path-icon" href="#file-text"/></svg>
-          <span class="editor-path-text" id="editor-path"></span>
-          <span class="editor-state" id="editor-state" role="status"></span>
-        </div>
-        <div class="editor-tools">
-          <button class="btn-icon outline-toggle" id="outline-button" type="button" aria-controls="outline-pane" aria-expanded="false" aria-label="Show outline" title="Show outline" hidden><svg class="icon" aria-hidden="true"><use href="#table-of-contents"/></svg></button>
-          <div class="segmented segmented-sm" id="preview-toggle" role="group" aria-label="Markdown view">
-            <button type="button" data-mode="reading" aria-pressed="false" title="Reading: rendered and read-only. Click a link to open it."><svg class="icon" aria-hidden="true"><use href="#book-open"/></svg>Reading</button>
-            <button type="button" data-mode="live" aria-pressed="true" title="Live preview: rendered, with syntax shown where you edit"><svg class="icon" aria-hidden="true"><use href="#eye"/></svg>Live preview</button>
-            <button type="button" data-mode="source" aria-pressed="false" title="Source: the Markdown as written"><svg class="icon" aria-hidden="true"><use href="#code"/></svg>Source</button>
-          </div>
-          <button class="btn btn-sm btn-primary" id="save-button" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#save"/></svg>Save<kbd class="kbd" id="save-shortcut">⌘S</kbd></button>
-        </div>
-      </div>
-      <div class="flash flash-warning editor-conflict" id="editor-conflict" role="alert" hidden>
-        <svg class="icon" aria-hidden="true"><use href="#triangle-alert"/></svg>
-        <div class="flash-body"><strong id="conflict-title"></strong><p id="conflict-text"></p></div>
-        <div class="editor-conflict-actions">
-          <button class="btn btn-sm" id="conflict-reload-button" type="button">Reload from disk</button>
-          <button class="btn btn-sm" id="conflict-keep-button" type="button">Keep my version</button>
-        </div>
-      </div>
-      <div class="editor-body" id="editor-body" hidden>
-        <div class="editor-surface" id="editor-surface"></div>
-        <nav class="outline-pane" id="outline-pane" aria-labelledby="outline-title" hidden>
-          <div class="outline-header">
-            <h2 class="outline-title" id="outline-title">Outline</h2>
-            <button class="btn-icon btn-icon-sm" id="outline-close-button" type="button" aria-label="Close outline" title="Close outline"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button>
-          </div>
-          <ol class="outline-list" id="outline-list"></ol>
-          <p class="outline-empty" id="outline-empty" hidden>No headings in this file.</p>
-        </nav>
-      </div>
-      <div class="editor-empty" id="editor-empty">
-        <div class="blankslate">
-          <svg class="icon blankslate-icon" aria-hidden="true"><use id="editor-empty-icon" href="#file-text"/></svg>
-          <h3 id="editor-empty-title">Open a file to edit it</h3>
-          <p id="editor-empty-text">Saving writes straight to the file in your folder. Psydcar re-indexes it right away, so agents see the change.</p>
-        </div>
-      </div>
-      <div class="editor-status" id="editor-status" hidden></div>
-    </section>
-  </div>
-
   <dialog id="create-dialog" class="dialog" aria-labelledby="create-title">
     <form id="create-form" novalidate>
       <div class="dialog-header"><h2 id="create-title">New sidecar</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
@@ -274,7 +204,7 @@
     <form id="connection-form" novalidate>
       <div class="dialog-header"><h2 id="connection-title">Prepare an MCP connection</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
       <div class="dialog-body">
-        <p class="dialog-text">The agent gets <code>search</code> and <code>retrieve</code> tools limited to the sidecars you select. It can't widen that selection.</p>
+        <p class="dialog-text">Select which sidecars the agent can read. You can also allow edit proposals per sidecar. Proposed edits wait for your review and are not saved until you approve them.</p>
         <label class="field"><span class="field-label">Server name</span><input id="connection-name" class="mono" placeholder="project-notes" autocomplete="off" spellcheck="false" maxlength="64" required><span class="field-hint">Starts with a letter. Letters, numbers, dashes, and underscores only.</span></label>
         <fieldset class="field picker">
           <legend class="field-label">Sidecars <span class="field-optional" id="selected-count">0 selected</span></legend>
@@ -300,48 +230,25 @@
     </div>
   </dialog>
 
-  <dialog id="file-create-dialog" class="dialog" aria-labelledby="file-create-title">
-    <form id="file-create-form" novalidate>
-      <div class="dialog-header"><h2 id="file-create-title">New file</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
-      <div class="dialog-body">
-        <label class="field"><span class="field-label">Path</span><input id="file-create-path" class="mono" autocomplete="off" spellcheck="false" required><span class="field-hint" id="file-create-hint"></span></label>
-        <div class="flash flash-danger" id="file-create-error" role="alert" hidden></div>
+  <dialog id="review-dialog" class="dialog dialog-xl" aria-labelledby="review-title">
+    <div class="dialog-header">
+      <h2 id="review-title">Review proposed edit</h2>
+      <div class="review-nav">
+        <span class="review-position" id="review-position"></span>
+        <button class="btn-icon" id="review-prev" type="button" aria-label="Previous proposal" title="Previous proposal"><svg class="icon" aria-hidden="true"><use href="#chevron-left"/></svg></button>
+        <button class="btn-icon" id="review-next" type="button" aria-label="Next proposal" title="Next proposal"><svg class="icon" aria-hidden="true"><use href="#chevron-right"/></svg></button>
+        <button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button>
       </div>
-      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" id="file-create-submit" type="submit">Create</button></div>
-    </form>
+    </div>
+    <div class="dialog-body" id="review-body"></div>
+    <div class="dialog-footer">
+      <button class="btn btn-danger-quiet btn-push" id="review-reject" type="button"><svg class="icon" aria-hidden="true"><use href="#circle-x"/></svg>Reject</button>
+      <button class="btn" type="button" data-close>Close</button>
+      <button class="btn btn-primary" id="review-approve" type="button"><svg class="icon" aria-hidden="true"><use href="#check"/></svg>Approve</button>
+    </div>
   </dialog>
 
-  <dialog id="file-move-dialog" class="dialog" aria-labelledby="file-move-title">
-    <form id="file-move-form" novalidate>
-      <div class="dialog-header"><h2 id="file-move-title">Rename or move</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
-      <div class="dialog-body">
-        <label class="field"><span class="field-label">New path</span><input id="file-move-path" class="mono" autocomplete="off" spellcheck="false" required><span class="field-hint">Change the name, or edit the folders to move it. Missing folders are created.</span></label>
-        <div class="flash flash-danger" id="file-move-error" role="alert" hidden></div>
-      </div>
-      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div>
-    </form>
-  </dialog>
-
-  <dialog id="file-delete-dialog" class="dialog" aria-labelledby="file-delete-title">
-    <form id="file-delete-form" novalidate>
-      <div class="dialog-header"><h2 id="file-delete-title">Delete file</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
-      <div class="dialog-body">
-        <p class="dialog-text" id="file-delete-text"></p>
-        <div class="flash flash-danger" id="file-delete-error" role="alert" hidden></div>
-      </div>
-      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-danger" id="file-delete-submit" type="submit">Delete</button></div>
-    </form>
-  </dialog>
-
-  <dialog id="discard-dialog" class="dialog" aria-labelledby="discard-title">
-    <form method="dialog">
-      <div class="dialog-header"><h2 id="discard-title">Unsaved changes</h2></div>
-      <div class="dialog-body"><p class="dialog-text" id="discard-text"></p></div>
-      <div class="dialog-footer"><button class="btn btn-push" value="discard">Discard changes</button><button class="btn" value="cancel">Cancel</button><button class="btn btn-primary" value="save">Save</button></div>
-    </form>
-  </dialog>
-
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden><svg class="icon" aria-hidden="true"><use id="toast-icon" href="#check"/></svg><span id="toast-text"></span></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" popover="manual" hidden><svg class="icon" aria-hidden="true"><use id="toast-icon" href="#check"/></svg><span id="toast-text"></span></div>
   <noscript><div class="noscript">The dashboard needs JavaScript. The <code>psydcar</code> CLI works without it.</div></noscript>
 </body>
 </html>

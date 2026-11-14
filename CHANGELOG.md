@@ -4,27 +4,22 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-13
+
 ### Added
 
-- Markdown links open other files in the sidecar. ⌘-click (Ctrl-click on Linux) a relative link such as `../ideas.md` or `notes/plan#next-steps` to open that file. A link without an extension matches a Markdown file of that name, and a `#heading` part scrolls to that heading. ⌘Enter opens the link under the cursor. Hovering a link shows where it points.
-- Markdown front matter shows as a properties list in live preview. Lists render as chips and tags as `#tag` links. Click a property to edit the YAML. Psydcar never rewrites front matter.
-- Tags from front matter filter the file list. Click a tag, or type `#tag` in the filter, to list the files with that tag. Nested tags such as `#project/q4` also match `#project`.
-- Markdown tables render as tables in live preview. Wide tables can use the space beside the text column on large screens and scroll sideways on small ones. Click a cell to edit the table's source.
-- Images in Markdown render in live preview. Local images, such as `![Chart](images/chart.png)`, load from the sidecar's folder. Images on the web aren't loaded and show their alt text. ⌘-click an image to open its file.
-- The file list shows image files. Open one to view it with its size and dimensions, and rename, move, or delete it like any other file. Images aren't indexed.
-- Reading mode joins Live preview and Source in the Markdown view switcher. It renders the whole file, keeps it read-only, and follows links on a plain click.
-- An outline lists the open Markdown file's headings. Click a heading to scroll to it. The section you're reading is highlighted. Open it with the outline button in the editor toolbar.
-- Sections under top-level headings fold in live preview and Reading mode. Click the arrow beside a heading to fold or unfold it.
-- Callouts such as `> [!note]` and `> [!warning] Title` render as colored boxes with an icon. GitHub's five alert types and Obsidian's callout types are recognized.
-- Footnotes render in live preview. A reference such as `[^1]` shows as a number. Following it scrolls to the footnote, and following the footnote's number scrolls back.
-- Wiki links such as `[[Project plan]]`, `[[Project plan|the plan]]`, and `[[Project plan#Goals]]` open the file of that name anywhere in the sidecar. `![[photo.png]]` embeds an image, and `![[photo.png|300]]` sets its width.
-- HTML blocks render in live preview through an allowlist of safe elements. Scripts, styles, forms, and embedded content are removed.
+- Grant individual MCP connections permission to propose edits per sidecar. A proposed edit waits in a local queue and doesn't reach disk unless you approve it. Review proposals in the dashboard, which shows each agent's name, reason, and diff and keeps a list of recent decisions, or from the CLI with `psydcar proposal list`, `show`, `approve`, and `reject`. An approved edit is written in one step with its line endings and byte order mark preserved, and it's searchable right away. A proposal for a file that changed after the agent read it is marked out of date and can't be approved.
+- Evidence from a folder in a git repository reports where it came from. Search and retrieve results gain a `git` field with the current commit and whether the file has uncommitted changes. Psydcar only reads git state and never changes the repository. Results from other folders are unchanged.
+- Record approvals as git commits. For a sidecar whose folder is in a git repository, turn on the git record with `psydcar sidecar git-record NAME on` or the **Git record** switch in the dashboard. Each approval then becomes a commit on the checked-out branch whose subject is the agent's reason and whose message names the agent. A commit holds only the approved change to that one file, and your staged and uncommitted work stays out of it. When that can't be guaranteed, or git fails, the approval still stands, no commit is made, and Psydcar says why. The record is off by default. Psydcar never pulls or pushes, so you move commits between devices with your own git commands.
 
 ### Changed
 
-- Lists in Markdown live preview are easier to read. Nested items are indented with guide lines, and wrapped text lines up under the item's first line. Text no longer shifts when the cursor reaches a list marker, and a task's checkbox stands in for its bullet.
-- Markdown files open fully rendered. Click in the text to start editing.
-- Live preview hides the underline of `===` and `---` headings, hides the backslash in escapes such as `\*`, and shows entities such as `&copy;` as the characters they stand for.
+- Local state and search now live in separate SQLite databases. The first run upgrades an existing database automatically. Sidecar IDs, evidence IDs, provider settings, and MCP connections carry over, and the original database stays in place as a backup.
+
+### Removed
+
+- Python 3.10 is no longer supported. Psydcar now needs Python 3.11 or newer.
+- The dashboard no longer edits files. The file list, the editor, and creating, renaming, moving, and deleting files and folders from the dashboard are gone. Your files belong to you, and the editor you already use writes to them. While `psydcar watch` or the dashboard is running, Psydcar picks up those changes and re-indexes them. Removing the editor keeps Psydcar focused on giving agents evidence from your folders and on controlling what each agent can see and change. It also removes the dashboard's JavaScript build, so building and releasing Psydcar needs only Python.
 
 ## [0.3.0] - 2026-11-07
 
@@ -79,7 +74,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 - First release: local sidecars for text, code, and PDFs with lexical and optional embedding search, a file watcher, a browser dashboard, and an MCP server limited to selected sidecars.
 
-[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jasonhulbert/psydcar/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jasonhulbert/psydcar/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jasonhulbert/psydcar/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/jasonhulbert/psydcar/compare/v0.1.3...v0.1.4

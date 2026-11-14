@@ -2,35 +2,15 @@
   "use strict";
 
   const SVG = "http://www.w3.org/2000/svg";
-  const ICONS = "";
   const byId = (id) => document.getElementById(id);
   const stacked = window.matchMedia("(max-width: 1120px)");
   const model = {
     token: null, sidecars: [], selectedId: null, filter: "", statusFilter: "all",
     watching: false, loading: false, toastTimer: null, provider: { configured: false },
     connectionPreview: null, snapshotKey: "", renderedAt: 0,
+    proposals: { sidecarId: null, key: "", pending: [], reviewed: [], gitRecord: null, loaded: false, expanded: false },
+    review: null, savingRecord: false,
   };
-  // The files workspace: one sidecar's text files and the file open in the editor.
-  const files = {
-    sidecarId: null, entries: [], treeKey: "", truncated: false, expanded: new Set(), filter: "", loadingTree: false,
-    open: null, editor: null, conflict: null, saving: false, routeHash: "", treeTimer: null, pendingAnchor: null,
-    // Markdown view: "live", "reading", or "source". Stored as on, reading, or off, which earlier versions read.
-    mode: { off: "source", reading: "reading" }[readSetting("psydcar.preview", "on")] || "live",
-    // The outline of the open Markdown file. Wide screens remember whether it's open; narrow screens show it as a drawer.
-    outline: null, outlineKey: "", outlineOpen: readSetting("psydcar.outline", "closed") === "open", outlineDrawer: false,
-    // Wide screens remember a collapsed file pane; narrow screens show it as a drawer that starts closed.
-    collapsed: readSetting("psydcar.files-collapsed", "false") === "true", drawerOpen: false,
-  };
-  const narrow = window.matchMedia("(max-width: 860px)");
-  const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
-
-  function readSetting(key, fallback) {
-    try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
-  }
-
-  function writeSetting(key, value) {
-    try { localStorage.setItem(key, value); } catch { /* Settings are a convenience. */ }
-  }
 
   // DOM helpers
 
@@ -52,7 +32,7 @@
     svg.setAttribute("class", `icon ${className}`.trim());
     svg.setAttribute("aria-hidden", "true");
     const use = document.createElementNS(SVG, "use");
-    use.setAttribute("href", `${ICONS}#${name}`);
+    use.setAttribute("href", `#${name}`);
     svg.append(use);
     return svg;
   }
@@ -69,7 +49,7 @@
   }
 
   function setIcon(svg, name) {
-    svg.querySelector("use").setAttribute("href", `${ICONS}#${name}`);
+    svg.querySelector("use").setAttribute("href", `#${name}`);
   }
 
   async function copyText(value, trigger, confirmation) {
@@ -114,6 +94,7 @@
     return parsed.toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { dateStyle: "medium" });
   }
 
+  const ago = (value) => { const text = relative(value); return text === "Just now" ? "just now" : text; };
   const count = (value) => Number(value || 0).toLocaleString();
   const plural = (value, word) => `${count(value)} ${word}${Number(value) === 1 ? "" : "s"}`;
 
@@ -140,13 +121,22 @@
   function message(text, error = false) {
     const toast = byId("toast");
     byId("toast-text").textContent = text;
-    byId("toast-icon").setAttribute("href", `${ICONS}#${error ? "circle-alert" : "circle-check"}`);
+    byId("toast-icon").setAttribute("href", `#${error ? "circle-alert" : "circle-check"}`);
     toast.classList.toggle("is-error", error);
-    toast.hidden = true;
+    hideToast();
     void toast.offsetWidth;
     toast.hidden = false;
+    // As a popover the toast joins the top layer, so it shows above an open dialog.
+    if (toast.showPopover) toast.showPopover();
     clearTimeout(model.toastTimer);
-    model.toastTimer = setTimeout(() => { toast.hidden = true; }, 5000);
+    // Problems stay longer, so there is time to read what to do about them.
+    model.toastTimer = setTimeout(hideToast, error ? 10000 : 5000);
+  }
+
+  function hideToast() {
+    const toast = byId("toast");
+    toast.hidden = true;
+    if (toast.hidePopover && toast.matches(":popover-open")) toast.hidePopover();
   }
 
   function banner(text) {
@@ -194,6 +184,7 @@
     byId("footer-version").textContent = snapshot.version ? `Psydcar ${snapshot.version}` : "Psydcar";
     byId("footer-data-dir").textContent = snapshot.data_dir || "—";
     render();
+    syncProposals();
   }
 
   async function refresh(first = false, force = false) {
@@ -213,13 +204,9 @@
   // Rendering
 
   function render() {
-    if (files.sidecarId) {
-      const sidecar = model.sidecars.find((item) => item.id === files.sidecarId);
-      if (sidecar) { byId("header-sidecar").textContent = sidecar.name; byId("files-title").textContent = sidecar.name; }
-      return;
-    }
     const focusKey = document.activeElement?.dataset?.focusKey;
     renderCounts();
+    renderReviewCallout();
     renderSetup();
     renderList();
     renderDetail();
@@ -254,6 +241,7 @@
     model.selectedId = id;
     renderList();
     renderDetail();
+    syncProposals();
     if (reveal && stacked.matches) document.querySelector(".layout-side").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
@@ -279,6 +267,16 @@
       const link = button(name, "row-link", sidecar.name, { focusKey: `row:${sidecar.id}` });
       link.setAttribute("aria-current", String(selected));
       link.addEventListener("keydown", (event) => moveSelection(event, items, sidecar.id));
+      if (sidecar.pending_proposals) {
+        const line = element("div", "row-name-line");
+        name.prepend(line);
+        line.append(link);
+        const pill = add(line, "span", "review-pill");
+        pill.title = `${plural(sidecar.pending_proposals, "proposed edit")} to review`;
+        pill.append(icon("git-pull-request"));
+        add(pill, "span", "", count(sidecar.pending_proposals)).setAttribute("aria-hidden", "true");
+        add(pill, "span", "visually-hidden", pill.title);
+      }
       const path = add(name, "span", "row-path");
       add(path, "bdi", "", sidecar.source_path);
       path.title = sidecar.source_path;
@@ -331,9 +329,7 @@
   }
 
   function issuesFor(sidecar) {
-    const issues = Array.isArray(sidecar.update.issues)
-      ? sidecar.update.issues.map((issue) => typeof issue === "string" ? issue : [issue.source || issue.path, issue.error || issue.message].filter(Boolean).join(": "))
-      : [];
+    const issues = [...(sidecar.update.issues || [])];
     if (sidecar.error && !issues.includes(sidecar.error)) issues.unshift(sidecar.error);
     return issues;
   }
@@ -388,15 +384,6 @@
     const copyPath = button(path, "btn-icon btn-icon-sm", "", { iconName: "copy", ariaLabel: "Copy folder path", focusKey: "detail:copy-path" });
     copyPath.addEventListener("click", () => copyText(sidecar.source_path, copyPath, "Folder path copied."));
 
-    const open = add(target, "a", "detail-open");
-    open.href = filesHash(sidecar.id);
-    open.dataset.focusKey = "detail:files";
-    open.append(icon("folder-open"));
-    const openText = add(open, "span", "detail-open-text");
-    add(openText, "strong", "", "Browse and edit files");
-    add(openText, "small", "", `${plural(sidecar.coverage.text_files, "text file")} indexed`);
-    open.append(icon("chevron-right", "detail-open-chevron"));
-
     const actions = add(target, "div", "detail-actions");
     const needsUpdate = state.group === "attention" || sidecar.state === "not_indexed";
     const update = button(actions, `btn btn-sm${needsUpdate ? " btn-primary" : ""}`, sidecar.queued ? "Updating…" : "Update", {
@@ -415,6 +402,9 @@
       add(stat, "span", "stat-value", count(value));
       add(stat, "span", "stat-label", label);
     }
+
+    renderProposals(target, sidecar);
+    renderGitRecord(target, sidecar);
 
     const updates = section(target, "Updates");
     props(updates, [
@@ -575,7 +565,7 @@
   }
 
   function updateSelectedCount() {
-    const selected = byId("connection-sidecars").querySelectorAll("input:checked").length;
+    const selected = byId("connection-sidecars").querySelectorAll('input[name="sidecar-id"]:checked').length;
     byId("selected-count").textContent = `${selected} of ${model.sidecars.length} selected`;
   }
 
@@ -587,15 +577,28 @@
     const list = byId("connection-sidecars");
     list.replaceChildren();
     for (const sidecar of model.sidecars) {
-      const option = add(list, "label", "picker-option");
+      const row = add(list, "div", "picker-row");
+      const option = add(row, "label", "picker-option");
       const input = add(option, "input");
       input.type = "checkbox";
       input.value = sidecar.id;
       input.name = "sidecar-id";
-      input.addEventListener("change", updateSelectedCount);
       const text = add(option, "span", "picker-option-text");
       add(text, "strong", "", sidecar.name);
       add(text, "small", "", sidecar.source_path).title = `${sidecar.source_path}\n${sidecar.id}`;
+      const grantLabel = add(row, "label", "picker-grant");
+      const grant = add(grantLabel, "input");
+      grant.type = "checkbox";
+      grant.name = "proposal-id";
+      grant.value = sidecar.id;
+      grant.disabled = true;
+      grant.setAttribute("aria-label", `Allow edit proposals for ${sidecar.name}`);
+      add(grantLabel, "span", "", "Allow proposals");
+      input.addEventListener("change", () => {
+        grant.disabled = !input.checked;
+        if (!input.checked) grant.checked = false;
+        updateSelectedCount();
+      });
     }
     list.hidden = model.sidecars.length === 0;
     byId("connection-empty").hidden = model.sidecars.length !== 0;
@@ -604,797 +607,397 @@
     byId("connection-name").focus();
   }
 
-  // Files workspace: routing
+  // Proposals
 
-  const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");
-  const filesHash = (sidecarId, path) => `#/files/${sidecarId}${path ? `/${encodePath(path)}` : ""}`;
-  const parentOf = (path) => path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-  const baseName = (path) => path.slice(path.lastIndexOf("/") + 1);
-  const filesApi = (suffix = "files") => `/api/sidecars/${files.sidecarId}/${suffix}`;
+  const byCreated = (a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0);
+  const pendingTotal = () => model.sidecars.reduce((total, item) => total + Number(item.pending_proposals || 0), 0);
 
-  function parseRoute(hash = location.hash) {
-    const match = hash.match(/^#\/files\/([0-9a-f-]{36})(?:\/(.+))?$/);
-    if (!match) return null;
-    try {
-      return { sidecarId: match[1], path: match[2] ? match[2].split("/").map(decodeURIComponent).join("/") : null };
-    } catch { return { sidecarId: match[1], path: null }; }
+  function renderReviewCallout() {
+    const total = pendingTotal();
+    const waiting = model.sidecars.filter((item) => item.pending_proposals);
+    byId("review-callout").hidden = total === 0;
+    document.title = total ? `(${total}) Sidecars · Psydcar` : "Sidecars · Psydcar";
+    if (!total) return;
+    byId("review-callout-title").textContent = `${plural(total, "proposed edit")} ${total === 1 ? "is" : "are"} waiting for review`;
+    const names = waiting.map((item) => item.name);
+    const where = names.length <= 2 ? names.join(" and ") : `${names.slice(0, 2).join(", ")}, and ${plural(names.length - 2, "other sidecar")}`;
+    byId("review-callout-text").textContent = `Agents proposed changes in ${where}. Files change only when you approve.`;
   }
 
-  const isDirty = () => Boolean(files.editor && files.editor.isDirty());
-
-  // Ask before dropping unsaved edits. Resolves true when it's safe to continue.
-  async function settleChanges(nextLabel) {
-    if (!isDirty()) return true;
-    const dialog = byId("discard-dialog");
-    byId("discard-text").textContent = `${baseName(files.open.path)} has changes that aren't saved. Save them before ${nextLabel}?`;
-    dialog.returnValue = "";
-    dialog.showModal();
-    const choice = await new Promise((resolve) => dialog.addEventListener("close", () => resolve(dialog.returnValue), { once: true }));
-    if (choice === "discard") return true;
-    if (choice === "save") return saveFile();
-    return false;
+  function syncProposals() {
+    // A changed snapshot can mean a new or decided proposal, or a source edit that
+    // leaves a proposal out of date, so reload the selected sidecar's queue with it.
+    const sidecar = model.sidecars.find((item) => item.id === model.selectedId);
+    if (!sidecar) return;
+    const key = `${sidecar.id}:${model.snapshotKey}`;
+    if (key !== model.proposals.key) loadProposals(sidecar.id, key);
   }
 
-  async function route() {
-    const next = parseRoute();
-    const leavingFile = files.open && (!next || next.sidecarId !== files.sidecarId || next.path !== files.open.path);
-    if (leavingFile && !(await settleChanges(next?.path ? "opening another file" : "leaving"))) {
-      history.replaceState(null, "", files.routeHash || "#");
-      return;
-    }
-    files.routeHash = location.hash;
-    if (!next) { closeWorkspace(); return; }
-    const sidecar = model.sidecars.find((item) => item.id === next.sidecarId);
-    if (model.token && !sidecar) {
-      message("That sidecar no longer exists.", true);
-      history.replaceState(null, "", "#");
-      files.routeHash = "";
-      closeWorkspace();
-      return;
-    }
-    const switching = files.sidecarId !== next.sidecarId;
-    if (switching) {
-      closeFile();
-      files.sidecarId = next.sidecarId;
-      files.entries = [];
-      files.expanded = new Set();
-      files.filter = "";
-      byId("file-filter").value = "";
-    }
-    model.selectedId = next.sidecarId;
-    showWorkspace(sidecar);
-    if (switching || !files.entries.length) await loadTree();
-    if (next.path) {
-      if (!files.open || files.open.path !== next.path) await openFile(next.path);
+  async function loadProposals(sidecarId, key) {
+    if (model.proposals.sidecarId !== sidecarId) {
+      model.proposals = { sidecarId, key, pending: [], reviewed: [], gitRecord: null, loaded: false, expanded: false };
     } else {
-      closeFile();
+      model.proposals.key = key;
     }
-    renderWorkspace();
-  }
-
-  function showWorkspace(sidecar) {
-    document.body.classList.add("is-workspace");
-    byId("main").hidden = true;
-    byId("files-view").hidden = false;
-    byId("header-sidecar-divider").hidden = false;
-    byId("header-sidecar").hidden = false;
-    byId("header-sidecar").textContent = sidecar ? sidecar.name : "";
-    byId("files-title").textContent = sidecar ? sidecar.name : "Files";
-    byId("files-root").textContent = sidecar ? sidecar.source_path : "";
-    byId("files-root").title = sidecar ? sidecar.source_path : "";
-    document.title = `${sidecar ? sidecar.name : "Files"} · Psydcar`;
-    clearInterval(files.treeTimer);
-    files.treeTimer = setInterval(() => { if (!document.hidden) loadTree(true); }, 4000);
-  }
-
-  function closeWorkspace() {
-    clearInterval(files.treeTimer);
-    closeFile();
-    files.sidecarId = null;
-    document.body.classList.remove("is-workspace");
-    byId("files-view").hidden = true;
-    byId("main").hidden = false;
-    byId("header-sidecar-divider").hidden = true;
-    byId("header-sidecar").hidden = true;
-    document.title = "Sidecars · Psydcar";
-    render();
-  }
-
-  // Files workspace: tree
-
-  async function loadTree(quiet = false) {
-    if (!files.sidecarId || files.loadingTree) return;
-    files.loadingTree = true;
-    const sidecarId = files.sidecarId;
     try {
-      const result = await request(filesApi());
-      if (sidecarId !== files.sidecarId) return;
-      const key = JSON.stringify(result.entries);
-      const changed = key !== files.treeKey;
-      files.treeKey = key;
-      files.entries = result.entries;
-      files.truncated = result.truncated;
-      if (changed || !quiet) renderTree();
-      checkOpenFile();
+      const result = await request(`/api/sidecars/${sidecarId}/proposals`);
+      if (model.proposals.sidecarId !== sidecarId) return;
+      model.proposals.pending = (result.pending || []).sort(byCreated);
+      model.proposals.reviewed = result.reviewed || [];
+      model.proposals.gitRecord = result.git_record || null;
+      model.proposals.loaded = true;
     } catch (error) {
-      if (!quiet) message(error.message, true);
-    } finally {
-      files.loadingTree = false;
+      if (model.proposals.sidecarId !== sidecarId) return;
+      model.proposals.key = "";
+      model.proposals.error = error.message;
+    }
+    if (model.selectedId === sidecarId) {
+      const focusKey = document.activeElement?.dataset?.focusKey;
+      renderDetail();
+      if (focusKey) document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     }
   }
 
-  function buildTree() {
-    const root = { path: "", type: "folder", children: [] };
-    const folders = new Map([["", root]]);
-    for (const entry of files.entries) {
-      const node = { ...entry, name: baseName(entry.path), children: [] };
-      if (entry.type === "folder") folders.set(entry.path, node);
-      (folders.get(parentOf(entry.path)) || root).children.push(node);
+  function agentLine(parent, item, verb, when) {
+    const line = add(parent, "span", "proposal-meta");
+    line.append(icon("bot"));
+    add(line, "span", "proposal-agent", item.agent_name);
+    const time = add(line, "span", "", `${verb} ${ago(when)}`);
+    time.title = date(when);
+    return line;
+  }
+
+  function renderProposals(parent, sidecar) {
+    const state = model.proposals.sidecarId === sidecar.id ? model.proposals : null;
+    const block = add(parent, "section", "detail-section proposals");
+    const head = add(block, "div", "proposals-head");
+    add(head, "h3", "", "Proposed edits");
+    const waiting = Number(sidecar.pending_proposals || 0);
+    if (waiting) add(head, "span", "counter counter-pop", count(waiting));
+
+    if (!state || (!state.loaded && !state.error)) {
+      add(block, "p", "proposal-empty", waiting ? "Loading proposals…" : "No edits are waiting for review.");
+      return;
     }
-    const order = (a, b) => (a.type === b.type ? a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) : a.type === "folder" ? -1 : 1);
-    for (const folder of folders.values()) folder.children.sort(order);
-    return root;
-  }
-
-  const IMAGE_FILE = /\.(png|jpe?g|gif|webp|avif|svg|bmp|ico)$/i;
-
-  function fileIcon(path) {
-    if (IMAGE_FILE.test(path)) return "image";
-    return /\.(md|markdown|txt|rst)$/i.test(path) ? "file-text" : "file-code";
-  }
-
-  // "#name" filters by front matter tag, including nested tags such as "name/child". Other text matches paths.
-  function matchesFilter(entry, query) {
-    if (entry.type !== "file") return false;
-    if (query.startsWith("#") && query.length > 1) {
-      const tag = query.slice(1);
-      return (entry.tags || []).some((name) => {
-        const lower = name.toLocaleLowerCase();
-        return lower === tag || lower.startsWith(`${tag}/`);
-      });
+    if (state.error) {
+      flash(block, "danger", "Proposals could not be loaded", { text: `${state.error} Reload the page to try again.` });
+      return;
     }
-    return entry.path.toLocaleLowerCase().includes(query);
-  }
 
-  // Show the files that carry a tag, for example after clicking it in a properties block.
-  function filterByTag(tag) {
-    files.filter = `#${tag}`;
-    byId("file-filter").value = files.filter;
-    renderTree();
-    syncTreeFocus();
-    if (narrow.matches) {
-      files.drawerOpen = true;
-      renderSidebar();
-    } else if (files.collapsed) {
-      files.collapsed = false;
-      writeSetting("psydcar.files-collapsed", "false");
-      renderSidebar();
-    }
-  }
-
-  function renderTree() {
-    const tree = byId("file-tree");
-    const focusPath = document.activeElement?.closest?.(".tree-row")?.dataset.path;
-    tree.replaceChildren();
-    const query = files.filter.trim().toLocaleLowerCase();
-    const rows = [];
-    if (query) {
-      for (const entry of files.entries) {
-        if (matchesFilter(entry, query)) rows.push({ node: { ...entry, name: entry.path }, depth: 0 });
+    if (state.pending.length) {
+      const list = add(block, "ul", "proposal-list");
+      for (const item of state.pending) {
+        const entry = button(add(list, "li"), "proposal-item", "", {
+          focusKey: `proposal:${item.id}`, onClick: () => openReview(sidecar.id, item.id),
+        });
+        entry.setAttribute("aria-label", `Review ${item.path}${item.stale ? " (out of date)" : ""}: ${item.summary}, proposed by ${item.agent_name}`);
+        const body = add(entry, "span", "proposal-body");
+        const top = add(body, "span", "proposal-top");
+        add(top, "span", "proposal-path", item.path).title = item.path;
+        if (item.stale) add(top, "span", "badge badge-warning proposal-badge", "Out of date");
+        add(body, "span", "proposal-reason", item.summary);
+        agentLine(body, item, "proposed", item.created_at);
+        entry.append(icon("chevron-right", "proposal-chevron"));
       }
     } else {
-      const walk = (folder, depth) => {
-        for (const node of folder.children) {
-          rows.push({ node, depth });
-          if (node.type === "folder" && files.expanded.has(node.path)) walk(node, depth + 1);
+      const empty = add(block, "p", "proposal-empty");
+      empty.append(icon("inbox"));
+      add(empty, "span", "", "No edits are waiting for review. Agents you allow to propose edits for this sidecar queue them here.");
+    }
+
+    if (state.reviewed.length) {
+      add(block, "h4", "proposals-subhead", "Recent decisions");
+      const shown = state.expanded ? state.reviewed : state.reviewed.slice(0, 5);
+      const list = add(block, "ul", "decision-list");
+      for (const item of shown) {
+        const row = add(list, "li", "decision");
+        const top = add(row, "div", "decision-top");
+        const approved = item.status === "approved";
+        add(top, "span", `badge decision-badge${approved ? " badge-success" : ""}`, approved ? "Approved" : "Rejected");
+        add(top, "span", "proposal-path", item.path).title = item.path;
+        if (item.commit_id) {
+          const short = item.commit_id.slice(0, 7);
+          const chip = button(top, "commit-chip", short, {
+            iconName: "git-commit-horizontal", focusKey: `commit:${item.id}`, ariaLabel: `Copy commit ID ${short}`,
+          });
+          chip.title = `Recorded as commit ${item.commit_id}. Click to copy.`;
+          chip.addEventListener("click", () => copyText(item.commit_id, null, "Commit ID copied."));
         }
-      };
-      walk(buildTree(), 0);
-    }
-    for (const { node, depth } of rows) treeRow(tree, node, depth);
-    const hasFiles = files.entries.some((entry) => entry.type === "file");
-    byId("file-tree-empty").hidden = files.entries.length > 0;
-    tree.hidden = files.entries.length === 0;
-    const note = byId("file-tree-note");
-    note.hidden = !(files.truncated || (query && rows.length === 0));
-    note.textContent = files.truncated
-      ? "This folder has more than 5,000 entries. Only the first 5,000 are listed."
-      : !hasFiles ? "" : query.startsWith("#") ? `No files are tagged ${query}.` : "No files match this filter.";
-    if (focusPath) tree.querySelector(`.tree-row[data-path="${CSS.escape(focusPath)}"] .tree-item`)?.focus({ preventScroll: true });
-  }
-
-  function treeRow(tree, node, depth) {
-    const folder = node.type === "folder";
-    const expanded = files.expanded.has(node.path);
-    const active = !folder && files.open?.path === node.path;
-    const row = add(tree, "div", `tree-row${active ? " is-active" : ""}`);
-    row.dataset.path = node.path;
-    row.dataset.type = node.type;
-    row.setAttribute("role", "treeitem");
-    row.setAttribute("aria-level", String(depth + 1));
-    row.setAttribute("aria-selected", String(active));
-    if (folder) row.setAttribute("aria-expanded", String(expanded));
-    row.style.setProperty("--depth", String(depth));
-
-    const item = add(row, "button", "tree-item");
-    item.type = "button";
-    item.tabIndex = -1;
-    if (folder) item.append(icon("chevron-right", `tree-chevron${expanded ? " is-open" : ""}`));
-    item.append(icon(folder ? (expanded ? "folder-open" : "folder") : fileIcon(node.path), "tree-icon"));
-    add(item, "span", "tree-name", node.name).title = node.path;
-    const tooLarge = node.image ? node.viewable === false : node.editable === false;
-    if (!folder && tooLarge) add(item, "span", "tree-flag", "Too large");
-    item.addEventListener("click", () => {
-      if (folder) toggleFolder(node.path);
-      else if (tooLarge) message(node.image ? `${node.path} is larger than 20 MiB, so it can't be shown here.` : `${node.path} is larger than 2 MiB, so it can't be edited here.`, true);
-      else {
-        closeDrawer();
-        location.hash = filesHash(files.sidecarId, node.path);
+        add(row, "span", "proposal-reason", item.summary);
+        agentLine(row, item, "decided", item.decided_at);
       }
-    });
-    item.addEventListener("keydown", (event) => treeKey(event, node));
-
-    const actions = add(row, "span", "tree-actions");
-    if (folder) {
-      button(actions, "btn-icon btn-icon-sm", "", { iconName: "file-plus", ariaLabel: `New file in ${node.path}`, onClick: () => openFileCreate("file", node.path) });
+      if (state.reviewed.length > 5) {
+        button(block, "btn btn-sm decision-more", state.expanded ? "Show fewer" : `Show all ${count(state.reviewed.length)}`, {
+          focusKey: "detail:decisions-more",
+          onClick: () => { model.proposals.expanded = !model.proposals.expanded; renderDetail(); },
+        });
+      }
     }
-    button(actions, "btn-icon btn-icon-sm", "", { iconName: "pencil", ariaLabel: `Rename or move ${node.path}`, onClick: () => openFileMove(node) });
-    button(actions, "btn-icon btn-icon-sm btn-icon-danger", "", { iconName: "trash-2", ariaLabel: `Delete ${node.path}`, onClick: () => openFileDelete(node) });
-    for (const action of actions.querySelectorAll("button")) action.tabIndex = -1;
   }
 
-  // Roving focus: one tree item is tabbable; arrows move between rows and open or close folders.
-  function syncTreeFocus() {
-    const items = [...byId("file-tree").querySelectorAll(".tree-item")];
-    const current = items.find((item) => item === document.activeElement)
-      || byId("file-tree").querySelector(".tree-row.is-active .tree-item") || items[0];
-    for (const item of items) item.tabIndex = item === current ? 0 : -1;
+  // Git record
+
+  function branchText(record) {
+    return record.branch ? `the ${record.branch} branch` : "the checked-out branch";
   }
 
-  function treeKey(event, node) {
-    const items = [...byId("file-tree").querySelectorAll(".tree-item")];
-    const index = items.indexOf(event.currentTarget);
-    const focus = (target) => { if (target) { target.focus(); syncTreeFocus(); } };
-    if (event.key === "ArrowDown") { event.preventDefault(); focus(items[index + 1]); }
-    else if (event.key === "ArrowUp") { event.preventDefault(); focus(items[index - 1]); }
-    else if (event.key === "Home") { event.preventDefault(); focus(items[0]); }
-    else if (event.key === "End") { event.preventDefault(); focus(items[items.length - 1]); }
-    else if (event.key === "ArrowRight" && node.type === "folder" && !files.expanded.has(node.path)) { event.preventDefault(); toggleFolder(node.path); }
-    else if (event.key === "ArrowLeft" && node.type === "folder" && files.expanded.has(node.path)) { event.preventDefault(); toggleFolder(node.path); }
-    else if (event.key === "ArrowLeft" && parentOf(node.path)) {
-      event.preventDefault();
-      focus(byId("file-tree").querySelector(`.tree-row[data-path="${CSS.escape(parentOf(node.path))}"] .tree-item`));
-    } else if (event.key === "F2") { event.preventDefault(); openFileMove(node); }
-    else if (event.key === "Delete" || (isMac && event.key === "Backspace" && event.metaKey)) { event.preventDefault(); openFileDelete(node); }
+  function renderGitRecord(parent, sidecar) {
+    const record = model.proposals.sidecarId === sidecar.id ? model.proposals.gitRecord : null;
+    // Offered only where commits can work, or where an earlier choice needs undoing.
+    if (!record || (!record.available && !record.enabled)) return;
+    const block = add(parent, "section", "detail-section git-record");
+    const row = add(block, "div", "git-record-row");
+    const text = add(row, "div", "git-record-text");
+    const title = add(text, "h3", "", "Git record");
+    title.id = "git-record-title";
+    const description = add(text, "p", "git-record-description");
+    description.id = "git-record-description";
+    if (!record.available) {
+      description.textContent = "The folder is no longer in a git repository, so approvals don't make commits. Turn the record off, or restore the repository.";
+    } else if (record.enabled) {
+      description.textContent = `Each approved edit becomes a commit on ${branchText(record)} that names the agent and its reason.`;
+    } else {
+      description.textContent = `Record each approved edit as a commit on ${branchText(record)}. Your other changes stay out of these commits.`;
+    }
+    const toggle = add(row, "label", "switch");
+    const input = add(toggle, "input");
+    input.type = "checkbox";
+    input.setAttribute("role", "switch");
+    input.checked = Boolean(record.enabled);
+    input.disabled = model.savingRecord || (!record.available && !record.enabled);
+    input.dataset.focusKey = "detail:git-record";
+    input.setAttribute("aria-labelledby", "git-record-title");
+    input.setAttribute("aria-describedby", "git-record-description");
+    add(toggle, "span", "switch-track").setAttribute("aria-hidden", "true");
+    input.addEventListener("change", () => setGitRecord(sidecar, input.checked));
+    if (record.repository) {
+      const where = add(block, "p", "git-record-meta");
+      where.append(icon("git-commit-horizontal"));
+      add(where, "bdi", "", record.repository).title = record.repository;
+    }
+    add(block, "p", "git-record-note", "Psydcar never pulls or pushes. Move commits between devices with your own git commands.");
   }
 
-  function toggleFolder(path) {
-    if (files.expanded.has(path)) files.expanded.delete(path);
-    else files.expanded.add(path);
-    renderTree();
-    byId("file-tree").querySelector(`.tree-row[data-path="${CSS.escape(path)}"] .tree-item`)?.focus();
-    syncTreeFocus();
-  }
-
-  function expandTo(path) {
-    let folder = parentOf(path);
-    while (folder) { files.expanded.add(folder); folder = parentOf(folder); }
-  }
-
-  // Files workspace: editor
-
-  let editorScript = null;
-  function loadEditor() {
-    if (window.PsydcarEditor) return Promise.resolve();
-    editorScript ??= new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "/assets/editor.js";
-      script.onload = resolve;
-      script.onerror = () => { editorScript = null; reject(new Error("The editor couldn't load. Reload the page and try again.")); };
-      document.head.append(script);
-    });
-    return editorScript;
-  }
-
-  async function openFile(path) {
-    if (IMAGE_FILE.test(path)) { openImage(path); return; }
-    const sidecarId = files.sidecarId;
-    showEditorMessage("loader-circle", "Opening…", path);
+  async function setGitRecord(sidecar, enabled) {
+    model.savingRecord = true;
+    renderDetail();
     try {
-      const [file] = await Promise.all([request(`${filesApi("file")}?path=${encodeURIComponent(path)}`), loadEditor()]);
-      if (sidecarId !== files.sidecarId || parseRoute()?.path !== path) return;
-      closeFile();
-      files.open = file;
-      files.editor = window.PsydcarEditor.create({
-        parent: byId("editor-surface"), doc: file.content, path: file.path, mode: files.mode,
-        nonce: document.querySelector('meta[name="psydcar-style-nonce"]')?.content,
-        onChange: renderEditorState, onSave: () => saveFile(), onOpenLink: openLink, resolveImage, onTag: filterByTag, onOutline: renderOutline,
+      const result = await request(`/api/sidecars/${sidecar.id}/git-record`, {
+        method: "POST", body: JSON.stringify({ enabled }),
       });
-      expandTo(file.path);
-      renderWorkspace();
-      const anchor = files.pendingAnchor?.path === path ? files.pendingAnchor.fragment : "";
-      files.pendingAnchor = null;
-      if (anchor) files.editor.revealAnchor(anchor);
-      // Live preview opens fully rendered. Focusing it would reveal the first line's raw syntax.
-      if (files.editor.mode === "source") files.editor.focus();
+      if (model.proposals.sidecarId === sidecar.id) model.proposals.gitRecord = result.git_record;
+      message(result.message);
     } catch (error) {
-      closeFile();
-      showEditorMessage("circle-alert", "This file can't be opened", error.message);
-      renderTree();
-    }
-  }
-
-  // Resolve a link or image address from the open file to a path in the sidecar. Returns null
-  // when it points outside the sidecar's folder.
-  function resolveLink(url) {
-    const hashAt = url.indexOf("#");
-    const fragment = hashAt >= 0 ? url.slice(hashAt + 1) : "";
-    let target = (hashAt >= 0 ? url.slice(0, hashAt) : url).split("?")[0].replace(/^<(.*)>$/, "$1");
-    try { target = decodeURIComponent(target); } catch { /* Use the link as written. */ }
-    const parts = target.startsWith("/") ? [] : parentOf(files.open.path).split("/").filter(Boolean);
-    for (const part of target.split("/")) {
-      if (!part || part === ".") continue;
-      if (part !== "..") parts.push(part);
-      else if (parts.length) parts.pop();
-      else return null;
-    }
-    return { path: parts.join("/"), target, fragment };
-  }
-
-  const imageUrl = (path, version = "") => `${filesApi("image")}?path=${encodeURIComponent(path)}${version ? `&v=${version}` : ""}`;
-
-  // Wiki links name a file instead of giving a path, as in "[[Project plan]]". A path from the sidecar's
-  // root wins, then a file of that name in the open file's folder, then the match with the shortest path.
-  // Names match without regard to case, and ".md" is optional.
-  function findWikiTarget(name) {
-    const fileEntries = files.entries.filter((entry) => entry.type === "file");
-    let wanted = name.trim().replace(/^\/+/, "");
-    if (/^\.\.?\//.test(wanted)) wanted = resolveLink(wanted)?.path || "";
-    wanted = wanted.toLowerCase();
-    if (!wanted) return null;
-    const candidates = [wanted, `${wanted}.md`];
-    const folder = parentOf(files.open.path).toLowerCase();
-    const byPath = (path) => fileEntries.find((entry) => entry.path.toLowerCase() === path);
-    for (const path of [...candidates, ...candidates.map((candidate) => (folder ? `${folder}/${candidate}` : candidate))]) {
-      const entry = byPath(path);
-      if (entry) return entry;
-    }
-    const matches = fileEntries.filter((entry) => candidates.some((candidate) => entry.path.toLowerCase().endsWith(`/${candidate}`)));
-    matches.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.localeCompare(b.path));
-    return matches[0] || null;
-  }
-
-  // Markdown images load through the dashboard's image route. Web addresses stay blocked.
-  function resolveImage(url, { wiki = false } = {}) {
-    if (!files.open) return null;
-    if (wiki) {
-      const entry = findWikiTarget(url);
-      return entry?.image ? imageUrl(entry.path) : null;
-    }
-    if (/^[a-z][a-z\d+.-]*:|^\/\//i.test(url)) return null;
-    const resolved = resolveLink(url);
-    return resolved && resolved.path ? imageUrl(resolved.path) : null;
-  }
-
-  // Follow a relative link from the open Markdown file, such as "../ideas.md#next-steps".
-  // A link without an extension also matches a Markdown file of that name. A wiki link such as
-  // "Project plan#goals" is found by name. Its fragment is already a heading anchor.
-  function openLink(url, { wiki = false } = {}) {
-    if (!files.open) return;
-    let entry;
-    let fragment;
-    if (wiki) {
-      const hashAt = url.indexOf("#");
-      const name = hashAt >= 0 ? url.slice(0, hashAt) : url;
-      fragment = hashAt >= 0 ? url.slice(hashAt + 1) : "";
-      entry = findWikiTarget(name);
-      if (!entry) { message(`There's no file named ${name} in this sidecar.`, true); return; }
-    } else {
-      const resolved = resolveLink(url);
-      if (!resolved) { message("That link points outside this sidecar's folder.", true); return; }
-      const { path, target } = resolved;
-      fragment = resolved.fragment;
-      const find = (candidate) => files.entries.find((item) => item.type === "file" && item.path === candidate);
-      entry = find(path) || (!/\.[^/]+$/.test(path) ? find(`${path}.md`) : null);
-      if (!entry) { message(`${path || target} isn't a file in this sidecar that the editor can open.`, true); return; }
-    }
-    if (entry.path === files.open.path) {
-      if (fragment) files.editor?.revealAnchor(fragment);
-      return;
-    }
-    files.pendingAnchor = fragment ? { path: entry.path, fragment } : null;
-    location.hash = filesHash(files.sidecarId, entry.path);
-  }
-
-  // Images open in a viewer instead of the editor. They can be renamed, moved, and deleted like other files.
-  function openImage(path) {
-    const entry = files.entries.find((item) => item.type === "file" && item.path === path);
-    if (!entry) {
-      closeFile();
-      showEditorMessage("circle-alert", "This file can't be opened", `${path} isn't an image in this sidecar.`);
-      renderTree();
-      return;
-    }
-    closeFile();
-    files.open = { path, image: true, size: entry.size, mtime_ns: entry.mtime_ns, width: 0, height: 0 };
-    const viewer = add(byId("editor-surface"), "div", "image-viewer");
-    const frame = add(viewer, "div", "image-viewer-frame");
-    const image = add(frame, "img", "image-viewer-img");
-    image.alt = baseName(path);
-    image.addEventListener("load", () => {
-      if (files.open?.image !== true) return;
-      files.open.width = image.naturalWidth;
-      files.open.height = image.naturalHeight;
-      renderEditorState();
-    });
-    image.addEventListener("error", () => {
-      viewer.replaceChildren();
-      const note = add(viewer, "div", "blankslate");
-      note.append(icon("circle-alert", "blankslate-icon"));
-      add(note, "h3", "", "This image can't be shown");
-      add(note, "p", "", "The file may be damaged, or the browser may not support its format.");
-    });
-    image.src = imageUrl(path, entry.mtime_ns);
-    expandTo(path);
-  }
-
-  function closeFile() {
-    if (files.editor) files.editor.destroy();
-    files.editor = null;
-    renderOutline(null);
-    files.open = null;
-    files.conflict = null;
-    byId("editor-surface").replaceChildren();
-    showEditorMessage("file-text", "Open a file to edit it",
-      "Saving writes straight to the file in your folder. Psydcar re-indexes it right away, so agents see the change.");
-  }
-
-  function showEditorMessage(iconName, title, text) {
-    byId("editor-empty-icon").setAttribute("href", `#${iconName}`);
-    byId("editor-empty-icon").parentElement.classList.toggle("spin", iconName === "loader-circle");
-    byId("editor-empty-title").textContent = title;
-    byId("editor-empty-text").textContent = text;
-  }
-
-  // File pane visibility. Without an open file the pane is the whole view, so it can't be hidden.
-  function renderSidebar() {
-    const view = byId("files-view");
-    if (!files.open || !narrow.matches) files.drawerOpen = false;
-    view.classList.toggle("is-collapsed", files.collapsed);
-    view.classList.toggle("is-drawer-open", files.drawerOpen);
-    const shown = narrow.matches ? files.drawerOpen : !files.collapsed;
-    const toggle = byId("files-toggle-button");
-    const label = shown ? "Hide files" : "Show files";
-    toggle.setAttribute("aria-expanded", String(shown));
-    toggle.setAttribute("aria-label", label);
-    toggle.title = label;
-    setIcon(toggle.querySelector("svg"), shown ? "panel-left-close" : "panel-left-open");
-    byId("file-drawer-backdrop").hidden = !files.drawerOpen;
-  }
-
-  function toggleSidebar() {
-    if (!files.open) return;
-    if (narrow.matches) {
-      files.drawerOpen = !files.drawerOpen;
-      renderSidebar();
-      if (files.drawerOpen) (byId("file-tree").querySelector('.tree-item[tabindex="0"]') || byId("file-filter")).focus();
-    } else {
-      files.collapsed = !files.collapsed;
-      writeSetting("psydcar.files-collapsed", String(files.collapsed));
-      renderSidebar();
-    }
-  }
-
-  function closeDrawer(focusToggle = false) {
-    if (!files.drawerOpen) return;
-    files.drawerOpen = false;
-    renderSidebar();
-    if (focusToggle) byId("files-toggle-button").focus();
-  }
-
-  // Outline: the open Markdown file's headings. Clicking one scrolls to it. The heading at the top of
-  // the editor is marked as current.
-  function renderOutline(outline) {
-    files.outline = outline;
-    const list = byId("outline-list");
-    const headings = outline?.headings || [];
-    const key = headings.map((heading) => `${heading.level}:${heading.text}`).join("\n");
-    if (key !== files.outlineKey) {
-      files.outlineKey = key;
-      list.replaceChildren();
-      const top = Math.min(...headings.map((heading) => heading.level));
-      headings.forEach((heading, index) => {
-        const item = add(list, "li", `outline-item outline-depth-${heading.level - top + 1}`);
-        const button = add(item, "button", "outline-link", heading.text || "Untitled heading");
-        button.type = "button";
-        button.dataset.index = String(index);
-        button.title = heading.text;
-      });
-    }
-    byId("outline-empty").hidden = headings.length > 0;
-    let current = null;
-    for (const button of list.querySelectorAll(".outline-link")) {
-      const isCurrent = Number(button.dataset.index) === outline?.current;
-      button.classList.toggle("is-current", isCurrent);
-      if (isCurrent) { button.setAttribute("aria-current", "location"); current = button; } else button.removeAttribute("aria-current");
-    }
-    if (current && !byId("outline-pane").hidden) {
-      const pane = list.getBoundingClientRect();
-      const row = current.getBoundingClientRect();
-      if (row.top < pane.top || row.bottom > pane.bottom) current.scrollIntoView({ block: "nearest" });
-    }
-  }
-
-  function renderOutlinePane() {
-    const markdown = Boolean(files.editor?.isMarkdown);
-    if (!markdown || !narrow.matches) files.outlineDrawer = false;
-    const shown = markdown && (narrow.matches ? files.outlineDrawer : files.outlineOpen);
-    byId("outline-pane").hidden = !shown;
-    byId("editor-body").classList.toggle("has-outline", shown);
-    const button = byId("outline-button");
-    button.hidden = !markdown;
-    const label = shown ? "Hide outline" : "Show outline";
-    button.setAttribute("aria-expanded", String(shown));
-    button.setAttribute("aria-label", label);
-    button.title = label;
-  }
-
-  function toggleOutline(show) {
-    if (narrow.matches) {
-      files.outlineDrawer = show;
-    } else {
-      files.outlineOpen = show;
-      writeSetting("psydcar.outline", show ? "open" : "closed");
-    }
-    renderOutlinePane();
-    if (show) renderOutline(files.outline);
-    if (show && narrow.matches) (byId("outline-list").querySelector(".is-current") || byId("outline-list").querySelector("button") || byId("outline-close-button")).focus();
-  }
-
-  function renderWorkspace() {
-    const open = files.open;
-    byId("files-view").classList.toggle("has-file", Boolean(open));
-    renderSidebar();
-    byId("editor-toolbar").hidden = !open;
-    byId("editor-body").hidden = !open;
-    byId("editor-empty").hidden = Boolean(open);
-    byId("editor-status").hidden = !open;
-    renderTree();
-    syncTreeFocus();
-    if (!open) {
-      byId("editor-conflict").hidden = true;
-      document.title = `${byId("files-title").textContent || "Files"} · Psydcar`;
-      return;
-    }
-    byId("editor-path").replaceChildren();
-    const parts = open.path.split("/");
-    parts.forEach((part, index) => {
-      if (index) add(byId("editor-path"), "span", "editor-path-sep", "/");
-      add(byId("editor-path"), "span", index === parts.length - 1 ? "editor-path-name" : "", part);
-    });
-    byId("editor-path").title = open.path;
-    byId("editor-path-icon").setAttribute("href", `#${fileIcon(open.path)}`);
-    const toggle = byId("preview-toggle");
-    toggle.hidden = !files.editor?.isMarkdown;
-    byId("save-button").hidden = Boolean(open.image);
-    if (open.image) {
-      const image = byId("editor-surface").querySelector(".image-viewer-img");
-      if (image) image.alt = baseName(open.path);
-    } else {
-      for (const item of toggle.querySelectorAll("button")) item.setAttribute("aria-pressed", String(item.dataset.mode === files.editor.mode));
-    }
-    renderOutlinePane();
-    renderEditorState();
-    renderConflict();
-  }
-
-  function renderEditorState() {
-    if (!files.open) return;
-    const dirty = isDirty();
-    const stateLabel = byId("editor-state");
-    const status = byId("editor-status");
-    status.replaceChildren();
-    if (files.open.image) {
-      stateLabel.textContent = "";
-      stateLabel.className = "editor-state";
-      document.title = `${baseName(files.open.path)} · Psydcar`;
-      const type = files.open.path.split(".").pop().toUpperCase();
-      const dimensions = files.open.width ? `${files.open.width} × ${files.open.height} px` : "";
-      for (const value of [`${type} image`, dimensions, formatBytes(files.open.size), files.open.mtime_ns ? `Modified ${relative(new Date(files.open.mtime_ns / 1e6).toISOString())}` : ""]) {
-        if (value) add(status, "span", "", value);
-      }
-      return;
-    }
-    stateLabel.textContent = files.saving ? "Saving…" : dirty ? "Unsaved changes" : "Saved";
-    stateLabel.className = `editor-state${dirty ? " is-dirty" : ""}`;
-    byId("save-button").disabled = !dirty || files.saving;
-    document.title = `${dirty ? "● " : ""}${baseName(files.open.path)} · Psydcar`;
-    for (const value of [files.editor.language, files.open.newline === "\r\n" ? "CRLF" : "LF", "UTF-8", formatBytes(files.open.size), `Modified ${relative(files.open.modified_at)}`]) {
-      add(status, "span", "", value);
-    }
-  }
-
-  function formatBytes(value) {
-    if (value < 1024) return `${value} B`;
-    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-    return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  }
-
-  async function saveFile({ overwrite = false } = {}) {
-    if (!files.open || files.saving) return false;
-    if (!isDirty() && !overwrite) return true;
-    if (files.conflict && !overwrite) { renderConflict(); return false; }
-    const open = files.open;
-    const doc = files.editor.snapshot();
-    files.saving = true;
-    renderEditorState();
-    try {
-      if (overwrite && files.conflict?.deleted) {
-        await request(filesApi(), { method: "POST", body: JSON.stringify({ path: open.path, type: "file" }) });
-        files.conflict.version = (await request(`${filesApi("file")}?path=${encodeURIComponent(open.path)}`)).version;
-      }
-      const version = overwrite && files.conflict ? files.conflict.version : open.version;
-      const result = await request(filesApi("file"), {
-        method: "PUT",
-        body: JSON.stringify({ path: open.path, content: doc.toString(), version, newline: open.newline, bom: open.bom }),
-      });
-      if (files.open !== open) return true;
-      Object.assign(open, { version: result.version, size: result.size, mtime_ns: result.mtime_ns, modified_at: result.modified_at });
-      files.editor.markSaved(doc);
-      files.conflict = null;
-      renderConflict();
-      return true;
-    } catch (error) {
-      if (error.status === 409 && files.open === open) {
-        files.conflict = { version: error.payload.version, deleted: error.payload.version === null };
-        renderConflict();
-      } else {
-        message(error.message, true);
-      }
-      return false;
+      message(error.message, true);
     } finally {
-      files.saving = false;
-      renderEditorState();
-    }
-  }
-
-  function renderConflict() {
-    const box = byId("editor-conflict");
-    const conflict = files.conflict;
-    box.hidden = !conflict;
-    if (!conflict) return;
-    const name = baseName(files.open.path);
-    byId("conflict-title").textContent = conflict.deleted ? `${name} was moved or deleted on disk` : `${name} changed on disk`;
-    byId("conflict-text").textContent = conflict.deleted
-      ? "Your edits are still here. Recreate the file with your version, or close it."
-      : "Another app changed this file while you were editing. Reload to see the new version and lose your edits, or keep your version and overwrite the file.";
-    byId("conflict-reload-button").textContent = conflict.deleted ? "Close file" : "Reload from disk";
-    byId("conflict-keep-button").textContent = conflict.deleted ? "Recreate with my version" : "Keep my version";
-  }
-
-  // Compare the open file with the latest listing, and react to changes made outside the dashboard.
-  async function checkOpenFile() {
-    const open = files.open;
-    if (!open || files.saving) return;
-    const entry = files.entries.find((item) => item.path === open.path && item.type === "file");
-    if (!entry && open.image) {
-      // An image has no edits to keep, so close it when it's moved or deleted elsewhere.
-      files.routeHash = filesHash(files.sidecarId);
-      history.replaceState(null, "", files.routeHash);
-      closeFile();
-      renderWorkspace();
-      message(`${baseName(open.path)} was moved or deleted on disk.`);
-      return;
-    }
-    if (!entry) {
-      if (!files.conflict) { files.conflict = { version: null, deleted: true }; renderConflict(); }
-      return;
-    }
-    if (files.conflict?.deleted) { files.conflict = null; renderConflict(); }
-    if (entry.mtime_ns === open.mtime_ns && entry.size === open.size) return;
-    if (open.image) {
-      Object.assign(open, { mtime_ns: entry.mtime_ns, size: entry.size });
-      const image = byId("editor-surface").querySelector(".image-viewer-img");
-      if (image) image.src = imageUrl(open.path, entry.mtime_ns);
-      renderEditorState();
-      return;
-    }
-    try {
-      const latest = await request(`${filesApi("file")}?path=${encodeURIComponent(open.path)}`);
-      if (files.open !== open || files.saving) return;
-      if (latest.version === open.version) {
-        Object.assign(open, { mtime_ns: latest.mtime_ns, size: latest.size, modified_at: latest.modified_at });
-        return;
+      model.savingRecord = false;
+      if (model.selectedId === sidecar.id) {
+        renderDetail();
+        document.querySelector('[data-focus-key="detail:git-record"]')?.focus({ preventScroll: true });
       }
-      if (isDirty()) {
-        files.conflict = { version: latest.version, deleted: false };
-        renderConflict();
-        return;
-      }
-      files.open = latest;
-      files.conflict = null;
-      files.editor.load(latest.content);
-      renderWorkspace();
-      message(`Reloaded ${baseName(latest.path)} because it changed on disk.`);
-    } catch { /* The next listing retries. */ }
-  }
-
-  async function reloadFromDisk() {
-    if (!files.open) return;
-    if (files.conflict?.deleted) {
-      files.editor.markSaved();
-      location.hash = filesHash(files.sidecarId);
-      return;
     }
-    try {
-      const latest = await request(`${filesApi("file")}?path=${encodeURIComponent(files.open.path)}`);
-      files.open = latest;
-      files.conflict = null;
-      files.editor.load(latest.content);
-      renderWorkspace();
-      files.editor.focus();
-    } catch (error) { message(error.message, true); }
   }
 
-  // Files workspace: create, move, delete
-
-  function openFileCreate(type, folder = "") {
-    if (folder === "" && files.open) folder = parentOf(files.open.path);
-    const form = byId("file-create-form");
-    form.dataset.type = type;
-    byId("file-create-title").textContent = type === "folder" ? "New folder" : "New file";
-    byId("file-create-submit").textContent = type === "folder" ? "Create folder" : "Create file";
-    byId("file-create-hint").textContent = type === "folder"
-      ? "A path inside this sidecar's folder. Use / to nest folders."
-      : "Use a text extension Psydcar indexes, such as .md, .txt, or .py. Missing folders are created.";
-    const prefix = folder ? `${folder}/` : "";
-    const input = byId("file-create-path");
-    input.value = type === "folder" ? prefix : `${prefix}untitled.md`;
-    input.placeholder = type === "folder" ? "notes/drafts" : "notes/ideas.md";
-    formError("file-create-error", "", input);
-    byId("file-create-dialog").showModal();
-    input.focus();
-    // Select the editable part: the name without its extension.
-    const start = prefix.length;
-    const end = type === "folder" ? input.value.length : input.value.lastIndexOf(".");
-    input.setSelectionRange(start, end > start ? end : input.value.length);
-  }
-
-  function openFileMove(node) {
-    const form = byId("file-move-form");
-    form.dataset.path = node.path;
-    form.dataset.type = node.type;
-    byId("file-move-title").textContent = node.type === "folder" ? "Rename or move folder" : "Rename or move file";
-    const input = byId("file-move-path");
-    input.value = node.path;
-    formError("file-move-error", "", input);
-    byId("file-move-dialog").showModal();
-    input.focus();
-    const start = node.path.lastIndexOf("/") + 1;
-    const dot = node.type === "file" ? node.path.lastIndexOf(".") : -1;
-    input.setSelectionRange(start, dot > start ? dot : node.path.length);
-  }
-
-  function openFileDelete(node) {
-    const folder = node.type === "folder";
-    const hasChildren = folder && files.entries.some((entry) => entry.path.startsWith(`${node.path}/`));
-    const form = byId("file-delete-form");
-    form.dataset.path = node.path;
-    byId("file-delete-title").textContent = folder ? "Delete folder" : "Delete file";
-    const text = byId("file-delete-text");
-    text.replaceChildren();
-    if (hasChildren) {
-      text.append(`${node.path} isn't empty. Move or delete what's inside it first. Psydcar only deletes empty folders.`);
+  function approvalMessage(result) {
+    const notices = [result.commit_notice, result.index_notice].filter(Boolean);
+    let text;
+    if (result.commit_id) {
+      text = `Approved. ${result.path} was saved and recorded as commit ${result.commit_id.slice(0, 7)} on ${result.commit_branch}.`;
+    } else if (result.git_record) {
+      text = "Approved.";
     } else {
-      text.append(`This permanently deletes `);
-      add(text, "strong", "mono", node.path);
-      text.append(` from your folder. It doesn't go to the Trash and can't be undone.`);
+      text = notices.length ? `Approved and saved ${result.path}.` : `Approved. ${result.path} was saved and is searchable now.`;
     }
-    byId("file-delete-submit").hidden = hasChildren;
-    byId("file-delete-submit").textContent = folder ? "Delete folder" : "Delete file";
-    formError("file-delete-error", "");
-    byId("file-delete-dialog").showModal();
-    (hasChildren ? byId("file-delete-dialog").querySelector("[data-close]") : byId("file-delete-submit")).focus();
+    return { text: [text, ...notices].join(" "), error: notices.length > 0 };
+  }
+
+  // Review dialog
+
+  function diffTable(target, diff) {
+    const table = add(target, "table", "diff");
+    const body = add(table, "tbody");
+    let oldLine = 0;
+    let newLine = 0;
+    let added = 0;
+    let removed = 0;
+    for (const line of diff.split("\n")) {
+      if (line === "" || line.startsWith("--- ") || line.startsWith("+++ ")) continue;
+      const row = add(body, "tr");
+      const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (hunk) {
+        oldLine = Number(hunk[1]);
+        newLine = Number(hunk[2]);
+        row.className = "diff-hunk";
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-code", line);
+        continue;
+      }
+      if (line.startsWith("\\")) {
+        row.className = "diff-note";
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-num");
+        add(row, "td", "diff-code", line.slice(2));
+        continue;
+      }
+      const sign = line[0];
+      row.className = sign === "+" ? "diff-add" : sign === "-" ? "diff-del" : "";
+      add(row, "td", "diff-num", sign === "+" ? "" : oldLine++);
+      add(row, "td", "diff-num", sign === "-" ? "" : newLine++);
+      const code = add(row, "td", "diff-code");
+      add(code, "span", "diff-sign", sign === " " ? " " : sign).setAttribute("aria-label", sign === "+" ? "Added" : sign === "-" ? "Removed" : "Unchanged");
+      code.append(document.createTextNode(line.slice(1)));
+      if (sign === "+") added++;
+      if (sign === "-") removed++;
+    }
+    return { added, removed };
+  }
+
+  function reviewQueue() {
+    return model.proposals.sidecarId === model.review?.sidecarId ? model.proposals.pending.map((item) => item.id) : [];
+  }
+
+  function renderReviewNav() {
+    const queue = reviewQueue();
+    const index = queue.indexOf(model.review?.proposalId);
+    byId("review-position").textContent = index >= 0 && queue.length > 1 ? `${index + 1} of ${queue.length}` : "";
+    byId("review-prev").hidden = byId("review-next").hidden = queue.length < 2 || index < 0;
+    byId("review-prev").disabled = index <= 0;
+    byId("review-next").disabled = index < 0 || index >= queue.length - 1;
+  }
+
+  function setReviewBusy(busy) {
+    const detail = model.review?.detail;
+    const pending = detail && detail.status === "pending";
+    byId("review-approve").disabled = busy || !pending || detail.stale;
+    byId("review-reject").disabled = busy || !pending;
+  }
+
+  function renderReview() {
+    const target = byId("review-body");
+    target.replaceChildren();
+    renderReviewNav();
+    const review = model.review;
+    const detail = review?.detail;
+    if (!detail) {
+      if (review?.loadError) flash(target, "danger", "This proposal could not be opened", { text: review.loadError });
+      else add(target, "p", "review-loading", "Loading proposal…");
+      setReviewBusy(true);
+      return;
+    }
+    const sidecar = model.sidecars.find((item) => item.id === review.sidecarId);
+    const head = add(target, "div", "review-head");
+    const meta = add(head, "div", "review-byline");
+    meta.append(icon("bot"));
+    const byline = add(meta, "span");
+    add(byline, "strong", "proposal-agent", detail.agent_name);
+    byline.append(document.createTextNode(` proposed an edit${sidecar ? ` in ${sidecar.name}` : ""} ${ago(detail.created_at)}`));
+    byline.title = date(detail.created_at);
+    add(head, "p", "review-reason", detail.summary);
+    const record = model.proposals.sidecarId === review.sidecarId ? model.proposals.gitRecord : null;
+    if (detail.status === "pending" && !detail.stale && record?.enabled && record.available) {
+      const note = add(head, "p", "review-commit");
+      note.append(icon("git-commit-horizontal"));
+      add(note, "span", "", `Approving also records a commit on ${branchText(record)}.`);
+    }
+
+    if (detail.status !== "pending") {
+      flash(target, "info", `This proposal was ${detail.status}`, { text: detail.decided_at ? `Decided ${ago(detail.decided_at)}. Nothing is left to review.` : "" });
+    } else if (review.error) {
+      flash(target, "danger", review.error.title, { text: review.error.text });
+    } else if (detail.stale) {
+      flash(target, "warning", "Out of date", { text: `${detail.stale_message} Approving is unavailable, but you can reject it to clear it from the queue.` });
+    }
+
+    const block = add(target, "div", "code-block review-diff");
+    const header = add(block, "div", "code-block-header");
+    const file = add(header, "span", "review-file", detail.path);
+    file.title = detail.path;
+    const stats = add(header, "span", "review-stats");
+    if (detail.diff) {
+      const scroller = add(block, "div", "diff-scroll");
+      scroller.tabIndex = 0;
+      scroller.setAttribute("role", "region");
+      scroller.setAttribute("aria-label", `Changes to ${detail.path}`);
+      const { added, removed } = diffTable(scroller, detail.diff);
+      add(stats, "span", "change-added-text", `+${count(added)}`);
+      add(stats, "span", "change-removed-text", `−${count(removed)}`);
+    } else {
+      add(block, "p", "review-kept", "Psydcar keeps the proposed text only until a decision.");
+    }
+    setReviewBusy(false);
+  }
+
+  async function showProposal(proposalId) {
+    const review = model.review;
+    if (!review) return;
+    review.proposalId = proposalId;
+    review.detail = null;
+    review.error = null;
+    review.loadError = null;
+    renderReview();
+    try {
+      const detail = await request(`/api/sidecars/${review.sidecarId}/proposals/${proposalId}`);
+      if (model.review !== review || review.proposalId !== proposalId) return;
+      review.detail = detail;
+    } catch (error) {
+      if (model.review !== review || review.proposalId !== proposalId) return;
+      review.loadError = error.message;
+    }
+    renderReview();
+    byId("review-body").querySelector(".diff-scroll")?.focus({ preventScroll: true });
+  }
+
+  async function openReview(sidecarId, proposalId) {
+    if (model.proposals.sidecarId !== sidecarId || !model.proposals.loaded) {
+      await loadProposals(sidecarId, `${sidecarId}:${model.snapshotKey}`);
+    }
+    const target = proposalId || model.proposals.pending[0]?.id;
+    if (!target) { message("No edits are waiting for review in this sidecar."); return; }
+    model.review = { sidecarId, proposalId: target, detail: null };
+    const dialog = byId("review-dialog");
+    if (!dialog.open) dialog.showModal();
+    await showProposal(target);
+  }
+
+  async function decide(decision) {
+    const review = model.review;
+    const detail = review?.detail;
+    if (!detail) return;
+    const queue = reviewQueue();
+    const position = queue.indexOf(detail.id);
+    setReviewBusy(true);
+    review.error = null;
+    try {
+      const result = await request(`/api/sidecars/${review.sidecarId}/proposals/${detail.id}`, {
+        method: "POST", body: JSON.stringify({ decision }),
+      });
+      if (decision === "rejected") message(`Rejected. ${result.path} was not changed.`);
+      else { const outcome = approvalMessage(result); message(outcome.text, outcome.error); }
+      await refresh(false, true);
+      await loadProposals(review.sidecarId, `${review.sidecarId}:${model.snapshotKey}`);
+      if (model.review !== review) return;
+      const remaining = reviewQueue();
+      if (!remaining.length) { byId("review-dialog").close(); return; }
+      await showProposal(remaining[Math.min(Math.max(position, 0), remaining.length - 1)]);
+    } catch (error) {
+      if (model.review !== review) return;
+      if (error.status === 409) {
+        detail.stale = true;
+        detail.stale_message = error.message;
+        review.error = { title: "This edit can't be approved", text: `${error.message} The file was not changed.` };
+      } else {
+        review.error = { title: decision === "approved" ? "Approval failed" : "Rejection failed", text: error.message };
+      }
+      renderReview();
+    }
+  }
+
+  function startReview() {
+    const sidecar = visibleSidecars().find((item) => item.pending_proposals) || model.sidecars.find((item) => item.pending_proposals);
+    if (!sidecar) return;
+    if (model.selectedId !== sidecar.id) select(sidecar.id, false);
+    openReview(sidecar.id);
   }
 
   // Events
@@ -1426,7 +1029,21 @@
   document.querySelectorAll("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   }));
-  byId("toast").addEventListener("click", () => { byId("toast").hidden = true; });
+  byId("toast").addEventListener("click", hideToast);
+  byId("review-callout-button").addEventListener("click", startReview);
+  byId("review-approve").addEventListener("click", () => decide("approved"));
+  byId("review-reject").addEventListener("click", () => decide("rejected"));
+  byId("review-prev").addEventListener("click", () => {
+    const queue = reviewQueue();
+    const index = queue.indexOf(model.review?.proposalId);
+    if (index > 0) showProposal(queue[index - 1]);
+  });
+  byId("review-next").addEventListener("click", () => {
+    const queue = reviewQueue();
+    const index = queue.indexOf(model.review?.proposalId);
+    if (index >= 0 && index < queue.length - 1) showProposal(queue[index + 1]);
+  });
+  byId("review-dialog").addEventListener("close", () => { model.review = null; });
 
   byId("provider-form").addEventListener("input", () => { byId("provider-test-result").hidden = true; formError("provider-error", ""); });
   byId("connection-form").addEventListener("input", () => { byId("connection-result").hidden = true; model.connectionPreview = null; formError("connection-error", ""); });
@@ -1479,7 +1096,9 @@
   byId("connection-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = byId("connection-name").value.trim();
-    const sidecarIds = Array.from(byId("connection-sidecars").querySelectorAll("input:checked"), (input) => input.value);
+    const picker = byId("connection-sidecars");
+    const sidecarIds = Array.from(picker.querySelectorAll('input[name="sidecar-id"]:checked'), (input) => input.value);
+    const proposalIds = Array.from(picker.querySelectorAll('input[name="proposal-id"]:checked'), (input) => input.value);
     if (!name) { formError("connection-error", "Enter a server name.", byId("connection-name")); byId("connection-name").focus(); return; }
     if (!sidecarIds.length) { formError("connection-error", "Select at least one sidecar."); return; }
     const submit = event.target.querySelector('[type="submit"]');
@@ -1487,10 +1106,14 @@
     byId("connection-result").hidden = true;
     model.connectionPreview = null;
     try {
-      const preview = await request("/api/connections/preview", { method: "POST", body: JSON.stringify({ name, sidecar_ids: sidecarIds }) });
+      const preview = await request("/api/connections/preview", {
+        method: "POST", body: JSON.stringify({ name, sidecar_ids: sidecarIds, proposal_ids: proposalIds }),
+      });
       model.connectionPreview = preview;
       byId("result-name").textContent = preview.name;
       byId("result-selection").textContent = `Limited to ${preview.selected.map((item) => item.name).join(", ")}.`;
+      const proposalNames = preview.selected.filter((item) => proposalIds.includes(item.id)).map((item) => item.name);
+      if (proposalNames.length) byId("result-selection").textContent += ` Proposals allowed for ${proposalNames.join(", ")}.`;
       highlightJson(byId("connection-json"), preview.config);
       byId("result-footnote").textContent = `Upgrading Psydcar doesn't break this entry. If you remove a selected sidecar, the server won't start until you generate a new entry.${model.provider.api_key_env ? ` For embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
       byId("connection-result").hidden = false;
@@ -1553,126 +1176,6 @@
     finally { submit.disabled = false; }
   });
 
-  byId("new-file-button").addEventListener("click", () => openFileCreate("file"));
-  byId("empty-new-file-button").addEventListener("click", () => openFileCreate("file"));
-  byId("new-folder-button").addEventListener("click", () => openFileCreate("folder"));
-  byId("reload-tree-button").addEventListener("click", () => loadTree());
-  byId("files-toggle-button").addEventListener("click", toggleSidebar);
-  byId("file-drawer-backdrop").addEventListener("click", () => closeDrawer(true));
-  byId("file-pane").addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && files.drawerOpen) { event.preventDefault(); closeDrawer(true); }
-  });
-  narrow.addEventListener("change", renderSidebar);
-  byId("file-filter").addEventListener("input", (event) => { files.filter = event.target.value; renderTree(); syncTreeFocus(); });
-  byId("save-button").addEventListener("click", () => saveFile());
-  byId("save-shortcut").textContent = isMac ? "⌘S" : "Ctrl+S";
-  byId("conflict-reload-button").addEventListener("click", reloadFromDisk);
-  byId("conflict-keep-button").addEventListener("click", () => saveFile({ overwrite: true }));
-  byId("preview-toggle").addEventListener("click", (event) => {
-    const target = event.target.closest("button[data-mode]");
-    if (!target || !files.editor) return;
-    files.mode = target.dataset.mode;
-    writeSetting("psydcar.preview", { live: "on", reading: "reading", source: "off" }[files.mode]);
-    files.editor.setMode(files.mode);
-    renderWorkspace();
-    // Focusing a rendered view would reveal the syntax at the cursor, so only Source takes focus.
-    if (files.mode === "source") files.editor.focus();
-  });
-  byId("outline-button").addEventListener("click", () => toggleOutline(byId("outline-pane").hidden));
-  byId("outline-close-button").addEventListener("click", () => { toggleOutline(false); byId("outline-button").focus(); });
-  byId("outline-list").addEventListener("click", (event) => {
-    const button = event.target.closest(".outline-link");
-    const heading = button && files.outline?.headings[Number(button.dataset.index)];
-    if (!heading || !files.editor) return;
-    files.editor.revealPosition(heading.from);
-    if (narrow.matches) { toggleOutline(false); files.editor.focus(); }
-  });
-  byId("outline-pane").addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && narrow.matches) { event.preventDefault(); toggleOutline(false); byId("outline-button").focus(); }
-  });
-  narrow.addEventListener("change", renderOutlinePane);
-  byId("header-sidecars").addEventListener("click", (event) => {
-    if (!parseRoute()) return;
-    event.preventDefault();
-    location.hash = "";
-  });
-
-  byId("file-create-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const type = event.target.dataset.type;
-    const input = byId("file-create-path");
-    const path = input.value.trim().replace(/^\/+|\/+$/g, "");
-    if (!path) { formError("file-create-error", "Enter a path.", input); return; }
-    const submit = byId("file-create-submit");
-    submit.disabled = true;
-    try {
-      const result = await request(filesApi(), { method: "POST", body: JSON.stringify({ path, type }) });
-      byId("file-create-dialog").close();
-      expandTo(result.path);
-      if (type === "folder") files.expanded.add(result.path);
-      await loadTree();
-      if (type === "file") location.hash = filesHash(files.sidecarId, result.path);
-      else message(result.message);
-    } catch (error) { formError("file-create-error", error.message, input); }
-    finally { submit.disabled = false; }
-  });
-
-  byId("file-move-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const from = event.target.dataset.path;
-    const input = byId("file-move-path");
-    const to = input.value.trim().replace(/^\/+|\/+$/g, "");
-    if (!to) { formError("file-move-error", "Enter a path.", input); return; }
-    if (to === from) { byId("file-move-dialog").close(); return; }
-    const submit = event.target.querySelector('[type="submit"]');
-    submit.disabled = true;
-    try {
-      const result = await request(filesApi("files/move"), { method: "POST", body: JSON.stringify({ from, to }) });
-      byId("file-move-dialog").close();
-      if (files.expanded.delete(from)) files.expanded.add(result.path);
-      expandTo(result.path);
-      // Keep the open file (and its unsaved edits) when it or a folder above it moves.
-      if (files.open && (files.open.path === from || files.open.path.startsWith(`${from}/`))) {
-        files.open.path = result.path + files.open.path.slice(from.length);
-        files.routeHash = filesHash(files.sidecarId, files.open.path);
-        history.replaceState(null, "", files.routeHash);
-        const image = files.open.image && byId("editor-surface").querySelector(".image-viewer-img");
-        if (image) image.src = imageUrl(files.open.path, files.open.mtime_ns);
-        renderWorkspace();
-      }
-      await loadTree();
-      message(result.message);
-    } catch (error) { formError("file-move-error", error.message, input); }
-    finally { submit.disabled = false; }
-  });
-
-  byId("file-delete-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const path = event.target.dataset.path;
-    const submit = byId("file-delete-submit");
-    submit.disabled = true;
-    try {
-      const result = await request(filesApi(), { method: "DELETE", body: JSON.stringify({ path, confirm_path: path }) });
-      byId("file-delete-dialog").close();
-      if (files.open?.path === path) {
-        files.editor?.markSaved();
-        files.routeHash = filesHash(files.sidecarId);
-        history.replaceState(null, "", files.routeHash);
-        closeFile();
-      }
-      files.expanded.delete(path);
-      await loadTree();
-      renderWorkspace();
-      message(result.message);
-    } catch (error) { formError("file-delete-error", error.message); }
-    finally { submit.disabled = false; }
-  });
-
-  window.addEventListener("hashchange", route);
-  window.addEventListener("beforeunload", (event) => {
-    if (isDirty()) { event.preventDefault(); event.returnValue = ""; }
-  });
-
-  refresh(true).then(route);
+  refresh(true);
   setInterval(() => { if (!document.hidden) refresh(); }, 2500);
 })();

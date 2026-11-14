@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
-from .evidence import EvidenceStore, IndexReport, source_snapshot
-from .store import SidecarStore, StoreError
+from .evidence import EvidenceStore, IndexReport, UpdateSuperseded
+from .registry import Sidecar, SidecarStore, StoreError
+from .source_scope import source_snapshot
 
 
 @dataclass(frozen=True)
@@ -50,41 +51,53 @@ class SidecarWatcher:
         startup = not self._started
         full = force or startup or now - self._last_reconcile >= self.reconcile_interval
         events = []
+        self.evidence.cleanup()
         sidecars = self.sidecars.list()
         active_ids = {sidecar.id for sidecar in sidecars}
         with self._snapshot_lock:
             for retired in self._snapshots.keys() - active_ids:
                 del self._snapshots[retired]
         for sidecar in sidecars:
-            snapshot = source_snapshot(sidecar)
-            with self._snapshot_lock:
-                previous = self._snapshots.get(sidecar.id)
-            if previous is not None and snapshot == previous and not full:
-                continue
-            reason = (
-                "startup" if startup else "new_sidecar" if previous is None else
-                "source_changed" if snapshot != previous else "periodic"
-            )
-            try:
-                if self.update_lock is None:
-                    report = self.evidence.update(sidecar.id)
-                else:
-                    with self.update_lock:
-                        report = self.evidence.update(sidecar.id)
-            except StoreError as exc:
-                events.append(WatchEvent(sidecar.id, sidecar.name, reason, error=str(exc)))
-            else:
-                events.append(WatchEvent(sidecar.id, sidecar.name, reason, report=report))
-            # Keep the pre-update fingerprint. A change during processing then
-            # differs on the next pass and receives another complete update.
-            with self._snapshot_lock:
-                self._snapshots[sidecar.id] = snapshot
+            event = self._follow(sidecar, full, startup)
+            if event is not None:
+                events.append(event)
         self._started = True
         if full:
             self._last_reconcile = time.monotonic()
         return events
 
-    def source_changed(self, sidecar) -> bool:
+    def catch_up(self, sidecar_id: str) -> WatchEvent | None:
+        """Update one sidecar now if its folder changed since the last check."""
+        return self._follow(self.sidecars.get(sidecar_id, exact_id=True), False, False)
+
+    def _follow(self, sidecar: Sidecar, full: bool, startup: bool) -> WatchEvent | None:
+        snapshot = source_snapshot(sidecar)
+        with self._snapshot_lock:
+            previous = self._snapshots.get(sidecar.id)
+        if previous is not None and snapshot == previous and not full:
+            return None
+        reason = "startup" if startup else "new_sidecar" if previous is None else "source_changed" if snapshot != previous else "periodic"
+        event: WatchEvent | None
+        try:
+            if self.update_lock is None:
+                report = self.evidence.update(sidecar.id)
+            else:
+                with self.update_lock:
+                    report = self.evidence.update(sidecar.id)
+        except UpdateSuperseded:
+            # Another process started a newer update, and it indexes everything this one would have.
+            event = None
+        except StoreError as exc:
+            event = WatchEvent(sidecar.id, sidecar.name, reason, error=str(exc))
+        else:
+            event = WatchEvent(sidecar.id, sidecar.name, reason, report=report)
+        # Keep the pre-update fingerprint. A change during processing then
+        # differs on the next pass and receives another complete update.
+        with self._snapshot_lock:
+            self._snapshots[sidecar.id] = snapshot
+        return event
+
+    def source_changed(self, sidecar: Sidecar) -> bool:
         """Report scoped source drift between watcher passes."""
         with self._snapshot_lock:
             previous = self._snapshots.get(sidecar.id)

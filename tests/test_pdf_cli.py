@@ -1,23 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import hashlib
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 
-try:
-    from pypdf import PdfReader, PdfWriter
-    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
-except ImportError:
-    PdfReader = PdfWriter = None
-from psydcar.store import SidecarStore
-
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,19 +21,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def write_pdf(path: Path, page_texts: list[str | None]) -> None:
     """Create a small PDF with real extractable text and optional blank pages."""
     writer = PdfWriter()
-    font = DictionaryObject({
-        NameObject("/Type"): NameObject("/Font"),
-        NameObject("/Subtype"): NameObject("/Type1"),
-        NameObject("/BaseFont"): NameObject("/Helvetica"),
-    })
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
     font_ref = writer._add_object(font)
     for text in page_texts:
         page = writer.add_blank_page(width=612, height=792)
         if text is None:
             continue
-        page[NameObject("/Resources")] = DictionaryObject({
-            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})
-        })
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})})
         content = DecodedStreamObject()
         content.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii"))
         page[NameObject("/Contents")] = writer._add_object(content)
@@ -46,12 +42,11 @@ def write_pdf(path: Path, page_texts: list[str | None]) -> None:
     with path.open("rb") as source:
         reader = PdfReader(source)
         self_check = [page.extract_text() for page in reader.pages]
-    for expected, actual in zip(page_texts, self_check):
+    for expected, actual in zip(page_texts, self_check, strict=True):
         if expected is not None and expected not in actual:
             raise AssertionError("PDF test fixture did not contain extractable text")
 
 
-@unittest.skipUnless(PdfReader is not None, "pypdf is not installed in this Python environment")
 class PdfCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -152,13 +147,23 @@ class PdfCliTests(unittest.TestCase):
         page_two = json.loads(self.cli("search", "--sidecar", "Library", "page two").stdout)
         self.assertEqual(page_two[0]["location"], {"kind": "page", "page": 2})
 
-    def test_existing_text_index_survives_pdf_schema_upgrade(self) -> None:
-        sidecar = SidecarStore(self.store / "psydcar.sqlite3").get("Library")
+    def test_existing_text_evidence_survives_database_split(self) -> None:
+        self.store = self.root / "legacy-store"
+        self.store.mkdir()
+        sidecar_id = str(uuid.uuid4())
         text_path = self.source / "notes.md"
         old_id = str(uuid.uuid4())
-        with sqlite3.connect(self.store / "psydcar.sqlite3") as connection:
+        with closing(sqlite3.connect(self.store / "psydcar.sqlite3")) as connection, connection:
             connection.executescript(
-                """CREATE TABLE documents (
+                """CREATE TABLE sidecars (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    source_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE documents (
                     id INTEGER PRIMARY KEY, sidecar_id TEXT NOT NULL REFERENCES sidecars(id) ON DELETE CASCADE,
                     relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, indexed_at TEXT NOT NULL,
                     UNIQUE(sidecar_id, relative_path)
@@ -169,22 +174,24 @@ class PdfCliTests(unittest.TestCase):
                 );
                 CREATE VIRTUAL TABLE passages_fts USING fts5(evidence_id UNINDEXED, context, tokenize='unicode61');"""
             )
+            connection.execute(
+                "INSERT INTO sidecars VALUES (?, 'Library', ?, 'indexed', ?, ?)",
+                (sidecar_id, str(self.source), "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            )
             document = connection.execute(
                 "INSERT INTO documents (sidecar_id, relative_path, sha256, indexed_at) VALUES (?, ?, ?, ?)",
-                (sidecar.id, "notes.md", hashlib.sha256(text_path.read_bytes()).hexdigest(), "2026-01-01T00:00:00+00:00"),
+                (sidecar_id, "notes.md", hashlib.sha256(text_path.read_bytes()).hexdigest(), "2026-01-01T00:00:00+00:00"),
             )
             connection.execute(
                 "INSERT INTO passages (id, document_id, start_line, end_line, context) VALUES (?, ?, ?, ?, ?)",
                 (old_id, document.lastrowid, 1, 1, "Text archive nebula"),
             )
-            connection.execute(
-                "INSERT INTO passages_fts (evidence_id, context) VALUES (?, ?)", (old_id, "Text archive nebula")
-            )
+            connection.execute("INSERT INTO passages_fts (evidence_id, context) VALUES (?, ?)", (old_id, "Text archive nebula"))
         hits = json.loads(self.cli("search", "--sidecar", "Library", "nebula").stdout)
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["evidence_id"], old_id)
         self.assertEqual(hits[0]["location"], {"kind": "lines", "start": 1, "end": 1})
-        self.assertEqual(json.loads(self.cli("retrieve", "--sidecar", "Library", old_id).stdout)["freshness"], "current")
+        self.assertEqual(json.loads(self.cli("retrieve", "--sidecar", sidecar_id, old_id).stdout)["freshness"], "current")
 
 
 if __name__ == "__main__":

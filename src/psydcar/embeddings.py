@@ -12,12 +12,12 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
-from .store import SidecarStore, StoreError
-
+from .index_tables import mark_cleanup, open_search, open_state, remove_outdated
+from .registry import SidecarStore, StoreError
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -70,7 +70,7 @@ class ProviderConfig:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _validate_base_url(value: str, allow_insecure_http: bool) -> str:
@@ -106,55 +106,13 @@ def _validate_env(value: str | None) -> str | None:
 
 def _from_row(row: sqlite3.Row) -> ProviderConfig:
     return ProviderConfig(
-        base_url=row["base_url"], model=row["model"], api_key_env=row["api_key_env"],
-        allow_insecure_http=bool(row["allow_insecure_http"]), revision=row["revision"],
+        base_url=row["base_url"],
+        model=row["model"],
+        api_key_env=row["api_key_env"],
+        allow_insecure_http=bool(row["allow_insecure_http"]),
+        revision=row["revision"],
         configured_at=row["configured_at"],
     )
-
-
-def _config_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS embedding_provider (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            base_url TEXT NOT NULL,
-            model TEXT NOT NULL,
-            api_key_env TEXT,
-            allow_insecure_http INTEGER NOT NULL,
-            revision TEXT NOT NULL,
-            configured_at TEXT NOT NULL
-        )"""
-    )
-
-
-def _vector_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS passage_embeddings (
-            passage_id TEXT PRIMARY KEY REFERENCES passages(id) ON DELETE CASCADE,
-            provider_revision TEXT NOT NULL,
-            vector_json TEXT NOT NULL,
-            dimension INTEGER NOT NULL
-        )"""
-    )
-
-
-def _state_schema(connection: sqlite3.Connection) -> None:
-    connection.execute(
-        """CREATE TABLE IF NOT EXISTS sidecar_embedding_state (
-            sidecar_id TEXT PRIMARY KEY REFERENCES sidecars(id) ON DELETE CASCADE,
-            provider_revision TEXT NOT NULL,
-            status TEXT NOT NULL,
-            embedded_count INTEGER NOT NULL,
-            expected_count INTEGER NOT NULL,
-            message TEXT,
-            updated_at TEXT NOT NULL
-        )"""
-    )
-
-
-def _has_vectors_table(connection: sqlite3.Connection) -> bool:
-    return connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'passage_embeddings'"
-    ).fetchone() is not None
 
 
 class ProviderStore:
@@ -165,20 +123,22 @@ class ProviderStore:
 
     def get(self) -> ProviderConfig | None:
         try:
-            with self.sidecars._connect() as connection:
-                _config_schema(connection)
+            with open_state(self.sidecars) as connection:
                 row = connection.execute("SELECT * FROM embedding_provider WHERE id = 1").fetchone()
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect embedding provider: {exc}") from exc
         return _from_row(row) if row is not None else None
 
     @staticmethod
-    def validate(base_url: str, model: str, api_key_env: str | None = None,
-                 allow_insecure_http: bool = False) -> ProviderConfig:
+    def validate(base_url: str, model: str, api_key_env: str | None = None, allow_insecure_http: bool = False) -> ProviderConfig:
         """Validate a provider draft without changing the active configuration."""
         return ProviderConfig(
-            _validate_base_url(base_url, allow_insecure_http), _validate_model(model),
-            _validate_env(api_key_env), allow_insecure_http, "", "",
+            _validate_base_url(base_url, allow_insecure_http),
+            _validate_model(model),
+            _validate_env(api_key_env),
+            allow_insecure_http,
+            "",
+            "",
         )
 
     def set(self, base_url: str, model: str, api_key_env: str | None = None, allow_insecure_http: bool = False) -> ProviderConfig:
@@ -186,9 +146,7 @@ class ProviderStore:
         revision = str(uuid.uuid4())
         now = _now()
         try:
-            with self.sidecars._connect() as connection:
-                _config_schema(connection)
-                _state_schema(connection)
+            with open_state(self.sidecars) as connection:
                 connection.execute(
                     """INSERT INTO embedding_provider
                        (id, base_url, model, api_key_env, allow_insecure_http, revision, configured_at)
@@ -198,49 +156,38 @@ class ProviderStore:
                            revision=excluded.revision, configured_at=excluded.configured_at""",
                     (draft.base_url, draft.model, draft.api_key_env, int(draft.allow_insecure_http), revision, now),
                 )
-                if _has_vectors_table(connection):
-                    connection.execute("DELETE FROM passage_embeddings")
-                connection.execute(
-                    """INSERT INTO sidecar_embedding_state
-                       (sidecar_id, provider_revision, status, embedded_count, expected_count, message, updated_at)
-                       SELECT id, ?, 'pending', 0, 0, 'Reindex this sidecar to build embeddings.', ? FROM sidecars WHERE true
-                       ON CONFLICT(sidecar_id) DO UPDATE SET provider_revision=excluded.provider_revision,
-                           status='pending', embedded_count=0, expected_count=0,
-                           message=excluded.message, updated_at=excluded.updated_at""",
-                    (revision, now),
-                )
-                connection.execute("UPDATE sidecars SET status = 'embedding_pending' WHERE status IN ('indexed', 'embedding_error', 'embedding_pending')")
+                mark_cleanup(connection)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot save embedding provider: {exc}") from exc
+        remove_outdated(self.sidecars)
         return ProviderConfig(draft.base_url, draft.model, draft.api_key_env, draft.allow_insecure_http, revision, now)
 
     def clear(self) -> bool:
         try:
-            with self.sidecars._connect() as connection:
-                _config_schema(connection)
-                _state_schema(connection)
+            with open_state(self.sidecars) as connection:
                 existed = connection.execute("DELETE FROM embedding_provider WHERE id = 1").rowcount > 0
-                if _has_vectors_table(connection):
-                    connection.execute("DELETE FROM passage_embeddings")
-                connection.execute("DELETE FROM sidecar_embedding_state")
-                connection.execute("UPDATE sidecars SET status = 'indexed' WHERE status IN ('embedding_pending', 'embedding_error')")
+                mark_cleanup(connection)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot clear embedding provider: {exc}") from exc
+        remove_outdated(self.sidecars)
         return existed
 
     def sidecar_state(self, sidecar_id: str) -> dict[str, Any] | None:
+        provider = self.get()
+        if provider is None:
+            return None
         try:
-            with self.sidecars._connect() as connection:
-                _state_schema(connection)
+            with open_search(self.sidecars) as connection:
                 row = connection.execute(
-                    "SELECT status, embedded_count, expected_count, message FROM sidecar_embedding_state WHERE sidecar_id = ?",
-                    (sidecar_id,),
+                    """SELECT status, embedded_count, expected_count, message FROM sidecar_embedding_state
+                       WHERE sidecar_id = ? AND provider_revision = ?""",
+                    (sidecar_id, provider.revision),
                 ).fetchone()
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot inspect embedding status: {exc}") from exc
         if row is None:
             return None
-        return {key: row[key] for key in ("status", "embedded_count", "expected_count", "message")}
+        return dict(row)
 
 
 def normalize_vector(values: Any) -> tuple[float, ...]:

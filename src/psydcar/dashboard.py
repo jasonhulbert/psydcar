@@ -313,7 +313,15 @@ class DashboardServer(ThreadingHTTPServer):
                 if config is None or config.revision != scope["config"].revision:
                     raise StoreError("The OCR provider changed. Review the scope and destination again.")
                 # Ensure text-layer PDF documents exist before attaching OCR passages.
-                self.evidence.update(sidecar_id)
+                while True:
+                    with self._pending_lock:
+                        if sidecar_id in self._ocr_cancelled:
+                            return
+                    try:
+                        self.evidence.update(sidecar_id)
+                        break
+                    except UpdateSuperseded:
+                        continue
                 config = self.vision_provider.get()
                 if config is None or config.revision != scope["config"].revision:
                     raise StoreError("The OCR provider changed. Review the scope and destination again.")

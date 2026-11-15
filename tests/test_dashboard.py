@@ -26,6 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from git_sandbox import git, use_sandbox
 from psydcar.dashboard import DashboardServer
+from psydcar.evidence import UpdateSuperseded
 from psydcar.proposal_files import ProposalFiles
 from psydcar.proposals import Proposals
 from psydcar.registry import SidecarStore
@@ -293,14 +294,23 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(len(gateway.requests), 3)
         status, review = self.http("GET", f"/api/sidecars/{sidecar_id}/ocr-scope")
         self.assertEqual((status, review["reconfirm"], review["full_pdf"]), (200, True, True))
-        self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/ocr", {"token": review["token"], "confirm": True})[0], 202)
-        self.wait_for(
-            lambda: (
-                not (self.entry(sidecar_id)["update"]["ocr"] or {}).get("provider_changed", True)
-                and (self.entry(sidecar_id)["update"]["ocr"] or {}).get("status") == "complete"
-            ),
-            "reconfirmed OCR did not finish",
-        )
+        original_update = self.server.evidence.update
+        updates = iter([False, True])
+
+        def update_during_watcher(reference: str):
+            if not next(updates, True):
+                raise UpdateSuperseded("A watcher update started.")
+            return original_update(reference)
+
+        with patch.object(self.server.evidence, "update", side_effect=update_during_watcher):
+            self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/ocr", {"token": review["token"], "confirm": True})[0], 202)
+            self.wait_for(
+                lambda: (
+                    not (self.entry(sidecar_id)["update"]["ocr"] or {}).get("provider_changed", True)
+                    and (self.entry(sidecar_id)["update"]["ocr"] or {}).get("status") == "complete"
+                ),
+                "reconfirmed OCR did not finish",
+            )
         self.assertEqual(len(gateway.requests), 4)
 
     def test_dashboard_can_stop_ocr_and_manage_another_sidecar_during_processing(self) -> None:

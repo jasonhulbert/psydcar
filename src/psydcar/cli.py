@@ -18,8 +18,10 @@ from .evidence import EvidenceStore, IndexedSidecar
 from .freshness import SidecarWatcher, WatchEvent
 from .git_record import GitRecord
 from .mcp_server import run_mcp
+from .ocr import ImageOCR, image_scope, pdf_scope, pdf_scope_details
 from .proposals import Proposals
 from .registry import SidecarStore, StoreError
+from .vision import VisionProviderStore
 
 
 def _display_status(status: str) -> str:
@@ -70,6 +72,12 @@ def _parser() -> argparse.ArgumentParser:
     update = actions.add_parser("update", help="Refresh added, changed, and deleted source files")
     update.add_argument("reference", help="Sidecar name or ID")
 
+    ocr = actions.add_parser("ocr", help="Review and enable OCR for one sidecar")
+    ocr.add_argument("reference", help="Sidecar name or ID")
+    ocr_mode = ocr.add_mutually_exclusive_group()
+    ocr_mode.add_argument("--full-pdf", action="store_true", help="Review and enable the separate full PDF scan option")
+    ocr_mode.add_argument("--off", action="store_true", help="Stop OCR for this sidecar; keep saved results")
+
     record = actions.add_parser("git-record", help="Show, or turn on or off, recording approvals as git commits")
     record.add_argument("reference", help="Sidecar name or ID")
     record.add_argument("state", nargs="?", choices=("on", "off"), help="Turn the record on or off (default: show it)")
@@ -99,6 +107,16 @@ def _parser() -> argparse.ArgumentParser:
     configure.add_argument("--allow-insecure-http", action="store_true", help="Allow remote HTTP without TLS")
     provider_actions.add_parser("show", help="Show provider settings without credential values")
     provider_actions.add_parser("clear", help="Remove provider settings and stored embeddings")
+
+    vision = commands.add_parser("ocr-provider", help="Configure and inspect the OCR vision provider")
+    vision_actions = vision.add_subparsers(dest="vision_action", required=True)
+    vision_set = vision_actions.add_parser("set", help="Configure an OpenAI-compatible vision endpoint")
+    vision_set.add_argument("--base-url", required=True, help="Base URL ending before /chat/completions")
+    vision_set.add_argument("--model", required=True, help="Vision model name")
+    vision_set.add_argument("--api-key-env", help="Environment variable containing the API key")
+    vision_set.add_argument("--allow-insecure-http", action="store_true", help="Allow remote HTTP without TLS")
+    vision_actions.add_parser("show", help="Show vision settings without credential values")
+    vision_actions.add_parser("clear", help="Remove vision provider settings")
 
     search = commands.add_parser("search", help="Search explicitly selected sidecars; output JSON evidence")
     search.add_argument("--sidecar", action="append", required=True, metavar="NAME_OR_ID", help="Select a sidecar; repeat to search several")
@@ -283,6 +301,7 @@ def _watch_event(event: WatchEvent) -> None:
         *report.skipped,
         *([report.provider_error] if report.provider_error else []),
         *(f"Removed source: {path}" for path in report.deleted_paths),
+        *(report.ocr["issues"] if report.ocr and report.ocr["status"] == "incomplete" else []),
     ):
         print(f"Needs attention: {issue}", file=sys.stderr, flush=True)
 
@@ -328,6 +347,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                     for issue in update_state["issues"]:
                         print(f"Needs attention: {issue}")
+                ocr = update_state["ocr"]
+                if ocr is None:
+                    print("OCR: Off")
+                else:
+                    print(
+                        f"OCR: {_display_status(ocr['status'])} ({ocr['completed']}/{ocr['total']} images and PDF pages; "
+                        f"{ocr['failed']} need attention)"
+                    )
+                    if ocr["provider_changed"]:
+                        print("OCR provider changed. Run 'sidecar ocr' to review the destination and confirm again.")
+                    if not ocr["pdf_enabled"]:
+                        print("PDF OCR: Off. Run 'sidecar ocr' to review and confirm expanded coverage.")
+                    else:
+                        print("PDF OCR coverage: " + ("All pages" if ocr["full_pdf_enabled"] else "Pages without searchable text"))
+                        if not ocr["full_pdf_enabled"]:
+                            print("Run 'sidecar ocr --full-pdf' to review full PDF scans.")
+                    if ocr["current_path"]:
+                        print(f"Processing: {ocr['current_path']}")
+                    for issue in ocr["issues"]:
+                        print(f"OCR needs attention: {issue}")
                 provider = ProviderStore(store)
                 state = provider.sidecar_state(sidecar.id)
                 if provider.get() is None:
@@ -347,6 +386,64 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.action == "remove":
                 sidecar = EvidenceStore(store).remove(args.reference)
                 print(f'Removed sidecar "{sidecar.name}" (ID: {sidecar.id}). Source files were not changed.')
+            elif args.action == "ocr":
+                sidecar = store.get(args.reference)
+                ocr_service = ImageOCR(store)
+                if args.off:
+                    ocr_service.disable(sidecar.id)
+                    print("OCR turned off for this sidecar. A request already in progress may finish. Saved OCR remains searchable.")
+                    return 0
+                config = VisionProviderStore(store).get()
+                if config is None:
+                    raise StoreError("Configure a vision provider with 'psydcar ocr-provider set' first.")
+                reconfirm = ocr_service.needs_confirmation(sidecar.id, config)
+                full_pdf = args.full_pdf or ocr_service.full_pdf_enabled(sidecar.id)
+                if args.full_pdf and not ocr_service.pdf_enabled(sidecar.id):
+                    raise StoreError("Enable default sidecar OCR before reviewing full PDF scans.")
+                if args.full_pdf and ocr_service.full_pdf_enabled(sidecar.id) and not reconfirm:
+                    raise StoreError("Full PDF scans are already enabled for this sidecar. Run a sidecar update to retry incomplete work.")
+                images = image_scope(sidecar)
+                if full_pdf:
+                    textless, searchable, scope_issues = pdf_scope_details(sidecar)
+                    pages = sorted(textless + searchable)
+                else:
+                    pages, scope_issues = pdf_scope(sidecar)
+                print(f'OCR scope for "{sidecar.name}": {len(images)} supported image files (PNG, JPEG, GIF, WebP; up to 20 MiB).')
+                if full_pdf:
+                    additional_label = "page" if len(searchable) == 1 else "pages"
+                    print(f"Full PDF scan: {len(pages)} total pages, including {len(searchable)} additional {additional_label} with searchable text.")
+                    print("Full scans can find text in images on pages that already have a text layer.")
+                else:
+                    print(f"PDF pages without searchable text: {len(pages)}.")
+                for issue in scope_issues:
+                    print(f"Scope needs attention: {issue}")
+                print(
+                    "Future updates and the watcher automatically process new or changed images and "
+                    f"{'all' if full_pdf else 'eligible'} PDF pages in this sidecar."
+                )
+                print(f"Provider destination: {config.base_url}\nModel: {config.model}")
+                print("Selected images and rendered PDF pages are sent to this endpoint. Hosted providers may charge for processing.")
+                print("The scope is an estimate, not a price. Unchanged saved OCR is reused.")
+                try:
+                    prompt = "Confirm the OCR provider" if reconfirm else "Enable full PDF scans" if full_pdf else "Enable and process OCR"
+                    answer = input(f"{prompt} for this sidecar? Type 'yes' to confirm: ")
+                except EOFError:
+                    answer = ""
+                if answer.strip().lower() != "yes":
+                    print("OCR was not started.")
+                    return 1
+                # Ensure the PDF text-layer documents exist before attaching OCR passages.
+                EvidenceStore(store).update(sidecar.id)
+                process = ocr_service.enable_full_and_process if full_pdf else ocr_service.enable_and_process
+                completed, reused, issues = process(sidecar, config, images, pages, scope_issues)
+                ocr_state = ocr_service.status(sidecar.id)
+                needs_attention = ocr_state["failed"] if ocr_state else len(issues)
+                print(f"OCR: {completed} processed, {reused} reused, {needs_attention} need attention.")
+                for issue in issues:
+                    print(f"OCR needs attention: {issue}", file=sys.stderr)
+                if issues:
+                    print("Available text remains searchable. Run a sidecar update to retry.", file=sys.stderr)
+                    return 1
             elif args.action in {"index", "update"}:
                 report = EvidenceStore(store).update(args.reference)
                 if args.action == "index":
@@ -358,6 +455,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print("Embeddings: Not configured; lexical index is available.")
                 else:
                     print(f"Embeddings: {report.embedding_status.capitalize()} ({report.embeddings}/{report.passages}).")
+                if report.ocr:
+                    ocr = report.ocr
+                    print(
+                        f"OCR: {_display_status(ocr['status'])} ({ocr['completed']}/{ocr['total']} images and PDF pages; "
+                        f"{ocr['failed']} need attention)."
+                    )
+                    for issue in ocr["issues"]:
+                        print(f"OCR needs attention: {issue}", file=sys.stderr)
                 if report.provider_error:
                     print(f"Embedding error: {report.provider_error}", file=sys.stderr)
                 for notice in report.pdf_page_notices:
@@ -372,7 +477,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print("Sidecar status: Source attention. Review removed sources in 'sidecar show'.")
                 if report.provider_error:
                     print("Embedding processing is incomplete; lexical evidence remains available.", file=sys.stderr)
-                if report.skipped or report.provider_error:
+                if report.skipped or report.provider_error or (report.ocr and report.ocr["status"] == "incomplete"):
                     return 1
         elif args.command == "proposal":
             return _proposal_command(store, args)
@@ -397,6 +502,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.provider_action == "clear":
                 provider.clear()
                 print("Embedding provider cleared. Lexical evidence remains available.")
+        elif args.command == "ocr-provider":
+            vision_provider = VisionProviderStore(store)
+            if args.vision_action == "set":
+                config = vision_provider.set(args.base_url, args.model, args.api_key_env, args.allow_insecure_http)
+                print(f"OCR vision provider configured.\nBase URL: {config.base_url}\nModel: {config.model}")
+                print(f"Credential: {config.api_key_env or 'None (gateway without authentication)'}")
+                print("Configuring a provider does not enable OCR for any sidecar or send files.")
+            elif args.vision_action == "show":
+                config = vision_provider.get()
+                if config is None:
+                    print("OCR vision provider: Not configured")
+                else:
+                    print(f"OCR vision provider: Configured\nBase URL: {config.base_url}\nModel: {config.model}")
+                    if config.api_key_env:
+                        print(f"Credential environment variable: {config.api_key_env}")
+                        print(f"Credential available: {'Yes' if config.credential_available else 'No'}")
+                    else:
+                        print("Credential: None (gateway without authentication)")
+                    print(f"Remote HTTP allowed: {'Yes' if config.allow_insecure_http else 'No'}")
+            else:
+                vision_provider.clear()
+                print("OCR vision provider cleared.")
         elif args.command == "search":
             evidence = EvidenceStore(store)
             results = evidence.search(args.sidecar, args.query, args.limit)
@@ -412,7 +539,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 events = watcher.step()
                 for event in events:
                     _watch_event(event)
-                return int(any(event.error or (event.report and (event.report.skipped or event.report.provider_error)) for event in events))
+                return int(
+                    any(
+                        event.error
+                        or (
+                            event.report
+                            and (
+                                event.report.skipped
+                                or event.report.provider_error
+                                or (event.report.ocr and event.report.ocr["status"] == "incomplete")
+                            )
+                        )
+                        for event in events
+                    )
+                )
             stop = threading.Event()
             prior_handler = signal.getsignal(signal.SIGTERM)
             signal.signal(signal.SIGTERM, lambda _signum, _frame: stop.set())

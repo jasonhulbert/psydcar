@@ -9,7 +9,7 @@
     watching: false, loading: false, toastTimer: null, provider: { configured: false },
     connectionPreview: null, snapshotKey: "", renderedAt: 0,
     proposals: { sidecarId: null, key: "", pending: [], reviewed: [], gitRecord: null, loaded: false, expanded: false },
-    review: null, savingRecord: false,
+    review: null, savingRecord: false, ocrReview: null,
   };
 
   // DOM helpers
@@ -101,8 +101,8 @@
   // Status
 
   function status(sidecar) {
-    if (sidecar.queued || sidecar.state === "pending") return { label: "Updating", tone: "info", group: "pending", spinner: true };
-    if (sidecar.state === "attention" || sidecar.error) return { label: "Needs attention", tone: "danger", group: "attention" };
+    if (sidecar.queued || sidecar.state === "pending" || sidecar.update.ocr?.status === "processing") return { label: "Updating", tone: "info", group: "pending", spinner: true };
+    if (sidecar.state === "attention" || sidecar.error || sidecar.update.ocr?.status === "incomplete" || sidecar.update.ocr?.provider_changed) return { label: "Needs attention", tone: "danger", group: "attention" };
     if (sidecar.freshness === "stale") return { label: "Stale", tone: "warning", group: "attention" };
     if (sidecar.state === "not_indexed") return { label: "Not indexed", tone: "neutral", group: "none" };
     return { label: "Current", tone: "success", group: "current" };
@@ -171,6 +171,7 @@
     model.snapshotKey = key;
     model.sidecars = snapshot.sidecars || [];
     model.provider = snapshot.provider || { configured: false };
+    model.visionProvider = snapshot.vision_provider || { configured: false };
     model.watching = Boolean(snapshot.watching);
     if (model.selectedId && !model.sidecars.some((item) => item.id === model.selectedId)) model.selectedId = null;
     if (!model.selectedId && model.sidecars.length) model.selectedId = model.sidecars[0].id;
@@ -264,13 +265,13 @@
 
       const nameCell = add(row, "td");
       const name = add(nameCell, "div", "row-name");
-      const link = button(name, "row-link", sidecar.name, { focusKey: `row:${sidecar.id}` });
+      const line = add(name, "div", "row-name-line");
+      const link = button(line, "row-link", sidecar.name, { focusKey: `row:${sidecar.id}` });
       link.setAttribute("aria-current", String(selected));
       link.addEventListener("keydown", (event) => moveSelection(event, items, sidecar.id));
+      const ocr = sidecar.update.ocr;
+      if (ocr) add(line, "span", "row-tag", "OCR").title = "OCR is on for this sidecar";
       if (sidecar.pending_proposals) {
-        const line = element("div", "row-name-line");
-        name.prepend(line);
-        line.append(link);
         const pill = add(line, "span", "review-pill");
         pill.title = `${plural(sidecar.pending_proposals, "proposed edit")} to review`;
         pill.append(icon("git-pull-request"));
@@ -281,7 +282,9 @@
       add(path, "bdi", "", sidecar.source_path);
       path.title = sidecar.source_path;
 
-      add(row, "td").append(badge(sidecar));
+      const state = add(row, "td");
+      state.append(badge(sidecar));
+      if (ocr?.status === "processing") add(state, "span", "row-status-note", `OCR ${count(ocr.completed)} of ${count(ocr.total)}`);
       add(row, "td", "num", count(sidecar.coverage.files));
       add(row, "td", "num", count(sidecar.coverage.passages));
       const updated = add(row, "td", "updated", sidecar.update.last_success_at ? relative(sidecar.update.last_success_at) : "Never");
@@ -303,6 +306,34 @@
     const block = add(parent, "section", "detail-section");
     add(block, "h3", "", title);
     return block;
+  }
+
+  function sectionHead(parent, title, label, tone, spinner) {
+    const head = add(parent, "div", "section-head");
+    add(head, "h3", "", title);
+    const item = add(head, "span", `badge${tone ? ` badge-${tone}` : ""}`);
+    if (spinner) item.append(icon("loader-circle", "spin"));
+    item.append(document.createTextNode(label));
+    return head;
+  }
+
+  function meter(parent, label, done, total) {
+    const bar = add(parent, "div", "progress");
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-label", label);
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", String(total));
+    bar.setAttribute("aria-valuenow", String(done));
+    add(bar, "span").style.width = `${total ? Math.min(100, (done / total) * 100) : 0}%`;
+    return bar;
+  }
+
+  // One explained next step: what it does, then the button that starts it.
+  function nextStep(parent, text, label, focusKey, onClick, disabled = false) {
+    const step = add(parent, "div", "next-step");
+    add(step, "p", "", text);
+    button(step, "btn btn-sm", label, { focusKey, onClick }).disabled = disabled;
+    return step;
   }
 
   function props(parent, rows) {
@@ -335,8 +366,8 @@
   }
 
   function guidance(parent, sidecar) {
-    if (sidecar.queued || sidecar.state === "pending") {
-      flash(parent, "info", "Update in progress", { text: "Search keeps using the current index until the update finishes." });
+    if (sidecar.queued || sidecar.state === "pending" || sidecar.update.ocr?.status === "processing") {
+      flash(parent, "info", sidecar.update.ocr?.status === "processing" ? "OCR in progress" : "Update in progress", { text: "Search keeps using the current index until the update finishes." });
       return;
     }
     const issues = issuesFor(sidecar);
@@ -348,6 +379,14 @@
           ? "Restore the files if that was unintended, or run Update to accept the change."
           : "Fix the source or provider, then run Update to retry.",
       });
+      return;
+    }
+    if (sidecar.update.ocr?.provider_changed) {
+      flash(parent, "warning", "OCR provider needs confirmation", { text: "Review the new destination in OCR details before this sidecar sends more content." });
+      return;
+    }
+    if (sidecar.update.ocr?.status === "incomplete") {
+      flash(parent, "warning", "OCR needs attention", { text: "Available evidence remains searchable. Check the OCR details and run Update to retry." });
       return;
     }
     if (sidecar.source_drift || sidecar.freshness === "stale") {
@@ -397,7 +436,11 @@
     guidance(target, sidecar);
 
     const stats = add(target, "div", "stats");
-    for (const [label, value] of [["Files", sidecar.coverage.files], ["Text/code", sidecar.coverage.text_files], ["PDFs", sidecar.coverage.pdfs], ["Passages", sidecar.coverage.passages]]) {
+    // Files that are neither text nor PDF are the images that OCR made searchable.
+    const images = sidecar.update.ocr ? sidecar.coverage.files - sidecar.coverage.text_files - sidecar.coverage.pdfs : 0;
+    const kinds = [["Text/code", sidecar.coverage.text_files], ["PDFs", sidecar.coverage.pdfs], ...(images > 0 ? [["Images", images]] : [])];
+    stats.classList.toggle("stats-5", images > 0);
+    for (const [label, value] of [["Files", sidecar.coverage.files], ...kinds, ["Passages", sidecar.coverage.passages]]) {
       const stat = add(stats, "div", "stat");
       add(stat, "span", "stat-value", count(value));
       add(stat, "span", "stat-label", label);
@@ -419,18 +462,15 @@
       chip.append(document.createTextNode(word));
     }
 
+    renderOcr(target, sidecar);
+
     if (sidecar.embedding) {
-      const embedding = section(target, "Embeddings");
+      const embedding = add(target, "section", "detail-section");
       const expected = Number(sidecar.embedding.expected_count || 0);
       const done = Number(sidecar.embedding.embedded_count || 0);
-      props(embedding, [["State", sidecar.embedding.status.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase())]]);
-      const bar = add(embedding, "div", "progress");
-      bar.setAttribute("role", "progressbar");
-      bar.setAttribute("aria-label", "Embedded passages");
-      bar.setAttribute("aria-valuemin", "0");
-      bar.setAttribute("aria-valuemax", String(expected));
-      bar.setAttribute("aria-valuenow", String(done));
-      add(bar, "span").style.width = `${expected ? Math.min(100, (done / expected) * 100) : 0}%`;
+      const label = sidecar.embedding.status.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+      sectionHead(embedding, "Embeddings", label, sidecar.embedding.message ? "danger" : expected && done >= expected ? "success" : "");
+      meter(embedding, "Embedded passages", done, expected);
       add(embedding, "p", "progress-caption", `${count(done)} of ${plural(expected, "passage")}`);
       if (sidecar.embedding.message) {
         flash(embedding, "danger", "Provider needs attention", { lines: [sidecar.embedding.message], text: "Check the provider settings and credential, then run Update." });
@@ -442,7 +482,7 @@
       const pdf = section(target, "PDF pages without text");
       flash(pdf, "warning", `${plural(pages.length, "page")} can't be searched`, {
         lines: pages.map((page) => `${page.source}, page ${page.page}: ${page.message || page.status}`),
-        text: "These are probably scanned images. Run OCR on the file, then run Update.",
+        text: "These pages have no searchable text layer. Review sidecar OCR coverage to search them.",
       });
     }
 
@@ -451,6 +491,68 @@
     add(field, "code", "", sidecar.id).title = sidecar.id;
     const copyId = button(field, "btn-icon btn-icon-sm", "", { iconName: "copy", ariaLabel: "Copy sidecar ID", focusKey: "detail:copy-id" });
     copyId.addEventListener("click", () => copyText(sidecar.id, copyId, "Sidecar ID copied."));
+  }
+
+  function renderOcr(target, sidecar) {
+    const ocr = sidecar.update.ocr;
+    const configured = model.visionProvider.configured;
+    const busy = Boolean(sidecar.queued);
+    const block = add(target, "section", "detail-section");
+    if (!ocr) {
+      sectionHead(block, "OCR", "Off");
+      add(block, "p", "section-text", "Find text in images and PDF pages without searchable text. OCR is enabled separately for each sidecar.");
+      if (configured) {
+        nextStep(block, "Review what OCR would cover first. Nothing is sent until you confirm.", "Review OCR scope", "detail:ocr", () => openOcr(sidecar), busy);
+      } else {
+        nextStep(block, "Configure an OCR vision provider to review the scope for this sidecar.", "Configure OCR provider", "detail:ocr-provider", openVision);
+      }
+      return;
+    }
+
+    const done = Number(ocr.completed || 0), total = Number(ocr.total || 0);
+    const processing = ocr.status === "processing";
+    if (ocr.provider_changed) sectionHead(block, "OCR", "Needs confirmation", "warning");
+    else if (processing) sectionHead(block, "OCR", "Processing", "info", true);
+    else if (ocr.status === "complete") sectionHead(block, "OCR", "Complete", "success");
+    else sectionHead(block, "OCR", ocr.status.replace(/^./, (letter) => letter.toUpperCase()), ocr.status === "incomplete" ? "warning" : "");
+
+    if (ocr.provider_changed) {
+      flash(block, "warning", "OCR provider changed", { text: "Review and confirm the new destination before this sidecar sends more content." });
+      button(block, "btn btn-sm btn-primary", "Review OCR provider", { focusKey: "detail:ocr-provider-review", onClick: () => openOcr(sidecar, Boolean(ocr.full_pdf_enabled), true) }).disabled = busy;
+    }
+
+    meter(block, "Images and PDF pages processed with OCR", done, total);
+    add(block, "p", "progress-caption", `${count(done)} of ${plural(total, "item")} processed`);
+    if (ocr.current_path) {
+      const current = add(block, "p", "progress-current");
+      current.title = ocr.current_path;
+      add(current, "bdi", "", ocr.current_path);
+    }
+    if (ocr.status === "incomplete") {
+      flash(block, "warning", `${plural(ocr.failed, "item")} need attention`, { lines: ocr.issues, text: "Check the issue and run Update to retry. Available evidence remains searchable." });
+    }
+
+    const pdfCoverage = !ocr.pdf_enabled ? "Off" : ocr.full_pdf_enabled ? "All pages" : "Pages without searchable text";
+    props(block, [
+      ["Images", "On"],
+      ["PDF pages", pdfCoverage, ocr.full_pdf_enabled ? "PDF coverage: all pages, including pages with searchable text." : ""],
+    ]).classList.add("props-coverage");
+
+    if (!ocr.pdf_enabled) {
+      const text = "PDF OCR is off. Review and confirm the expanded coverage to process pages without searchable text.";
+      if (!configured) nextStep(block, text, "Configure OCR provider", "detail:ocr-provider", openVision);
+      else if (!ocr.provider_changed) nextStep(block, text, "Review PDF OCR scope", "detail:ocr", () => openOcr(sidecar), busy);
+      else add(block, "p", "section-text", text);
+    } else if (!ocr.full_pdf_enabled) {
+      const text = "Full scans can also find text in images on pages that already have searchable text.";
+      if (!configured) nextStep(block, text, "Configure OCR provider", "detail:ocr-provider", openVision);
+      else if (!ocr.provider_changed) nextStep(block, text, "Review full PDF scans", "detail:full-pdf", () => openOcr(sidecar, true), busy);
+      else add(block, "p", "section-text", text);
+    }
+
+    const off = add(block, "div", "section-foot");
+    button(off, "btn btn-sm btn-danger-quiet", "Turn off OCR", { focusKey: "detail:ocr-off", onClick: () => stopOcr(sidecar) });
+    add(off, "p", "", "Stops future requests. A request already in progress may finish. Saved OCR remains searchable.");
   }
 
   function renderSetup() {
@@ -474,6 +576,27 @@
     }
     byId("provider-button").textContent = provider.configured ? "Edit" : "Configure provider";
     byId("clear-provider-button").hidden = !provider.configured;
+    const vision = model.visionProvider;
+    const visionState = byId("vision-state");
+    visionState.className = `badge${!vision.configured ? "" : vision.credential_available ? " badge-success" : " badge-warning"}`;
+    visionState.textContent = !vision.configured ? "Not configured" : vision.credential_available ? "Configured" : "Credential missing";
+    const ocrOn = model.sidecars.filter((item) => item.update.ocr).length;
+    byId("vision-description").textContent = !vision.configured
+      ? "Choose an OpenAI-compatible vision endpoint for OCR. Saving settings does not enable OCR or send files."
+      : !vision.credential_available
+        ? `Set ${vision.api_key_env} in the environment that runs Psydcar, then restart it.`
+        : `Receives content only from sidecars where you enable OCR. ${ocrOn ? `OCR is on for ${plural(ocrOn, "sidecar")}.` : "OCR is not on for any sidecar yet."} Enable it under OCR in a sidecar's details.`;
+    const visionSummary = byId("vision-summary");
+    visionSummary.hidden = !vision.configured;
+    visionSummary.replaceChildren();
+    if (vision.configured) {
+      for (const [label, value] of [["Endpoint", vision.base_url], ["Model", vision.model], ["Key variable", vision.api_key_env || "None"]]) {
+        add(visionSummary, "dt", "", label);
+        add(visionSummary, "dd", "", value);
+      }
+    }
+    byId("vision-button").textContent = vision.configured ? "Edit" : "Configure provider";
+    byId("clear-vision-button").hidden = !vision.configured;
     byId("connection-button").disabled = model.sidecars.length === 0;
     byId("connection-description").textContent = model.sidecars.length
       ? "Generate a local MCP server entry that gives a coding agent access to selected sidecars only."
@@ -543,6 +666,67 @@
     } catch (error) { message(error.message, true); }
   }
 
+  async function stopOcr(sidecar) {
+    try {
+      const result = await request(`/api/sidecars/${sidecar.id}/ocr-off`, { method: "POST", body: "{}" });
+      message(result.message);
+      await refresh(false, true);
+    } catch (error) { message(error.message, true); }
+  }
+
+  async function openOcr(sidecar, fullPdf = false, reconfirm = false) {
+    const review = { sidecarId: sidecar.id, token: null };
+    model.ocrReview = review;
+    byId("ocr-sidecar-name").textContent = sidecar.name;
+    byId("ocr-title").textContent = reconfirm ? "Review OCR provider" : fullPdf ? "Enable full PDF scans" : "Enable sidecar OCR";
+    byId("ocr-confirm").textContent = reconfirm ? "Confirm OCR provider" : fullPdf ? "Enable full PDF scans" : "Enable and process OCR";
+    byId("ocr-update-description").textContent = fullPdf
+      ? "Future updates and the watcher automatically process new or changed images and all PDF pages. Saved results for unchanged files are reused. Full scans may find text in images on pages that already contain searchable text."
+      : "Future updates and the watcher automatically process new or changed images and PDF pages without searchable text. Saved results for unchanged files are reused.";
+    byId("ocr-loading").hidden = false;
+    byId("ocr-scope").hidden = true;
+    byId("ocr-confirm").disabled = true;
+    formError("ocr-error", "");
+    byId("ocr-dialog").showModal();
+    try {
+      const scope = await request(`/api/sidecars/${sidecar.id}/ocr-scope${fullPdf ? "?full_pdf=1" : ""}`);
+      if (model.ocrReview !== review || !byId("ocr-dialog").open) return;
+      review.token = scope.token;
+      const summary = byId("ocr-scope-summary");
+      summary.replaceChildren();
+      const pageCounts = fullPdf
+        ? [["All PDF pages", count(scope.pdf_pages)], ["Additional pages with searchable text", count(scope.additional_pdf_pages)]]
+        : [["PDF pages without searchable text", count(scope.pdf_pages)]];
+      for (const [title, rows] of [
+        ["Content to send", [["Images", plural(scope.images, "file")], ...pageCounts]],
+        ["Destination", [["Endpoint", scope.provider.base_url], ["Model", scope.provider.model]]],
+      ]) {
+        add(summary, "h3", "scope-title", title);
+        const list = add(summary, "dl", "setting-meta");
+        for (const [label, value] of rows) {
+          add(list, "dt", "", label);
+          add(list, "dd", "", value);
+        }
+      }
+      const issues = byId("ocr-scope-issues");
+      issues.replaceChildren();
+      issues.hidden = !scope.issue_count;
+      if (scope.issue_count) {
+        flash(issues, "warning", `${plural(scope.issue_count, "scope issue")} need attention`, {
+          lines: scope.issues,
+          text: scope.issue_count > scope.issues.length ? "Some issues are omitted here. Review sidecar OCR status after processing." : "These files or pages could not be counted. Review sidecar OCR status after processing.",
+        });
+      }
+      byId("ocr-loading").hidden = true;
+      byId("ocr-scope").hidden = false;
+      byId("ocr-confirm").disabled = false;
+    } catch (error) {
+      if (model.ocrReview !== review || !byId("ocr-dialog").open) return;
+      byId("ocr-loading").hidden = true;
+      formError("ocr-error", error.message);
+    }
+  }
+
   function providerDraft() {
     return {
       base_url: byId("provider-base-url").value.trim(),
@@ -569,10 +753,15 @@
     byId("selected-count").textContent = `${selected} of ${model.sidecars.length} selected`;
   }
 
+  function showConnectionResult(shown) {
+    byId("connection-form").hidden = shown;
+    byId("connection-result").hidden = !shown;
+  }
+
   function openConnection() {
     byId("connection-form").reset();
     formError("connection-error", "");
-    byId("connection-result").hidden = true;
+    showConnectionResult(false);
     model.connectionPreview = null;
     const list = byId("connection-sidecars");
     list.replaceChildren();
@@ -585,7 +774,9 @@
       input.name = "sidecar-id";
       const text = add(option, "span", "picker-option-text");
       add(text, "strong", "", sidecar.name);
-      add(text, "small", "", sidecar.source_path).title = `${sidecar.source_path}\n${sidecar.id}`;
+      const path = add(text, "small");
+      path.title = `${sidecar.source_path}\n${sidecar.id}`;
+      add(path, "bdi", "", sidecar.source_path);
       const grantLabel = add(row, "label", "picker-grant");
       const grant = add(grantLabel, "input");
       grant.type = "checkbox";
@@ -770,7 +961,7 @@
     input.setAttribute("aria-describedby", "git-record-description");
     add(toggle, "span", "switch-track").setAttribute("aria-hidden", "true");
     input.addEventListener("change", () => setGitRecord(sidecar, input.checked));
-    if (record.repository) {
+    if (record.repository && record.repository !== sidecar.source_path) {
       const where = add(block, "p", "git-record-meta");
       where.append(icon("git-commit-horizontal"));
       add(where, "bdi", "", record.repository).title = record.repository;
@@ -1005,6 +1196,21 @@
   byId("create-button").addEventListener("click", openCreate);
   byId("empty-create-button").addEventListener("click", openCreate);
   byId("provider-button").addEventListener("click", openProvider);
+  byId("vision-button").addEventListener("click", openVision);
+  function openVision() {
+    const vision = model.visionProvider;
+    byId("vision-base-url").value = vision.base_url || "";
+    byId("vision-model").value = vision.model || "";
+    byId("vision-env").value = vision.api_key_env || "";
+    byId("vision-insecure").checked = Boolean(vision.allow_insecure_http);
+    formError("vision-error", "");
+    byId("vision-dialog").showModal();
+    byId("vision-base-url").focus();
+  }
+  byId("clear-vision-button").addEventListener("click", () => {
+    formError("clear-vision-error", "");
+    byId("clear-vision-dialog").showModal();
+  });
   byId("connection-button").addEventListener("click", openConnection);
   byId("clear-provider-button").addEventListener("click", () => {
     formError("clear-provider-error", "");
@@ -1029,6 +1235,14 @@
   document.querySelectorAll("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   }));
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (document.querySelector("dialog[open]") || event.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (byId("list-toolbar").hidden) return;
+    event.preventDefault();
+    byId("filter-input").focus();
+    byId("filter-input").select();
+  });
   byId("toast").addEventListener("click", hideToast);
   byId("review-callout-button").addEventListener("click", startReview);
   byId("review-approve").addEventListener("click", () => decide("approved"));
@@ -1044,9 +1258,31 @@
     if (index >= 0 && index < queue.length - 1) showProposal(queue[index + 1]);
   });
   byId("review-dialog").addEventListener("close", () => { model.review = null; });
+  byId("ocr-dialog").addEventListener("close", () => { model.ocrReview = null; });
+
+  byId("ocr-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const review = model.ocrReview;
+    if (!review?.token) return;
+    const submit = byId("ocr-confirm");
+    submit.disabled = true;
+    formError("ocr-error", "");
+    try {
+      const result = await request(`/api/sidecars/${review.sidecarId}/ocr`, {
+        method: "POST", body: JSON.stringify({ token: review.token, confirm: true }),
+      });
+      byId("ocr-dialog").close();
+      message(result.message);
+      await refresh(false, true);
+    } catch (error) {
+      formError("ocr-error", `${error.message} Close this dialog and review the scope again.`);
+    }
+  });
 
   byId("provider-form").addEventListener("input", () => { byId("provider-test-result").hidden = true; formError("provider-error", ""); });
-  byId("connection-form").addEventListener("input", () => { byId("connection-result").hidden = true; model.connectionPreview = null; formError("connection-error", ""); });
+  byId("vision-form").addEventListener("input", () => formError("vision-error", ""));
+  byId("connection-form").addEventListener("input", () => { model.connectionPreview = null; formError("connection-error", ""); });
+  byId("connection-back").addEventListener("click", () => { showConnectionResult(false); byId("connection-name").focus(); });
   byId("remove-confirm").addEventListener("input", (event) => {
     const sidecar = model.sidecars.find((item) => item.id === byId("remove-form").dataset.id);
     byId("remove-submit").disabled = !sidecar || event.target.value !== sidecar.name;
@@ -1064,6 +1300,36 @@
       box.hidden = false;
     } catch (error) { formError("provider-error", `${error.message}${error.hint ? ` ${error.hint}` : ""}`); }
     finally { trigger.disabled = false; }
+  });
+
+  byId("vision-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = byId("vision-save-button");
+    submit.disabled = true;
+    formError("vision-error", "");
+    try {
+      const result = await request("/api/vision-provider", { method: "POST", body: JSON.stringify({
+        base_url: byId("vision-base-url").value.trim(), model: byId("vision-model").value.trim(),
+        api_key_env: byId("vision-env").value.trim() || null, allow_insecure_http: byId("vision-insecure").checked,
+      }) });
+      byId("vision-dialog").close();
+      message(result.message);
+      await refresh(false, true);
+    } catch (error) { formError("vision-error", error.message); }
+    finally { submit.disabled = false; }
+  });
+
+  byId("clear-vision-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = event.target.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      const result = await request("/api/vision-provider", { method: "DELETE", body: JSON.stringify({ confirm: "clear" }) });
+      byId("clear-vision-dialog").close();
+      message(result.message);
+      await refresh(false, true);
+    } catch (error) { formError("clear-vision-error", error.message); }
+    finally { submit.disabled = false; }
   });
 
   byId("provider-form").addEventListener("submit", async (event) => {
@@ -1103,7 +1369,6 @@
     if (!sidecarIds.length) { formError("connection-error", "Select at least one sidecar."); return; }
     const submit = event.target.querySelector('[type="submit"]');
     submit.disabled = true;
-    byId("connection-result").hidden = true;
     model.connectionPreview = null;
     try {
       const preview = await request("/api/connections/preview", {
@@ -1116,8 +1381,8 @@
       if (proposalNames.length) byId("result-selection").textContent += ` Proposals allowed for ${proposalNames.join(", ")}.`;
       highlightJson(byId("connection-json"), preview.config);
       byId("result-footnote").textContent = `Upgrading Psydcar doesn't break this entry. If you remove a selected sidecar, the server won't start until you generate a new entry.${model.provider.api_key_env ? ` For embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
-      byId("connection-result").hidden = false;
-      byId("connection-result").scrollIntoView({ block: "nearest", behavior: "smooth" });
+      showConnectionResult(true);
+      byId("copy-connection-button").focus();
     } catch (error) { formError("connection-error", error.message); }
     finally { submit.disabled = false; }
   });

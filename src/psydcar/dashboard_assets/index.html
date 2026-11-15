@@ -61,7 +61,8 @@
             <label class="search-input">
               <svg class="icon" aria-hidden="true"><use href="#search"/></svg>
               <span class="visually-hidden">Filter sidecars by name or folder</span>
-              <input id="filter-input" type="search" placeholder="Filter by name or folder" autocomplete="off" spellcheck="false">
+              <input id="filter-input" type="search" placeholder="Filter by name or folder" autocomplete="off" spellcheck="false" aria-keyshortcuts="/">
+              <kbd class="search-kbd" aria-hidden="true" title="Press / to filter">/</kbd>
             </label>
           </div>
           <table class="data-table" id="sidecar-table">
@@ -102,6 +103,18 @@
               <div class="setting-actions">
                 <button class="btn btn-sm btn-danger-quiet" id="clear-provider-button" type="button" hidden>Remove</button>
                 <button class="btn btn-sm" id="provider-button" type="button">Configure provider</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <span class="setting-icon" aria-hidden="true"><svg class="icon"><use href="#scan-text"/></svg></span>
+              <div class="setting-body">
+                <div class="setting-title"><h3>OCR vision provider</h3><span id="vision-state" class="badge">Not configured</span></div>
+                <p id="vision-description">Choose an OpenAI-compatible vision endpoint for OCR. Saving settings does not enable OCR or send files.</p>
+                <dl id="vision-summary" class="setting-meta" hidden></dl>
+              </div>
+              <div class="setting-actions">
+                <button class="btn btn-sm btn-danger-quiet" id="clear-vision-button" type="button" hidden>Remove</button>
+                <button class="btn btn-sm" id="vision-button" type="button">Configure provider</button>
               </div>
             </div>
             <div class="setting-row">
@@ -172,6 +185,47 @@
     </form>
   </dialog>
 
+  <dialog id="ocr-dialog" class="dialog dialog-md" aria-labelledby="ocr-title">
+    <form id="ocr-form">
+      <div class="dialog-header"><h2 id="ocr-title">Enable sidecar OCR</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
+      <div class="dialog-body">
+        <p class="dialog-text">Review OCR coverage for <strong id="ocr-sidecar-name"></strong> before sending content.</p>
+        <p id="ocr-loading" class="dialog-loading" role="status"><svg class="icon spin" aria-hidden="true"><use href="#loader-circle"/></svg><span>Counting images and PDF pages. This may take a moment for large folders…</span></p>
+        <div id="ocr-scope" hidden>
+          <div id="ocr-scope-summary" class="scope-summary"></div>
+          <p class="dialog-text">Selected images and rendered PDF pages are sent to this endpoint. A hosted provider receives their content and may charge for processing. These counts are an estimate, not a price.</p>
+          <p id="ocr-update-description" class="dialog-text">Future updates and the watcher automatically process new or changed images and PDF pages without searchable text. Saved results for unchanged files are reused.</p>
+          <div id="ocr-scope-issues" hidden></div>
+        </div>
+        <div class="flash flash-danger" id="ocr-error" role="alert" hidden></div>
+      </div>
+      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" id="ocr-confirm" type="submit" disabled>Enable and process OCR</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="vision-dialog" class="dialog dialog-md" aria-labelledby="vision-title">
+    <form id="vision-form" novalidate>
+      <div class="dialog-header"><h2 id="vision-title">OCR vision provider</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
+      <div class="dialog-body">
+        <p class="dialog-text">Choose a local or hosted OpenAI-compatible vision endpoint. A hosted provider receives selected content and may charge for processing. Saving these settings does not enable OCR or send files.</p>
+        <label class="field"><span class="field-label">Base URL</span><input id="vision-base-url" class="mono" type="url" placeholder="https://api.openai.com/v1" autocomplete="url" spellcheck="false" required><span class="field-hint">The URL before <code>/chat/completions</code>.</span></label>
+        <label class="field"><span class="field-label">Vision model</span><input id="vision-model" class="mono" placeholder="Vision model name" autocomplete="off" spellcheck="false" required></label>
+        <label class="field"><span class="field-label">API key variable <span class="field-optional">Optional</span></span><input id="vision-env" class="mono" placeholder="OPENAI_API_KEY" autocomplete="off" spellcheck="false"><span class="field-hint">Name of an environment variable set where Psydcar runs. Psydcar stores the name, never the key.</span></label>
+        <label class="checkbox"><input id="vision-insecure" type="checkbox"><span>Allow plain HTTP to a remote host</span></label>
+        <div class="flash flash-danger" id="vision-error" role="alert" hidden></div>
+      </div>
+      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" id="vision-save-button" type="submit">Save provider</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="clear-vision-dialog" class="dialog" aria-labelledby="clear-vision-title">
+    <form id="clear-vision-form">
+      <div class="dialog-header"><h2 id="clear-vision-title">Remove OCR provider</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
+      <div class="dialog-body"><p class="dialog-text">Remove the OCR vision provider settings?</p><div class="flash flash-danger" id="clear-vision-error" role="alert" hidden></div></div>
+      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-danger" type="submit">Remove provider</button></div>
+    </form>
+  </dialog>
+
   <dialog id="provider-dialog" class="dialog dialog-md" aria-labelledby="provider-title">
     <form id="provider-form" novalidate>
       <div class="dialog-header"><h2 id="provider-title">Embedding provider</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
@@ -201,8 +255,8 @@
   </dialog>
 
   <dialog id="connection-dialog" class="dialog dialog-lg" aria-labelledby="connection-title">
+    <div class="dialog-header"><h2 id="connection-title">Prepare an MCP connection</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
     <form id="connection-form" novalidate>
-      <div class="dialog-header"><h2 id="connection-title">Prepare an MCP connection</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
       <div class="dialog-body">
         <p class="dialog-text">Select which sidecars the agent can read. You can also allow edit proposals per sidecar. Proposed edits wait for your review and are not saved until you approve them.</p>
         <label class="field"><span class="field-label">Server name</span><input id="connection-name" class="mono" placeholder="project-notes" autocomplete="off" spellcheck="false" maxlength="64" required><span class="field-hint">Starts with a letter. Letters, numbers, dashes, and underscores only.</span></label>
@@ -213,20 +267,23 @@
         </fieldset>
         <div class="flash flash-danger" id="connection-error" role="alert" hidden></div>
       </div>
-      <div class="dialog-footer"><button class="btn" type="button" data-close>Close</button><button class="btn btn-primary" type="submit">Generate configuration</button></div>
+      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" type="submit">Generate configuration</button></div>
     </form>
     <div id="connection-result" class="connection-result" hidden>
-      <div class="result-head"><h3>Configuration for <span class="mono" id="result-name"></span></h3><span class="badge badge-success"><svg class="icon" aria-hidden="true"><use href="#check"/></svg>Ready</span></div>
-      <p id="result-selection" class="result-text"></p>
-      <div class="code-block">
-        <div class="code-block-header"><span>JSON · mcpServers entry</span><button class="btn btn-sm" id="copy-connection-button" type="button"><svg class="icon" aria-hidden="true"><use href="#copy"/></svg><span>Copy</span></button></div>
-        <pre id="connection-json" tabindex="0"></pre>
+      <div class="dialog-body">
+        <div class="result-head"><h3>Configuration for <span class="mono" id="result-name"></span></h3><span class="badge badge-success"><svg class="icon" aria-hidden="true"><use href="#check"/></svg>Ready</span></div>
+        <p id="result-selection" class="result-text"></p>
+        <div class="code-block">
+          <div class="code-block-header"><span>JSON · mcpServers entry</span><button class="btn btn-sm" id="copy-connection-button" type="button"><svg class="icon" aria-hidden="true"><use href="#copy"/></svg><span>Copy</span></button></div>
+          <pre id="connection-json" tabindex="0"></pre>
+        </div>
+        <ol class="steps">
+          <li>Add this entry to your MCP client's settings. Clients with a different format use the same <code>command</code>, <code>args</code>, and <code>env</code> values.</li>
+          <li>Restart the client.</li>
+        </ol>
+        <p class="result-text result-footnote" id="result-footnote"></p>
       </div>
-      <ol class="steps">
-        <li>Add this entry to your MCP client's settings. Clients with a different format use the same <code>command</code>, <code>args</code>, and <code>env</code> values.</li>
-        <li>Restart the client.</li>
-      </ol>
-      <p class="result-text result-footnote" id="result-footnote"></p>
+      <div class="dialog-footer"><button class="btn btn-push" id="connection-back" type="button"><svg class="icon" aria-hidden="true"><use href="#chevron-left"/></svg>Change selection</button><button class="btn btn-primary" type="button" data-close>Done</button></div>
     </div>
   </dialog>
 

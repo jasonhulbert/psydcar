@@ -4,6 +4,16 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-14
+
+### Added
+
+- Optional OCR for images and PDFs, enabled separately for each sidecar. Configure an OpenAI-compatible vision endpoint in the dashboard or with `psydcar ocr-provider set`, then review the image and PDF page counts and the destination before anything is sent, in the dashboard or with `psydcar sidecar ocr NAME`. Default coverage is PNG, JPEG, GIF, and WebP images and PDF pages without searchable text. Scanning every PDF page is a separate confirmation with `--full-pdf`. After you confirm, updates and the watcher process new and changed files and reuse saved results for unchanged ones. Search and retrieve results mark recognized text with `extraction: ocr`. If the provider settings change, each enabled sidecar waits for you to confirm the new destination. Turn OCR off with `--off`. Saved OCR stays searchable.
+
+### Changed
+
+- Dashboard polish. The OCR section of a sidecar now shows its state, progress, and coverage at a glance, with each next step explained beside its button. The sidecar list marks sidecars that use OCR and shows OCR progress. The MCP connection dialog shows the generated configuration on its own step. Dialogs keep their header and actions in view while long content scrolls, and `/` focuses the sidecar filter.
+
 ## [0.4.0] - 2026-11-13
 
 ### Added
@@ -74,7 +84,8 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 - First release: local sidecars for text, code, and PDFs with lexical and optional embedding search, a file watcher, a browser dashboard, and an MCP server limited to selected sidecars.
 
-[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jasonhulbert/psydcar/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jasonhulbert/psydcar/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jasonhulbert/psydcar/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jasonhulbert/psydcar/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jasonhulbert/psydcar/compare/v0.1.4...v0.2.0

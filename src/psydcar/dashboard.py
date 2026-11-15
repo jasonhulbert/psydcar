@@ -12,26 +12,32 @@ import signal
 import sys
 import sysconfig
 import threading
+import time
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlsplit
+from typing import Any, overload
+from urllib.parse import parse_qs, urlsplit
 
 from . import access
 from .embeddings import EmbeddingClient, EmbeddingError, ProviderConfig, ProviderStore
 from .evidence import EvidenceStore, UpdateSuperseded
 from .freshness import SidecarWatcher, WatchEvent
 from .git_record import GitRecord
+from .ocr import ImageOCR, image_scope, pdf_scope, pdf_scope_details
 from .proposal_files import FileConflict
 from .proposals import Proposals
 from .registry import SidecarStore, StoreError
+from .vision import VisionProviderConfig, VisionProviderStore
 
 _SIDECAR_ACTION = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/(rename|update|git-record)$")
 _SIDECAR_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})$")
+_OCR_SCOPE = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/ocr-scope$")
+_OCR_ENABLE = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/ocr$")
+_OCR_OFF = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/ocr-off$")
 _PROPOSAL_LIST = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals$")
 _PROPOSAL_ITEM = re.compile(r"^/api/sidecars/([0-9a-f-]{36})/proposals/([0-9a-f-]{36})$")
 _CONNECTION_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -54,7 +60,7 @@ def _installed_version() -> str:
         return "development"
 
 
-def _provider_view(config: ProviderConfig | None) -> dict[str, Any]:
+def _provider_view(config: ProviderConfig | VisionProviderConfig | None) -> dict[str, Any]:
     if config is None:
         return {"configured": False, "state": "unconfigured"}
     available = config.credential_available
@@ -70,7 +76,15 @@ def _provider_view(config: ProviderConfig | None) -> dict[str, Any]:
     }
 
 
-def _provider_draft(provider: ProviderStore, payload: dict[str, Any]) -> ProviderConfig:
+@overload
+def _provider_draft(provider: ProviderStore, payload: dict[str, Any]) -> ProviderConfig: ...
+
+
+@overload
+def _provider_draft(provider: VisionProviderStore, payload: dict[str, Any]) -> VisionProviderConfig: ...
+
+
+def _provider_draft(provider: ProviderStore | VisionProviderStore, payload: dict[str, Any]) -> ProviderConfig | VisionProviderConfig:
     base_url, model = payload.get("base_url"), payload.get("model")
     api_key_env = payload.get("api_key_env")
     if api_key_env == "":
@@ -146,6 +160,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.store = store or SidecarStore()
         self.evidence = EvidenceStore(self.store)
         self.provider = ProviderStore(self.store)
+        self.vision_provider = VisionProviderStore(self.store)
         self.proposals = Proposals(self.store)
         self.git_record = GitRecord(self.store)
         self.csrf_token = secrets.token_urlsafe(32)
@@ -153,8 +168,10 @@ class DashboardServer(ThreadingHTTPServer):
         self._pending_lock = threading.Lock()
         self._pending: set[str] = set()
         self._errors: dict[str, str] = {}
+        self._ocr_scopes: dict[str, dict[str, Any]] = {}
+        self._ocr_cancelled: set[str] = set()
         self._stop = threading.Event()
-        self.watcher = SidecarWatcher(self.store, interval=watch_interval, update_lock=self.operation_lock)
+        self.watcher = SidecarWatcher(self.store, interval=watch_interval)
         self._watch_thread = threading.Thread(target=self.watcher.run, args=(self._stop, self._watch_event), daemon=True)
         try:
             super().__init__(("127.0.0.1", port), DashboardHandler)
@@ -206,8 +223,7 @@ class DashboardServer(ThreadingHTTPServer):
 
         def worker() -> None:
             try:
-                with self.operation_lock:
-                    self.evidence.update(sidecar_id)
+                self.evidence.update(sidecar_id)
                 with self._pending_lock:
                     self._errors.pop(sidecar_id, None)
             except UpdateSuperseded:
@@ -224,6 +240,109 @@ class DashboardServer(ThreadingHTTPServer):
 
         threading.Thread(target=worker, daemon=True, name=f"psydcar-update-{sidecar_id[:8]}").start()
         return True
+
+    def assess_ocr(self, sidecar_id: str, *, full_pdf: bool = False) -> dict[str, Any]:
+        """Assess locally and retain the exact scope that the user will confirm."""
+        sidecar = self.store.get(sidecar_id, exact_id=True)
+        config = self.vision_provider.get()
+        if config is None:
+            raise StoreError("Configure an OCR vision provider before enabling OCR.")
+        ocr = ImageOCR(self.store)
+        reconfirm = ocr.needs_confirmation(sidecar_id, config)
+        if reconfirm and ocr.full_pdf_enabled(sidecar_id):
+            full_pdf = True
+        if full_pdf and not ocr.pdf_enabled(sidecar_id):
+            raise StoreError("Enable default sidecar OCR before reviewing full PDF scans.")
+        if full_pdf and ocr.full_pdf_enabled(sidecar_id) and not reconfirm:
+            raise StoreError("Full PDF scans are already enabled for this sidecar.")
+        if not full_pdf and ocr.pdf_enabled(sidecar_id) and not reconfirm:
+            raise StoreError("OCR is already enabled for this sidecar.")
+        images = image_scope(sidecar)
+        if full_pdf:
+            textless, searchable, issues = pdf_scope_details(sidecar)
+            pages = sorted(textless + searchable)
+        else:
+            pages, issues = pdf_scope(sidecar)
+            searchable = []
+        token = secrets.token_urlsafe(32)
+        with self._pending_lock:
+            self._ocr_scopes[sidecar_id] = {
+                "token": token,
+                "expires": time.monotonic() + 900,
+                "config": config,
+                "images": images,
+                "pages": pages,
+                "issues": issues,
+                "full_pdf": full_pdf,
+            }
+        return {
+            "token": token,
+            "images": len(images),
+            "pdf_pages": len(pages),
+            "issues": issues[:20],
+            "issue_count": len(issues),
+            "full_pdf": full_pdf,
+            "additional_pdf_pages": len(searchable),
+            "reconfirm": reconfirm,
+            "provider": _provider_view(config),
+        }
+
+    def schedule_ocr(self, sidecar_id: str, token: Any, confirm: Any) -> None:
+        """Start the reviewed scope in the background only after explicit confirmation."""
+        self.store.get(sidecar_id, exact_id=True)
+        if confirm is not True or not isinstance(token, str) or not token.isascii():
+            raise StoreError("Review the OCR scope and confirm before enabling OCR.")
+        with self._pending_lock:
+            scope = self._ocr_scopes.get(sidecar_id)
+            if not scope or not hmac.compare_digest(scope["token"], token) or scope["expires"] < time.monotonic():
+                raise StoreError("The OCR scope has expired or changed. Review it again.")
+            current = self.vision_provider.get()
+            if current is None or current.revision != scope["config"].revision:
+                raise StoreError("The OCR provider changed. Review the scope and destination again.")
+            if sidecar_id in self._pending:
+                raise StoreError("This sidecar is updating. Wait for it to finish, then review OCR again.")
+            self._pending.add(sidecar_id)
+            self._errors.pop(sidecar_id, None)
+            del self._ocr_scopes[sidecar_id]
+            self._ocr_cancelled.discard(sidecar_id)
+
+        def worker() -> None:
+            try:
+                sidecar = self.store.get(sidecar_id, exact_id=True)
+                config = self.vision_provider.get()
+                if config is None or config.revision != scope["config"].revision:
+                    raise StoreError("The OCR provider changed. Review the scope and destination again.")
+                # Ensure text-layer PDF documents exist before attaching OCR passages.
+                while True:
+                    with self._pending_lock:
+                        if sidecar_id in self._ocr_cancelled:
+                            return
+                    try:
+                        self.evidence.update(sidecar_id)
+                        break
+                    except UpdateSuperseded:
+                        continue
+                config = self.vision_provider.get()
+                if config is None or config.revision != scope["config"].revision:
+                    raise StoreError("The OCR provider changed. Review the scope and destination again.")
+                ocr = ImageOCR(self.store)
+                with self._pending_lock:
+                    if sidecar_id in self._ocr_cancelled:
+                        return
+                    authorization = ocr.authorize(sidecar, config, full_pdf=scope["full_pdf"])
+                ocr.process_authorized(sidecar, config, scope["images"], scope["pages"], scope["issues"], authorization)
+            except StoreError as exc:
+                with self._pending_lock:
+                    self._errors[sidecar_id] = str(exc)
+            except Exception as exc:
+                with self._pending_lock:
+                    self._errors[sidecar_id] = f"OCR could not start ({type(exc).__name__}). Review the scope and retry."
+            finally:
+                with self._pending_lock:
+                    self._pending.discard(sidecar_id)
+                    self._ocr_cancelled.discard(sidecar_id)
+
+        threading.Thread(target=worker, daemon=True, name=f"psydcar-ocr-{sidecar_id[:8]}").start()
 
     def snapshot(self) -> dict[str, Any]:
         sidecars = self.evidence.list()
@@ -266,6 +385,7 @@ class DashboardServer(ThreadingHTTPServer):
             "watching": self._watch_thread.is_alive(),
             "provider_configured": provider_configured,
             "provider": provider,
+            "vision_provider": _provider_view(self.vision_provider.get()),
             "version": _installed_version(),
             "data_dir": str(self.store.db_path.parent),
         }
@@ -371,6 +491,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if path == "/api/sidecars":
                 self._json(HTTPStatus.OK, self.server.snapshot())
                 return
+            match = _OCR_SCOPE.fullmatch(path)
+            if match:
+                full_pdf = parse_qs(urlsplit(self.path).query).get("full_pdf") == ["1"]
+                self._json(HTTPStatus.OK, self.server.assess_ocr(match.group(1), full_pdf=full_pdf))
+                return
             match = _PROPOSAL_LIST.fullmatch(path)
             if match:
                 sidecar_id = match.group(1)
@@ -409,6 +534,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
         try:
+            if path == "/api/vision-provider":
+                draft = _provider_draft(self.server.vision_provider, payload)
+                with self.server.operation_lock:
+                    config = self.server.vision_provider.set(draft.base_url, draft.model, draft.api_key_env, draft.allow_insecure_http)
+                self._json(
+                    HTTPStatus.OK,
+                    {"provider": _provider_view(config), "message": "OCR provider saved. OCR is not enabled for any sidecar by this change."},
+                )
+                return
             if path == "/api/provider/test":
                 draft = _provider_draft(self.server.provider, payload)
                 try:
@@ -434,6 +568,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     payload.get("proposal_ids"),
                 )
                 self._json(HTTPStatus.OK, preview)
+                return
+            match = _OCR_ENABLE.fullmatch(path)
+            if match:
+                self.server.schedule_ocr(match.group(1), payload.get("token"), payload.get("confirm"))
+                self._json(HTTPStatus.ACCEPTED, {"message": "OCR queued. Progress will appear in the sidecar details."})
+                return
+            match = _OCR_OFF.fullmatch(path)
+            if match:
+                sidecar_id = match.group(1)
+                self.server.store.get(sidecar_id, exact_id=True)
+                with self.server._pending_lock:
+                    self.server._ocr_cancelled.add(sidecar_id)
+                    ImageOCR(self.server.store).disable(sidecar_id)
+                    self.server._ocr_scopes.pop(sidecar_id, None)
+                self._json(HTTPStatus.OK, {"message": "OCR turned off. A request already in progress may finish; saved OCR stays searchable."})
                 return
             if path == "/api/sidecars":
                 name, source = payload.get("name"), payload.get("source")
@@ -490,6 +639,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         payload = self._body()
         if payload is None:
+            return
+        if urlsplit(self.path).path == "/api/vision-provider":
+            if payload.get("confirm") != "clear":
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "Confirm OCR provider removal."})
+                return
+            try:
+                with self.server.operation_lock:
+                    self.server.vision_provider.clear()
+                self._json(HTTPStatus.OK, {"provider": _provider_view(None), "message": "OCR provider removed."})
+            except StoreError as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
         if urlsplit(self.path).path == "/api/provider":
             if payload.get("confirm") != "clear":

@@ -11,20 +11,27 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from PIL import Image, ImageDraw
+from pypdf import PdfReader, PdfWriter
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from git_sandbox import git, use_sandbox
 from psydcar.dashboard import DashboardServer
+from psydcar.evidence import UpdateSuperseded
 from psydcar.proposal_files import ProposalFiles
 from psydcar.proposals import Proposals
 from psydcar.registry import SidecarStore
+from test_ocr_cli import VisionGateway, VisionHandler
+from test_pdf_cli import write_pdf
 
 PROBE_SECRET = "DASHBOARD_TEST_CREDENTIAL_DO_NOT_DISPLAY"
 
@@ -204,6 +211,150 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/update", {})[0], 202)
         self.wait_for(lambda: self.entry(sidecar_id)["state"] == "current", "recovery was not shown")
         self.assertEqual(self.entry(sidecar_id)["update"]["issues"], [])
+
+    def test_vision_provider_configuration_is_shared_with_cli_without_starting_ocr(self) -> None:
+        (self.source / "notes.md").write_text("quiet orchard\n")
+        sidecar = self.server.store.create("Library", self.source)
+        self.wait_for(lambda: self.entry(sidecar.id)["coverage"]["passages"] == 1, "source was not indexed")
+        draft = {"base_url": "http://127.0.0.1:10999/v1", "model": "vision-model", "api_key_env": "PSYDCAR_VISION_KEY"}
+        with patch.dict(os.environ, {"PSYDCAR_VISION_KEY": PROBE_SECRET}):
+            status, saved = self.http("POST", "/api/vision-provider", draft)
+            self.assertEqual(status, 200, saved)
+            self.assertEqual(saved["provider"]["base_url"], draft["base_url"])
+            self.assertNotIn(PROBE_SECRET, json.dumps(saved))
+            shown = self.cli("ocr-provider", "show")
+            self.assertIn("Model: vision-model", shown.stdout)
+            self.assertNotIn(PROBE_SECRET, shown.stdout)
+            self.assertEqual(self.cli("sidecar", "update", sidecar.id).returncode, 0)
+            self.assertEqual(len(json.loads(self.cli("search", "--sidecar", sidecar.id, "orchard").stdout)), 1)
+            changed = self.cli("ocr-provider", "set", "--base-url", "https://vision.example/v1", "--model", "another-model")
+            self.assertEqual(changed.returncode, 0, changed.stderr)
+            snapshot = self.http("GET", "/api/sidecars")[1]
+            self.assertEqual(snapshot["vision_provider"]["base_url"], "https://vision.example/v1")
+            self.assertEqual(snapshot["vision_provider"]["model"], "another-model")
+
+    def test_dashboard_confirms_and_processes_image_and_pdf_ocr(self) -> None:
+        image = Image.new("RGB", (300, 180), "white")
+        ImageDraw.Draw(image).text((20, 60), "Copper lantern orchard", fill="black")
+        image.save(self.source / "sign.png")
+        image.save(self.source / "scan.pdf", format="PDF")
+        text_pdf = self.root / "searchable.pdf"
+        write_pdf(text_pdf, ["Searchable solar PDF"])
+        image_pdf = BytesIO()
+        image.save(image_pdf, format="PDF")
+        writer = PdfWriter()
+        writer.add_page(PdfReader(text_pdf).pages[0])
+        writer.pages[0].merge_page(PdfReader(BytesIO(image_pdf.getvalue())).pages[0], over=False)
+        with (self.source / "searchable.pdf").open("wb") as output:
+            writer.write(output)
+        (self.source / "notes.md").write_text("Existing solar text.\n")
+        gateway = VisionGateway(("127.0.0.1", 0), VisionHandler)
+        gateway.requests = []
+        gateway_thread = threading.Thread(target=gateway.serve_forever, daemon=True)
+        gateway_thread.start()
+        self.addCleanup(gateway_thread.join, 2)
+        self.addCleanup(gateway.server_close)
+        self.addCleanup(gateway.shutdown)
+        endpoint = f"http://127.0.0.1:{gateway.server_port}/v1"
+        self.assertEqual(self.http("POST", "/api/vision-provider", {"base_url": endpoint, "model": "vision-test"})[0], 200)
+        sidecar_id = self.http("POST", "/api/sidecars", {"name": "Library", "source": str(self.source)})[1]["id"]
+        self.wait_for(lambda: self.entry(sidecar_id)["state"] == "current", "initial indexing did not finish")
+        status, scope = self.http("GET", f"/api/sidecars/{sidecar_id}/ocr-scope")
+        self.assertEqual((status, scope["images"], scope["pdf_pages"], scope["provider"]["base_url"]), (200, 1, 1, endpoint))
+        self.assertEqual(gateway.requests, [])
+        self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/ocr", {"token": scope["token"], "confirm": True})[0], 202)
+        self.wait_for(lambda: (self.entry(sidecar_id)["update"]["ocr"] or {}).get("status") == "complete", "OCR did not finish")
+        self.assertEqual(len(gateway.requests), 2)
+        self.assertIn("OCR: Complete (2/2 images and PDF pages; 0 need attention)", self.cli("sidecar", "show", sidecar_id).stdout)
+        hits = json.loads(self.cli("search", "--sidecar", sidecar_id, "lantern").stdout)
+        self.assertEqual({(hit["source"]["relative_path"], hit["extraction"]) for hit in hits}, {("sign.png", "ocr"), ("scan.pdf", "ocr")})
+        status, full = self.http("GET", f"/api/sidecars/{sidecar_id}/ocr-scope?full_pdf=1")
+        self.assertEqual((status, full["pdf_pages"], full["additional_pdf_pages"]), (200, 2, 1))
+        self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/ocr", {"token": full["token"], "confirm": True})[0], 202)
+        self.wait_for(
+            lambda: (
+                (self.entry(sidecar_id)["update"]["ocr"] or {}).get("full_pdf_enabled")
+                and (self.entry(sidecar_id)["update"]["ocr"] or {}).get("status") == "complete"
+            ),
+            "full PDF OCR did not finish",
+        )
+        self.assertEqual(len(gateway.requests), 3)
+        hits = json.loads(self.cli("search", "--sidecar", sidecar_id, "lantern").stdout)
+        self.assertTrue(any(hit["source"]["relative_path"] == "searchable.pdf" and hit["extraction"] == "ocr" for hit in hits))
+        self.assertTrue(
+            any(hit["source"]["relative_path"] == "searchable.pdf" for hit in json.loads(self.cli("search", "--sidecar", sidecar_id, "solar").stdout))
+        )
+        self.assertEqual(self.http("POST", "/api/vision-provider", {"base_url": endpoint, "model": "new-model"})[0], 200)
+        Image.new("RGB", (30, 30), "white").save(self.source / "new.png")
+        self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/update", {})[0], 202)
+        self.wait_for(
+            lambda: (self.entry(sidecar_id)["update"]["ocr"] or {}).get("provider_changed") and not self.entry(sidecar_id)["queued"],
+            "provider review was not shown",
+        )
+        self.assertEqual(len(gateway.requests), 3)
+        status, review = self.http("GET", f"/api/sidecars/{sidecar_id}/ocr-scope")
+        self.assertEqual((status, review["reconfirm"], review["full_pdf"]), (200, True, True))
+        original_update = self.server.evidence.update
+        updates = iter([False, True])
+
+        def update_during_watcher(reference: str):
+            if not next(updates, True):
+                raise UpdateSuperseded("A watcher update started.")
+            return original_update(reference)
+
+        with patch.object(self.server.evidence, "update", side_effect=update_during_watcher):
+            self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/ocr", {"token": review["token"], "confirm": True})[0], 202)
+            self.wait_for(
+                lambda: (
+                    not (self.entry(sidecar_id)["update"]["ocr"] or {}).get("provider_changed", True)
+                    and (self.entry(sidecar_id)["update"]["ocr"] or {}).get("status") == "complete"
+                ),
+                "reconfirmed OCR did not finish",
+            )
+        self.assertEqual(len(gateway.requests), 4)
+
+    def test_dashboard_can_stop_ocr_and_manage_another_sidecar_during_processing(self) -> None:
+        started, release = threading.Event(), threading.Event()
+
+        class PausedHandler(VisionHandler):
+            def do_POST(self) -> None:
+                started.set()
+                release.wait(10)
+                super().do_POST()
+
+        for name in ("a.png", "b.png"):
+            Image.new("RGB", (20, 20), "white").save(self.source / name)
+        gateway = VisionGateway(("127.0.0.1", 0), PausedHandler)
+        gateway.requests = []
+        thread = threading.Thread(target=gateway.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 2)
+        self.addCleanup(gateway.server_close)
+        self.addCleanup(gateway.shutdown)
+        self.addCleanup(release.set)
+        self.assertEqual(
+            self.http(
+                "POST",
+                "/api/vision-provider",
+                {
+                    "base_url": f"http://127.0.0.1:{gateway.server_port}/v1",
+                    "model": "vision-test",
+                },
+            )[0],
+            200,
+        )
+        sidecar_id = self.http("POST", "/api/sidecars", {"name": "Library", "source": str(self.source)})[1]["id"]
+        self.wait_for(lambda: self.entry(sidecar_id)["state"] == "current", "initial indexing did not finish")
+        scope = self.http("GET", f"/api/sidecars/{sidecar_id}/ocr-scope")[1]
+        self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/ocr", {"token": scope["token"], "confirm": True})[0], 202)
+        self.assertTrue(started.wait(8))
+        self.assertEqual(self.http("POST", f"/api/sidecars/{sidecar_id}/rename", {"name": "Renamed"})[0], 200)
+        status, stopped = self.http("POST", f"/api/sidecars/{sidecar_id}/ocr-off", {})
+        self.assertEqual(status, 200)
+        self.assertIn("already in progress may finish", stopped["message"])
+        release.set()
+        self.wait_for(lambda: not self.entry(sidecar_id)["queued"], "OCR did not stop")
+        self.assertEqual((len(gateway.requests), self.entry(sidecar_id)["update"]["ocr"]), (1, None))
 
     def test_provider_setup_tests_only_sample_text_and_hides_credential(self) -> None:
         source_secret = "PRIVATE_SOURCE_TEXT_MUST_NOT_REACH_PROVIDER_TEST"

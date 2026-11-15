@@ -77,7 +77,7 @@ def size_limit(path: Path) -> tuple[int, str]:
     return (MAX_PDF_BYTES, "50 MiB PDF") if is_pdf(path) else (MAX_FILE_BYTES, "2 MiB text")
 
 
-def walk(root: Path, onerror: Callable[[OSError], None]) -> Iterator[tuple[Path, bool]]:
+def walk(root: Path, onerror: Callable[[OSError], None], *, include_images: bool = False) -> Iterator[tuple[Path, bool]]:
     """Yield files in the source scope and linked directories the walk must not enter."""
     for directory, dirs, files in os.walk(root, topdown=True, followlinks=False, onerror=onerror):
         traversable = []
@@ -91,7 +91,8 @@ def walk(root: Path, onerror: Callable[[OSError], None]) -> Iterator[tuple[Path,
                 traversable.append(name)
         dirs[:] = sorted(traversable)
         for name in sorted(files):
-            if is_hidden(name) or not (is_text_source(name) or is_pdf(Path(name))):
+            image = include_images and Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+            if is_hidden(name) or not (is_text_source(name) or is_pdf(Path(name)) or image):
                 continue
             yield Path(directory) / name, False
 
@@ -127,7 +128,7 @@ def read_bytes(path: Path, root: Path | None = None) -> tuple[bytes | None, str,
     return data, "current", None
 
 
-def source_snapshot(sidecar: Sidecar) -> tuple[tuple[str, str, int, int, int, int], ...]:
+def source_snapshot(sidecar: Sidecar, *, include_images: bool = False) -> tuple[tuple[str, str, int, int, int, int], ...]:
     """Cheap watcher fingerprint with the updater's exact source scope."""
     root = sidecar.source_path
     if is_link(root):
@@ -139,7 +140,7 @@ def source_snapshot(sidecar: Sidecar) -> tuple[tuple[str, str, int, int, int, in
     def walk_error(error: OSError) -> None:
         entries.append((str(error.filename or root), "walk_error", error.errno or 0, 0, 0, 0))
 
-    for path, linked_directory in walk(root, walk_error):
+    for path, linked_directory in walk(root, walk_error, include_images=include_images):
         relative = path.relative_to(root).as_posix()
         try:
             stat = path.lstat()

@@ -36,6 +36,7 @@ ICONS = [
     "plug",
     "plus",
     "refresh-cw",
+    "scan-text",
     "search",
     "trash-2",
     "triangle-alert",

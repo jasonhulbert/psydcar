@@ -22,6 +22,7 @@ from .embeddings import (
 )
 from .git_state import observe
 from .index_tables import open_search, remove_outdated
+from .ocr import ImageOCR, sync_index, sync_pdf_index
 from .pdf_text import PdfTextError, extract_pdf_page, extract_pdf_pages
 from .registry import Sidecar, SidecarStore, StoreError
 from .source_scope import is_link, is_pdf, is_source_root, read_bytes, read_source, size_limit, walk
@@ -57,6 +58,7 @@ class IndexReport:
     deleted: int = 0
     unchanged: int = 0
     deleted_paths: tuple[str, ...] = ()
+    ocr: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -158,7 +160,7 @@ def _scan(sidecar: Sidecar) -> tuple[list[_ScannedDocument], list[str], set[str]
             passages: builtins.list[tuple[int, int, str, int | None]] = [
                 (start, end, context, page.number) for page in pages for start, end, context in _chunks(page.text)
             ]
-            notices = [(number, "no_text", "No searchable text; OCR is not available.") for number in no_text_pages]
+            notices = [(number, "no_text", "No searchable text in the PDF text layer.") for number in no_text_pages]
             notices.extend((number, "error", f"Text extraction failed: {reason}") for number, reason in page_errors)
             skipped.extend(f"{relative}, page {number}: text extraction failed: {reason}" for number, reason in page_errors)
             documents.append(_ScannedDocument(relative, digest, "pdf", passages, notices))
@@ -282,6 +284,8 @@ class EvidenceStore:
             raise StoreError(f"Cannot start sidecar update: {exc}") from exc
         try:
             documents, skipped, seen, blocked_directories = _scan(sidecar)
+            ocr_records = ImageOCR(self.sidecars).records(sidecar.id)
+            pdf_ocr_records = ImageOCR(self.sidecars).pdf_records(sidecar.id)
         except StoreError as exc:
             self._finish_update(sidecar.id, run_id, "index_error", [str(exc)])
             raise
@@ -302,6 +306,8 @@ class EvidenceStore:
                 added = changed = deleted = unchanged = 0
                 deleted_paths: list[str] = []
                 for relative_path, row in old.items():
+                    if row["kind"] == "image_ocr":
+                        continue
                     if relative_path in seen or any(
                         blocked == "." or relative_path == blocked or relative_path.startswith(blocked + "/") for blocked in blocked_directories
                     ):
@@ -336,12 +342,14 @@ class EvidenceStore:
                             (evidence_id, cursor.lastrowid, start, end, context, page_number),
                         )
                         connection.execute("INSERT INTO passages_fts (evidence_id, context) VALUES (?, ?)", (evidence_id, context))
+                ocr_changed = sync_index(connection, sidecar.id, ocr_records)
+                ocr_changed = sync_pdf_index(connection, sidecar.id, pdf_ocr_records) or ocr_changed
                 passage_count = connection.execute(
                     """SELECT count(*) FROM passages p JOIN documents d ON d.id = p.document_id
                        WHERE d.sidecar_id = ?""",
                     (sidecar.id,),
                 ).fetchone()[0]
-                if added or changed or deleted:
+                if added or changed or deleted or ocr_changed:
                     connection.execute("DELETE FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,))
                 elif provider is not None:
                     state = connection.execute("SELECT * FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,)).fetchone()
@@ -374,6 +382,21 @@ class EvidenceStore:
         pdf_notices = tuple(
             f"{document.relative_path}, page {number}: {message}" for document in documents for number, _, message in document.pdf_page_notices
         )
+        # Text is committed before potentially slow OCR calls, so available evidence stays usable.
+        with open_search(self.sidecars) as connection:
+            self._check_run(connection, sidecar.id, run_id)
+        ocr_state = ImageOCR(self.sidecars).update(sidecar)
+        if ocr_state is not None:
+            pdf_notices = tuple(f"{notice['source']}, page {notice['page']}: {notice['message']}" for notice in self.pdf_page_notices(sidecar.id))
+            with open_search(self.sidecars) as connection:
+                self._check_run(connection, sidecar.id, run_id)
+                passage_count = connection.execute(
+                    "SELECT count(*) FROM passages p JOIN documents d ON d.id = p.document_id WHERE d.sidecar_id = ?",
+                    (sidecar.id,),
+                ).fetchone()[0]
+                state = connection.execute("SELECT * FROM sidecar_embedding_state WHERE sidecar_id = ?", (sidecar.id,)).fetchone()
+                if state is None:
+                    reuse_embeddings = False
         embedded_count = 0
         embedding_status = "not_configured"
         provider_error = None
@@ -413,6 +436,7 @@ class EvidenceStore:
             deleted,
             unchanged,
             tuple(deleted_paths),
+            ocr_state,
         )
 
     @staticmethod
@@ -461,6 +485,7 @@ class EvidenceStore:
             "deleted": row["deleted"] if row else 0,
             "unchanged": row["unchanged"] if row else 0,
             "issues": json.loads(row["issues_json"]) if row else [],
+            "ocr": ImageOCR(self.sidecars).status(sidecar.id),
         }
 
     def coverage(self, reference: str) -> dict[str, Any]:
@@ -609,7 +634,7 @@ class EvidenceStore:
         try:
             with open_search(self.sidecars) as connection:
                 lexical_rows = connection.execute(
-                    f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, d.sidecar_id,
+                    f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, p.extraction, d.sidecar_id,
                                d.relative_path, d.sha256, d.indexed_at, d.kind, bm25(passages_fts) AS score
                         FROM passages_fts
                         JOIN passages p ON p.id = passages_fts.evidence_id
@@ -631,7 +656,7 @@ class EvidenceStore:
                     )
                     if embeddings_ready:
                         vector_rows = connection.execute(
-                            f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, d.sidecar_id,
+                            f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, p.extraction, d.sidecar_id,
                                        d.relative_path, d.sha256, d.indexed_at, d.kind, e.vector_json, e.dimension
                                 FROM passage_embeddings e
                                 JOIN passages p ON p.id = e.passage_id
@@ -684,10 +709,11 @@ class EvidenceStore:
         for row in rows:
             sidecar = selected_by_id[row["sidecar_id"]]
             path = _source_path(sidecar, row["relative_path"])
-            data, source_status, _ = read_bytes(path, sidecar.source_path) if row["kind"] == "pdf" else read_source(path, sidecar.source_path)
+            reader = read_bytes if row["kind"] in {"pdf", "image_ocr"} else read_source
+            data, source_status, _ = reader(path, sidecar.source_path)
             if data is None:
                 freshness = source_status
-            elif row["kind"] == "pdf":
+            elif row["kind"] == "pdf" and row["extraction"] != "ocr":
                 try:
                     extract_pdf_page(data, row["page_number"])
                 except PdfTextError as exc:
@@ -729,7 +755,7 @@ class EvidenceStore:
         try:
             with open_search(self.sidecars) as connection:
                 row = connection.execute(
-                    f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, d.sidecar_id,
+                    f"""SELECT p.id, p.start_line, p.end_line, p.context, p.page_number, p.extraction, d.sidecar_id,
                                d.relative_path, d.sha256, d.indexed_at, d.kind
                         FROM passages p JOIN documents d ON d.id = p.document_id
                         WHERE p.id = ? AND d.sidecar_id IN ({placeholders})""",
@@ -741,13 +767,14 @@ class EvidenceStore:
             raise StoreError("Evidence was not found in the selected sidecars.")
         sidecar = selected_by_id[row["sidecar_id"]]
         path = _source_path(sidecar, row["relative_path"])
-        data, source_status, reason = read_bytes(path, sidecar.source_path) if row["kind"] == "pdf" else read_source(path, sidecar.source_path)
+        reader = read_bytes if row["kind"] in {"pdf", "image_ocr"} else read_source
+        data, source_status, reason = reader(path, sidecar.source_path)
         if data is None:
             evidence = self._evidence(row, sidecar, None, source_status, None)
             evidence["message"] = reason
             return evidence
         pdf_text = None
-        if row["kind"] == "pdf":
+        if row["kind"] == "pdf" and row["extraction"] != "ocr":
             try:
                 pdf_text = extract_pdf_page(data, row["page_number"])
             except PdfTextError as exc:
@@ -760,6 +787,8 @@ class EvidenceStore:
             evidence = self._evidence(row, sidecar, None, "changed", None)
             evidence["message"] = "Source changed since indexing. Reindex this sidecar to retrieve current evidence."
             return evidence
+        if row["kind"] == "image_ocr" or row["extraction"] == "ocr":
+            return self._evidence(row, sidecar, row["context"], "current", "saved_ocr")
         lines = (pdf_text if pdf_text is not None else data.decode("utf-8-sig")).splitlines()
         context = "\n".join(lines[row["start_line"] - 1 : row["end_line"]])
         if row["kind"] == "pdf" and context != row["context"]:
@@ -782,10 +811,13 @@ class EvidenceStore:
             "location": (
                 {"kind": "page", "page": row["page_number"]}
                 if row["kind"] == "pdf"
+                else {"kind": "image"}
+                if row["kind"] == "image_ocr"
                 else {"kind": "lines", "start": row["start_line"], "end": row["end_line"]}
             ),
             "context": context,
             "context_origin": origin,
+            **({"extraction": "ocr"} if row["kind"] == "image_ocr" or row["extraction"] == "ocr" else {}),
             "freshness": freshness,
             "index_freshness": "current" if freshness == "current" and processing_state == "current" else "stale",
             "processing": {"state": processing_state, "status": sidecar.status},

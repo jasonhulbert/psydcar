@@ -6,7 +6,7 @@ Psydcar gives your coding agents verifiable evidence from folders you own, and l
 
 Point Psydcar at a folder of notes, code, or PDFs and it builds a local search index called a **sidecar**. Coding agents such as Claude Code, Cursor, or any other [MCP](https://modelcontextprotocol.io) client can then search that sidecar and quote the exact file, line, or PDF page that answers their question. Your files stay in their folders. Agents get read access by default. You can let selected connections propose edits, and nothing changes until you approve them.
 
-- **Local by default.** Indexing and search run on your machine. Nothing leaves it unless you turn on an embeddings provider.
+- **Local by default.** Indexing and search run on your machine. Content leaves it only when you configure an embeddings provider or enable OCR for a sidecar.
 - **You choose what each agent sees.** Each MCP connection is limited to the sidecars you select.
 - **Answers come with sources.** Every result names its file and location, and says whether the file has changed since it was indexed. In a git repository, it also names the commit and says whether the file has uncommitted changes.
 - **You approve every change.** An agent you allow to propose edits queues them for your review. In a git repository, each approval can become a commit that names the agent and its reason.
@@ -43,7 +43,7 @@ Search prints JSON results. Each result includes the matching text, the file pat
 psydcar retrieve --sidecar "My notes" EVIDENCE_ID
 ```
 
-Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, set up embeddings, prepare agent connections, and review proposed edits. Press Ctrl-C to stop it.
+Prefer a UI? Run `psydcar dashboard` to open a local dashboard at `http://127.0.0.1:8765`. You can create, update, and inspect sidecars there, set up embeddings and OCR, prepare agent connections, and review proposed edits. Press Ctrl-C to stop it.
 
 ## Connect a coding agent
 
@@ -150,6 +150,26 @@ psydcar sidecar update "My notes"
 
 In the dashboard, the same settings are under **Embedding provider**. **Test settings** sends only a fixed test phrase, never your files.
 
+## Search scanned PDFs and images with OCR
+
+OCR is optional and enabled separately for each sidecar. Configure an OpenAI-compatible vision endpoint in the dashboard under **OCR vision provider**, or use the CLI:
+
+```console
+export VISION_API_KEY="your-key"
+psydcar ocr-provider set --base-url https://vision.example/v1 --model YOUR_VISION_MODEL --api-key-env VISION_API_KEY
+psydcar sidecar ocr "My notes"
+```
+
+The base URL ends before `/chat/completions`. Local endpoints such as `http://127.0.0.1:4000/v1` can omit the key variable. Remote HTTP requires `--allow-insecure-http`. Psydcar stores the variable name, never its value. Set the variable in the environment running the dashboard, CLI, or watcher. Configuring a vision provider alone does not enable OCR or send files.
+
+Review the image and PDF page counts and the endpoint, then confirm before processing starts. In the dashboard, select the sidecar and choose **Review OCR scope**. Psydcar sends selected images and locally rendered PDF pages to the endpoint. A hosted provider receives that content and may charge for it. Counts are estimates, not a price. OCR can make mistakes, so check the original source for important details.
+
+Default coverage includes PNG, JPEG, GIF, and WebP images up to 20 MiB and PDF pages without searchable text in PDFs up to 50 MiB. Pages with a text layer can still contain images with text. To include them, choose **Review full PDF scans** in the dashboard or run `psydcar sidecar ocr "My notes" --full-pdf`. This is a separate confirmation because it can send more pages and cost more. The existing PDF text remains searchable.
+
+After confirmation, updates and the watcher automatically process new or changed files. Unchanged OCR results are reused, including after rebuilding the search index. `psydcar sidecar show "My notes"` and the dashboard show progress and items needing attention. Fix any issue and run an update to retry. If the provider settings change, review and confirm the new destination for each enabled sidecar before further OCR requests. Existing recognized text remains searchable.
+
+To stop future OCR for a sidecar, choose **Turn off OCR** in the dashboard or run `psydcar sidecar ocr "My notes" --off`. A request already in progress may finish. Saved OCR stays searchable. Enabling OCR again requires a new scope review and confirmation; full PDF scans require their separate confirmation again. `psydcar ocr-provider show` displays provider settings; `psydcar ocr-provider clear` removes them without deleting recognized text.
+
 ## Manage sidecars
 
 | Command | What it does |
@@ -158,6 +178,7 @@ In the dashboard, the same settings are under **Embedding provider**. **Test set
 | `psydcar sidecar list` | Show every sidecar with its ID, folder, and status. |
 | `psydcar sidecar show NAME` | Show details, update history, and problems. |
 | `psydcar sidecar index NAME` / `update NAME` | Index the folder, or refresh changed files. Both commands run the same refresh. |
+| `psydcar sidecar ocr NAME [--full-pdf\|--off]` | Review and enable OCR, review full PDF scans, or turn off future OCR. |
 | `psydcar sidecar rename OLD NEW` | Rename a sidecar. Its ID stays the same. |
 | `psydcar sidecar remove NAME` | Delete the sidecar and its index. The source folder isn't touched. |
 | `psydcar sidecar git-record NAME [on\|off]` | Show, or turn on or off, [recording approvals as git commits](#record-approvals-as-git-commits). |
@@ -167,7 +188,8 @@ Commands accept a sidecar's name or ID. To search several sidecars, repeat `--si
 ## What gets indexed
 
 - **Text and code:** UTF-8 files up to 2 MiB with these extensions: `.txt` `.md` `.markdown` `.rst` `.py` `.js` `.jsx` `.ts` `.tsx` `.json` `.yaml` `.yml` `.toml` `.go` `.rs` `.java` `.c` `.h` `.cpp` `.hpp` `.cs` `.sh` `.sql` `.html` `.css`
-- **PDFs:** up to 50 MiB, with text extracted page by page. Psydcar doesn't run OCR. Scanned pages without a text layer are listed as PDF page notices, and the rest of the PDF stays searchable.
+- **PDFs:** up to 50 MiB, with text extracted page by page. Optional sidecar OCR can process scanned pages or, with a separate opt-in, all pages.
+- **Images:** PNG, JPEG, GIF, and WebP up to 20 MiB are indexed when OCR is enabled for the sidecar.
 - **Skipped:** hidden files and folders, symbolic links, unsupported extensions, and any folder named `node_modules`, `__pycache__`, `dist`, `build`, `target`, or `vendor`. `.gitignore` files aren't read.
 
 Text and code are split into passages of up to 40 lines that overlap by 5 lines. Locations always refer to lines in the original file.
@@ -177,8 +199,9 @@ Text and code are split into passages of up to 40 lines that overlap by 5 lines.
 | Field | Meaning |
 | --- | --- |
 | `source.path`, `source.relative_path` | The original file. |
-| `location` | Line range (`start`–`end`, starting at 1) for text and code, or the `page` number for a PDF. |
-| `context`, `context_origin` | The matching text. Search returns the indexed copy (`index`). `retrieve` reads the file again (`source`). |
+| `location` | Line range (`start`–`end`, starting at 1) for text and code, the `page` number for a PDF, or `image` for an image. |
+| `context`, `context_origin` | The matching text. Search returns the indexed copy (`index`). `retrieve` reads the current file (`source`) or returns saved OCR (`saved_ocr`) after checking the source. |
+| `extraction` | `ocr` identifies text recognized from an image or PDF page. |
 | `freshness` | `current` means the file hasn't changed since indexing. `changed`, `missing`, and `unreadable` mean the indexed text may be out of date. |
 | `index_freshness`, `processing.state` | Whether the sidecar has an update pending or a problem that needs attention. |
 | `git.commit` | The commit the repository is at when you search or retrieve. It's `null` in a repository with no commits yet. |
@@ -198,7 +221,7 @@ Psydcar keeps its index in one per-user folder:
 
 To use a different folder, set `PSYDCAR_HOME` to an absolute path. If you do, set the same value for the CLI, the dashboard, and your MCP client.
 
-The data folder holds two databases. `state.sqlite3` holds what you own: sidecar registrations, provider settings, proposed edits, and git record settings. `search.sqlite3` holds indexed passages and embeddings, and indexing again rebuilds it if you delete it. Versions 0.3.0 and earlier kept everything in `psydcar.sqlite3`. The first run of a newer version upgrades it automatically and keeps it as a backup. Sidecar IDs and evidence IDs carry over. Stop running Psydcar processes before upgrading so that every interface switches to the new databases together.
+The data folder holds two databases. `state.sqlite3` holds what you own: sidecar registrations, provider settings, saved OCR, proposed edits, and git record settings. `search.sqlite3` holds indexed passages and embeddings, and indexing again rebuilds it if you delete it. Versions 0.3.0 and earlier kept everything in `psydcar.sqlite3`. The first run of a newer version upgrades it automatically and keeps it as a backup. Sidecar IDs and evidence IDs carry over. Stop running Psydcar processes before upgrading so that every interface switches to the new databases together.
 
 ## Upgrade and uninstall
 
@@ -212,7 +235,8 @@ To uninstall, run `pipx uninstall psydcar` or `uv tool uninstall psydcar`. To de
 | --- | --- |
 | A search returns no results | Is the sidecar indexed? Run `psydcar sidecar show NAME`, check the file types listed under [What gets indexed](#what-gets-indexed), then run an update. |
 | A sidecar shows **Stale** or **Needs attention** | `psydcar sidecar show NAME` lists the files or provider problems. Fix them, then run an update. |
-| A PDF page has no searchable text | It's probably a scanned image. Run OCR on it with another tool, then run an update. |
+| A PDF page has no searchable text | It may be a scan. Review and enable OCR for that sidecar, then check its progress. |
+| OCR needs attention | Check the sidecar's OCR status, provider destination, and credential. Confirm a changed provider if prompted, then run an update. Existing search results remain available. |
 | An embeddings test fails or the credential shows as missing | Set the API key variable before starting Psydcar or your MCP client. Then check the URL and model. A 401 or 403 error can also come from a gateway, proxy, or firewall in front of the provider. |
 | The agent can't start the MCP server | Use an absolute `command` path, check that the sidecar IDs still exist with `psydcar sidecar list`, and use the same `PSYDCAR_HOME` if you set one. |
 

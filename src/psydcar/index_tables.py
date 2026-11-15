@@ -84,6 +84,15 @@ _SEARCH_TABLES = Tables(
         updated_at TEXT NOT NULL
     )""",
         ),
+        (
+            "ALTER TABLE passages ADD COLUMN extraction TEXT NOT NULL DEFAULT 'source'",
+            """CREATE TABLE pdf_ocr_index (
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        page_number INTEGER NOT NULL,
+        recognized_at TEXT NOT NULL,
+        PRIMARY KEY(document_id, page_number)
+    )""",
+        ),
     ),
 )
 

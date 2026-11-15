@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .evidence import EvidenceStore, IndexReport, UpdateSuperseded
+from .ocr import ImageOCR
 from .registry import Sidecar, SidecarStore, StoreError
 from .source_scope import source_snapshot
 
@@ -71,7 +72,7 @@ class SidecarWatcher:
         return self._follow(self.sidecars.get(sidecar_id, exact_id=True), False, False)
 
     def _follow(self, sidecar: Sidecar, full: bool, startup: bool) -> WatchEvent | None:
-        snapshot = source_snapshot(sidecar)
+        snapshot = source_snapshot(sidecar, include_images=ImageOCR(self.sidecars).enabled(sidecar.id))
         with self._snapshot_lock:
             previous = self._snapshots.get(sidecar.id)
         if previous is not None and snapshot == previous and not full:
@@ -101,7 +102,7 @@ class SidecarWatcher:
         """Report scoped source drift between watcher passes."""
         with self._snapshot_lock:
             previous = self._snapshots.get(sidecar.id)
-        return previous is not None and source_snapshot(sidecar) != previous
+        return previous is not None and source_snapshot(sidecar, include_images=ImageOCR(self.sidecars).enabled(sidecar.id)) != previous
 
     def run(
         self,

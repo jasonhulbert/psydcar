@@ -105,6 +105,18 @@
               </div>
             </div>
             <div class="setting-row">
+              <span class="setting-icon" aria-hidden="true"><svg class="icon"><use href="#layers"/></svg></span>
+              <div class="setting-body">
+                <div class="setting-title"><h3>OCR vision provider</h3><span id="vision-state" class="badge">Not configured</span></div>
+                <p id="vision-description">Choose an OpenAI-compatible vision endpoint for OCR. Saving settings does not enable OCR or send files.</p>
+                <dl id="vision-summary" class="setting-meta" hidden></dl>
+              </div>
+              <div class="setting-actions">
+                <button class="btn btn-sm btn-danger-quiet" id="clear-vision-button" type="button" hidden>Remove</button>
+                <button class="btn btn-sm" id="vision-button" type="button">Configure provider</button>
+              </div>
+            </div>
+            <div class="setting-row">
               <span class="setting-icon setting-icon-pop" aria-hidden="true"><svg class="icon"><use href="#plug"/></svg></span>
               <div class="setting-body">
                 <div class="setting-title"><h3>MCP connections</h3></div>
@@ -169,6 +181,47 @@
         <div class="flash flash-danger" id="remove-error" role="alert" hidden></div>
       </div>
       <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-danger" id="remove-submit" type="submit" disabled>Remove sidecar</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="ocr-dialog" class="dialog dialog-md" aria-labelledby="ocr-title">
+    <form id="ocr-form">
+      <div class="dialog-header"><h2 id="ocr-title">Enable sidecar OCR</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
+      <div class="dialog-body">
+        <p class="dialog-text">Review OCR coverage for <strong id="ocr-sidecar-name"></strong> before sending content.</p>
+        <p id="ocr-loading" class="dialog-text" role="status">Counting images and PDF pages. This may take a moment for large folders…</p>
+        <div id="ocr-scope" hidden>
+          <dl id="ocr-scope-summary" class="setting-meta"></dl>
+          <p class="dialog-text">Selected images and rendered PDF pages are sent to this endpoint. A hosted provider receives their content and may charge for processing. These counts are an estimate, not a price.</p>
+          <p id="ocr-update-description" class="dialog-text">Future updates and the watcher automatically process new or changed images and PDF pages without searchable text. Saved results for unchanged files are reused.</p>
+          <div id="ocr-scope-issues" hidden></div>
+        </div>
+        <div class="flash flash-danger" id="ocr-error" role="alert" hidden></div>
+      </div>
+      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" id="ocr-confirm" type="submit" disabled>Enable and process OCR</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="vision-dialog" class="dialog dialog-md" aria-labelledby="vision-title">
+    <form id="vision-form" novalidate>
+      <div class="dialog-header"><h2 id="vision-title">OCR vision provider</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
+      <div class="dialog-body">
+        <p class="dialog-text">Choose a local or hosted OpenAI-compatible vision endpoint. A hosted provider receives selected content and may charge for processing. Saving these settings does not enable OCR or send files.</p>
+        <label class="field"><span class="field-label">Base URL</span><input id="vision-base-url" class="mono" type="url" placeholder="https://api.openai.com/v1" autocomplete="url" spellcheck="false" required><span class="field-hint">The URL before <code>/chat/completions</code>.</span></label>
+        <label class="field"><span class="field-label">Vision model</span><input id="vision-model" class="mono" placeholder="Vision model name" autocomplete="off" spellcheck="false" required></label>
+        <label class="field"><span class="field-label">API key variable <span class="field-optional">Optional</span></span><input id="vision-env" class="mono" placeholder="OPENAI_API_KEY" autocomplete="off" spellcheck="false"><span class="field-hint">Name of an environment variable set where Psydcar runs. Psydcar stores the name, never the key.</span></label>
+        <label class="checkbox"><input id="vision-insecure" type="checkbox"><span>Allow plain HTTP to a remote host</span></label>
+        <div class="flash flash-danger" id="vision-error" role="alert" hidden></div>
+      </div>
+      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary" id="vision-save-button" type="submit">Save provider</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="clear-vision-dialog" class="dialog" aria-labelledby="clear-vision-title">
+    <form id="clear-vision-form">
+      <div class="dialog-header"><h2 id="clear-vision-title">Remove OCR provider</h2><button class="btn-icon" type="button" data-close aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#x"/></svg></button></div>
+      <div class="dialog-body"><p class="dialog-text">Remove the OCR vision provider settings?</p><div class="flash flash-danger" id="clear-vision-error" role="alert" hidden></div></div>
+      <div class="dialog-footer"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-danger" type="submit">Remove provider</button></div>
     </form>
   </dialog>
 

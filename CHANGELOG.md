@@ -4,6 +4,10 @@ All notable changes to Psydcar are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### Changed
+
+- Dashboard polish. The OCR section of a sidecar now shows its state, progress, and coverage at a glance, with each next step explained beside its button. The sidecar list marks sidecars that use OCR and shows OCR progress. The MCP connection dialog shows the generated configuration on its own step. Dialogs keep their header and actions in view while long content scrolls, and `/` focuses the sidecar filter.
+
 ## [0.4.0] - 2026-11-13
 
 ### Added

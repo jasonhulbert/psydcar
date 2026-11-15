@@ -265,13 +265,13 @@
 
       const nameCell = add(row, "td");
       const name = add(nameCell, "div", "row-name");
-      const link = button(name, "row-link", sidecar.name, { focusKey: `row:${sidecar.id}` });
+      const line = add(name, "div", "row-name-line");
+      const link = button(line, "row-link", sidecar.name, { focusKey: `row:${sidecar.id}` });
       link.setAttribute("aria-current", String(selected));
       link.addEventListener("keydown", (event) => moveSelection(event, items, sidecar.id));
+      const ocr = sidecar.update.ocr;
+      if (ocr) add(line, "span", "row-tag", "OCR").title = "OCR is on for this sidecar";
       if (sidecar.pending_proposals) {
-        const line = element("div", "row-name-line");
-        name.prepend(line);
-        line.append(link);
         const pill = add(line, "span", "review-pill");
         pill.title = `${plural(sidecar.pending_proposals, "proposed edit")} to review`;
         pill.append(icon("git-pull-request"));
@@ -282,7 +282,9 @@
       add(path, "bdi", "", sidecar.source_path);
       path.title = sidecar.source_path;
 
-      add(row, "td").append(badge(sidecar));
+      const state = add(row, "td");
+      state.append(badge(sidecar));
+      if (ocr?.status === "processing") add(state, "span", "row-status-note", `OCR ${count(ocr.completed)} of ${count(ocr.total)}`);
       add(row, "td", "num", count(sidecar.coverage.files));
       add(row, "td", "num", count(sidecar.coverage.passages));
       const updated = add(row, "td", "updated", sidecar.update.last_success_at ? relative(sidecar.update.last_success_at) : "Never");
@@ -304,6 +306,34 @@
     const block = add(parent, "section", "detail-section");
     add(block, "h3", "", title);
     return block;
+  }
+
+  function sectionHead(parent, title, label, tone, spinner) {
+    const head = add(parent, "div", "section-head");
+    add(head, "h3", "", title);
+    const item = add(head, "span", `badge${tone ? ` badge-${tone}` : ""}`);
+    if (spinner) item.append(icon("loader-circle", "spin"));
+    item.append(document.createTextNode(label));
+    return head;
+  }
+
+  function meter(parent, label, done, total) {
+    const bar = add(parent, "div", "progress");
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-label", label);
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", String(total));
+    bar.setAttribute("aria-valuenow", String(done));
+    add(bar, "span").style.width = `${total ? Math.min(100, (done / total) * 100) : 0}%`;
+    return bar;
+  }
+
+  // One explained next step: what it does, then the button that starts it.
+  function nextStep(parent, text, label, focusKey, onClick, disabled = false) {
+    const step = add(parent, "div", "next-step");
+    add(step, "p", "", text);
+    button(step, "btn btn-sm", label, { focusKey, onClick }).disabled = disabled;
+    return step;
   }
 
   function props(parent, rows) {
@@ -337,7 +367,7 @@
 
   function guidance(parent, sidecar) {
     if (sidecar.queued || sidecar.state === "pending" || sidecar.update.ocr?.status === "processing") {
-      flash(parent, "info", "Update in progress", { text: "Search keeps using the current index until the update finishes." });
+      flash(parent, "info", sidecar.update.ocr?.status === "processing" ? "OCR in progress" : "Update in progress", { text: "Search keeps using the current index until the update finishes." });
       return;
     }
     const issues = issuesFor(sidecar);
@@ -406,7 +436,11 @@
     guidance(target, sidecar);
 
     const stats = add(target, "div", "stats");
-    for (const [label, value] of [["Files", sidecar.coverage.files], ["Text/code", sidecar.coverage.text_files], ["PDFs", sidecar.coverage.pdfs], ["Passages", sidecar.coverage.passages]]) {
+    // Files that are neither text nor PDF are the images that OCR made searchable.
+    const images = sidecar.update.ocr ? sidecar.coverage.files - sidecar.coverage.text_files - sidecar.coverage.pdfs : 0;
+    const kinds = [["Text/code", sidecar.coverage.text_files], ["PDFs", sidecar.coverage.pdfs], ...(images > 0 ? [["Images", images]] : [])];
+    stats.classList.toggle("stats-5", images > 0);
+    for (const [label, value] of [["Files", sidecar.coverage.files], ...kinds, ["Passages", sidecar.coverage.passages]]) {
       const stat = add(stats, "div", "stat");
       add(stat, "span", "stat-value", count(value));
       add(stat, "span", "stat-label", label);
@@ -428,74 +462,15 @@
       chip.append(document.createTextNode(word));
     }
 
-    {
-      const ocr = sidecar.update.ocr;
-      const block = section(target, "OCR");
-      if (!ocr) {
-        props(block, [["State", "Off"]]);
-        add(block, "p", "progress-caption", "Find text in images and PDF pages without searchable text. OCR is enabled separately for each sidecar.");
-        if (model.visionProvider.configured) {
-          const enable = button(block, "btn btn-sm", "Review OCR scope", { focusKey: "detail:ocr", onClick: () => openOcr(sidecar) });
-          enable.disabled = Boolean(sidecar.queued);
-        } else {
-          add(block, "p", "progress-caption", "Configure an OCR vision provider to review the scope for this sidecar.");
-          button(block, "btn btn-sm", "Configure OCR provider", { focusKey: "detail:ocr-provider", onClick: () => byId("vision-button").click() });
-        }
-      } else {
-        const done = Number(ocr.completed || 0), total = Number(ocr.total || 0);
-        props(block, [["State", ocr.provider_changed ? "Needs confirmation" : ocr.status.replace(/^./, (letter) => letter.toUpperCase())]]);
-        if (ocr.provider_changed) {
-          flash(block, "warning", "OCR provider changed", { text: "Review and confirm the new destination before this sidecar sends more content." });
-          const review = button(block, "btn btn-sm", "Review OCR provider", { focusKey: "detail:ocr-provider-review", onClick: () => openOcr(sidecar, Boolean(ocr.full_pdf_enabled), true) });
-          review.disabled = Boolean(sidecar.queued);
-        }
-        button(block, "btn btn-sm btn-danger-quiet", "Turn off OCR", { focusKey: "detail:ocr-off", onClick: () => stopOcr(sidecar) });
-        add(block, "p", "progress-caption", "Turning OCR off stops future requests. A request already in progress may finish. Saved OCR remains searchable.");
-        const bar = add(block, "div", "progress");
-        bar.setAttribute("role", "progressbar");
-        bar.setAttribute("aria-label", "Images and PDF pages processed with OCR");
-        bar.setAttribute("aria-valuemin", "0");
-        bar.setAttribute("aria-valuemax", String(total));
-        bar.setAttribute("aria-valuenow", String(done));
-        add(bar, "span").style.width = `${total ? Math.min(100, (done / total) * 100) : 0}%`;
-        add(block, "p", "progress-caption", `${count(done)} of ${plural(total, "item")}${ocr.current_path ? ` · Processing ${ocr.current_path}` : ""}`);
-        if (!ocr.pdf_enabled) {
-          add(block, "p", "progress-caption", "PDF OCR is off. Review and confirm the expanded coverage to process pages without searchable text.");
-          if (model.visionProvider.configured && !ocr.provider_changed) {
-            const enablePdf = button(block, "btn btn-sm", "Review PDF OCR scope", { focusKey: "detail:ocr", onClick: () => openOcr(sidecar) });
-            enablePdf.disabled = Boolean(sidecar.queued);
-          } else if (!model.visionProvider.configured) {
-            button(block, "btn btn-sm", "Configure OCR provider", { focusKey: "detail:ocr-provider", onClick: () => byId("vision-button").click() });
-          }
-        } else {
-          add(block, "p", "progress-caption", ocr.full_pdf_enabled
-            ? "PDF coverage: all pages, including pages with searchable text."
-            : "PDF coverage: pages without searchable text. Full scans can also find text in images on other pages.");
-          if (!ocr.full_pdf_enabled && model.visionProvider.configured && !ocr.provider_changed) {
-            const full = button(block, "btn btn-sm", "Review full PDF scans", { focusKey: "detail:full-pdf", onClick: () => openOcr(sidecar, true) });
-            full.disabled = Boolean(sidecar.queued);
-          } else if (!ocr.full_pdf_enabled && !model.visionProvider.configured) {
-            button(block, "btn btn-sm", "Configure OCR provider", { focusKey: "detail:ocr-provider", onClick: () => byId("vision-button").click() });
-          }
-        }
-        if (ocr.status === "incomplete") {
-          flash(block, "warning", `${plural(ocr.failed, "item")} need attention`, { lines: ocr.issues, text: "Check the issue and run Update to retry. Available evidence remains searchable." });
-        }
-      }
-    }
+    renderOcr(target, sidecar);
 
     if (sidecar.embedding) {
-      const embedding = section(target, "Embeddings");
+      const embedding = add(target, "section", "detail-section");
       const expected = Number(sidecar.embedding.expected_count || 0);
       const done = Number(sidecar.embedding.embedded_count || 0);
-      props(embedding, [["State", sidecar.embedding.status.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase())]]);
-      const bar = add(embedding, "div", "progress");
-      bar.setAttribute("role", "progressbar");
-      bar.setAttribute("aria-label", "Embedded passages");
-      bar.setAttribute("aria-valuemin", "0");
-      bar.setAttribute("aria-valuemax", String(expected));
-      bar.setAttribute("aria-valuenow", String(done));
-      add(bar, "span").style.width = `${expected ? Math.min(100, (done / expected) * 100) : 0}%`;
+      const label = sidecar.embedding.status.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+      sectionHead(embedding, "Embeddings", label, sidecar.embedding.message ? "danger" : expected && done >= expected ? "success" : "");
+      meter(embedding, "Embedded passages", done, expected);
       add(embedding, "p", "progress-caption", `${count(done)} of ${plural(expected, "passage")}`);
       if (sidecar.embedding.message) {
         flash(embedding, "danger", "Provider needs attention", { lines: [sidecar.embedding.message], text: "Check the provider settings and credential, then run Update." });
@@ -516,6 +491,68 @@
     add(field, "code", "", sidecar.id).title = sidecar.id;
     const copyId = button(field, "btn-icon btn-icon-sm", "", { iconName: "copy", ariaLabel: "Copy sidecar ID", focusKey: "detail:copy-id" });
     copyId.addEventListener("click", () => copyText(sidecar.id, copyId, "Sidecar ID copied."));
+  }
+
+  function renderOcr(target, sidecar) {
+    const ocr = sidecar.update.ocr;
+    const configured = model.visionProvider.configured;
+    const busy = Boolean(sidecar.queued);
+    const block = add(target, "section", "detail-section");
+    if (!ocr) {
+      sectionHead(block, "OCR", "Off");
+      add(block, "p", "section-text", "Find text in images and PDF pages without searchable text. OCR is enabled separately for each sidecar.");
+      if (configured) {
+        nextStep(block, "Review what OCR would cover first. Nothing is sent until you confirm.", "Review OCR scope", "detail:ocr", () => openOcr(sidecar), busy);
+      } else {
+        nextStep(block, "Configure an OCR vision provider to review the scope for this sidecar.", "Configure OCR provider", "detail:ocr-provider", openVision);
+      }
+      return;
+    }
+
+    const done = Number(ocr.completed || 0), total = Number(ocr.total || 0);
+    const processing = ocr.status === "processing";
+    if (ocr.provider_changed) sectionHead(block, "OCR", "Needs confirmation", "warning");
+    else if (processing) sectionHead(block, "OCR", "Processing", "info", true);
+    else if (ocr.status === "complete") sectionHead(block, "OCR", "Complete", "success");
+    else sectionHead(block, "OCR", ocr.status.replace(/^./, (letter) => letter.toUpperCase()), ocr.status === "incomplete" ? "warning" : "");
+
+    if (ocr.provider_changed) {
+      flash(block, "warning", "OCR provider changed", { text: "Review and confirm the new destination before this sidecar sends more content." });
+      button(block, "btn btn-sm btn-primary", "Review OCR provider", { focusKey: "detail:ocr-provider-review", onClick: () => openOcr(sidecar, Boolean(ocr.full_pdf_enabled), true) }).disabled = busy;
+    }
+
+    meter(block, "Images and PDF pages processed with OCR", done, total);
+    add(block, "p", "progress-caption", `${count(done)} of ${plural(total, "item")} processed`);
+    if (ocr.current_path) {
+      const current = add(block, "p", "progress-current");
+      current.title = ocr.current_path;
+      add(current, "bdi", "", ocr.current_path);
+    }
+    if (ocr.status === "incomplete") {
+      flash(block, "warning", `${plural(ocr.failed, "item")} need attention`, { lines: ocr.issues, text: "Check the issue and run Update to retry. Available evidence remains searchable." });
+    }
+
+    const pdfCoverage = !ocr.pdf_enabled ? "Off" : ocr.full_pdf_enabled ? "All pages" : "Pages without searchable text";
+    props(block, [
+      ["Images", "On"],
+      ["PDF pages", pdfCoverage, ocr.full_pdf_enabled ? "PDF coverage: all pages, including pages with searchable text." : ""],
+    ]).classList.add("props-coverage");
+
+    if (!ocr.pdf_enabled) {
+      const text = "PDF OCR is off. Review and confirm the expanded coverage to process pages without searchable text.";
+      if (!configured) nextStep(block, text, "Configure OCR provider", "detail:ocr-provider", openVision);
+      else if (!ocr.provider_changed) nextStep(block, text, "Review PDF OCR scope", "detail:ocr", () => openOcr(sidecar), busy);
+      else add(block, "p", "section-text", text);
+    } else if (!ocr.full_pdf_enabled) {
+      const text = "Full scans can also find text in images on pages that already have searchable text.";
+      if (!configured) nextStep(block, text, "Configure OCR provider", "detail:ocr-provider", openVision);
+      else if (!ocr.provider_changed) nextStep(block, text, "Review full PDF scans", "detail:full-pdf", () => openOcr(sidecar, true), busy);
+      else add(block, "p", "section-text", text);
+    }
+
+    const off = add(block, "div", "section-foot");
+    button(off, "btn btn-sm btn-danger-quiet", "Turn off OCR", { focusKey: "detail:ocr-off", onClick: () => stopOcr(sidecar) });
+    add(off, "p", "", "Stops future requests. A request already in progress may finish. Saved OCR remains searchable.");
   }
 
   function renderSetup() {
@@ -543,9 +580,12 @@
     const visionState = byId("vision-state");
     visionState.className = `badge${!vision.configured ? "" : vision.credential_available ? " badge-success" : " badge-warning"}`;
     visionState.textContent = !vision.configured ? "Not configured" : vision.credential_available ? "Configured" : "Credential missing";
-    byId("vision-description").textContent = vision.configured && !vision.credential_available
-      ? `Set ${vision.api_key_env} in the environment that runs Psydcar, then restart it.`
-      : "Choose an OpenAI-compatible vision endpoint for OCR. Saving settings does not enable OCR or send files.";
+    const ocrOn = model.sidecars.filter((item) => item.update.ocr).length;
+    byId("vision-description").textContent = !vision.configured
+      ? "Choose an OpenAI-compatible vision endpoint for OCR. Saving settings does not enable OCR or send files."
+      : !vision.credential_available
+        ? `Set ${vision.api_key_env} in the environment that runs Psydcar, then restart it.`
+        : `Receives content only from sidecars where you enable OCR. ${ocrOn ? `OCR is on for ${plural(ocrOn, "sidecar")}.` : "OCR is not on for any sidecar yet."} Enable it under OCR in a sidecar's details.`;
     const visionSummary = byId("vision-summary");
     visionSummary.hidden = !vision.configured;
     visionSummary.replaceChildren();
@@ -657,9 +697,16 @@
       const pageCounts = fullPdf
         ? [["All PDF pages", count(scope.pdf_pages)], ["Additional pages with searchable text", count(scope.additional_pdf_pages)]]
         : [["PDF pages without searchable text", count(scope.pdf_pages)]];
-      for (const [label, value] of [["Images", plural(scope.images, "file")], ...pageCounts, ["Endpoint", scope.provider.base_url], ["Model", scope.provider.model]]) {
-        add(summary, "dt", "", label);
-        add(summary, "dd", "", value);
+      for (const [title, rows] of [
+        ["Content to send", [["Images", plural(scope.images, "file")], ...pageCounts]],
+        ["Destination", [["Endpoint", scope.provider.base_url], ["Model", scope.provider.model]]],
+      ]) {
+        add(summary, "h3", "scope-title", title);
+        const list = add(summary, "dl", "setting-meta");
+        for (const [label, value] of rows) {
+          add(list, "dt", "", label);
+          add(list, "dd", "", value);
+        }
       }
       const issues = byId("ocr-scope-issues");
       issues.replaceChildren();
@@ -706,10 +753,15 @@
     byId("selected-count").textContent = `${selected} of ${model.sidecars.length} selected`;
   }
 
+  function showConnectionResult(shown) {
+    byId("connection-form").hidden = shown;
+    byId("connection-result").hidden = !shown;
+  }
+
   function openConnection() {
     byId("connection-form").reset();
     formError("connection-error", "");
-    byId("connection-result").hidden = true;
+    showConnectionResult(false);
     model.connectionPreview = null;
     const list = byId("connection-sidecars");
     list.replaceChildren();
@@ -722,7 +774,9 @@
       input.name = "sidecar-id";
       const text = add(option, "span", "picker-option-text");
       add(text, "strong", "", sidecar.name);
-      add(text, "small", "", sidecar.source_path).title = `${sidecar.source_path}\n${sidecar.id}`;
+      const path = add(text, "small");
+      path.title = `${sidecar.source_path}\n${sidecar.id}`;
+      add(path, "bdi", "", sidecar.source_path);
       const grantLabel = add(row, "label", "picker-grant");
       const grant = add(grantLabel, "input");
       grant.type = "checkbox";
@@ -907,7 +961,7 @@
     input.setAttribute("aria-describedby", "git-record-description");
     add(toggle, "span", "switch-track").setAttribute("aria-hidden", "true");
     input.addEventListener("change", () => setGitRecord(sidecar, input.checked));
-    if (record.repository) {
+    if (record.repository && record.repository !== sidecar.source_path) {
       const where = add(block, "p", "git-record-meta");
       where.append(icon("git-commit-horizontal"));
       add(where, "bdi", "", record.repository).title = record.repository;
@@ -1142,7 +1196,8 @@
   byId("create-button").addEventListener("click", openCreate);
   byId("empty-create-button").addEventListener("click", openCreate);
   byId("provider-button").addEventListener("click", openProvider);
-  byId("vision-button").addEventListener("click", () => {
+  byId("vision-button").addEventListener("click", openVision);
+  function openVision() {
     const vision = model.visionProvider;
     byId("vision-base-url").value = vision.base_url || "";
     byId("vision-model").value = vision.model || "";
@@ -1151,7 +1206,7 @@
     formError("vision-error", "");
     byId("vision-dialog").showModal();
     byId("vision-base-url").focus();
-  });
+  }
   byId("clear-vision-button").addEventListener("click", () => {
     formError("clear-vision-error", "");
     byId("clear-vision-dialog").showModal();
@@ -1180,6 +1235,14 @@
   document.querySelectorAll("dialog").forEach((dialog) => dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   }));
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (document.querySelector("dialog[open]") || event.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (byId("list-toolbar").hidden) return;
+    event.preventDefault();
+    byId("filter-input").focus();
+    byId("filter-input").select();
+  });
   byId("toast").addEventListener("click", hideToast);
   byId("review-callout-button").addEventListener("click", startReview);
   byId("review-approve").addEventListener("click", () => decide("approved"));
@@ -1218,7 +1281,8 @@
 
   byId("provider-form").addEventListener("input", () => { byId("provider-test-result").hidden = true; formError("provider-error", ""); });
   byId("vision-form").addEventListener("input", () => formError("vision-error", ""));
-  byId("connection-form").addEventListener("input", () => { byId("connection-result").hidden = true; model.connectionPreview = null; formError("connection-error", ""); });
+  byId("connection-form").addEventListener("input", () => { model.connectionPreview = null; formError("connection-error", ""); });
+  byId("connection-back").addEventListener("click", () => { showConnectionResult(false); byId("connection-name").focus(); });
   byId("remove-confirm").addEventListener("input", (event) => {
     const sidecar = model.sidecars.find((item) => item.id === byId("remove-form").dataset.id);
     byId("remove-submit").disabled = !sidecar || event.target.value !== sidecar.name;
@@ -1305,7 +1369,6 @@
     if (!sidecarIds.length) { formError("connection-error", "Select at least one sidecar."); return; }
     const submit = event.target.querySelector('[type="submit"]');
     submit.disabled = true;
-    byId("connection-result").hidden = true;
     model.connectionPreview = null;
     try {
       const preview = await request("/api/connections/preview", {
@@ -1318,8 +1381,8 @@
       if (proposalNames.length) byId("result-selection").textContent += ` Proposals allowed for ${proposalNames.join(", ")}.`;
       highlightJson(byId("connection-json"), preview.config);
       byId("result-footnote").textContent = `Upgrading Psydcar doesn't break this entry. If you remove a selected sidecar, the server won't start until you generate a new entry.${model.provider.api_key_env ? ` For embeddings, set ${model.provider.api_key_env} in the MCP client's environment. Its value is never copied here.` : ""}`;
-      byId("connection-result").hidden = false;
-      byId("connection-result").scrollIntoView({ block: "nearest", behavior: "smooth" });
+      showConnectionResult(true);
+      byId("copy-connection-button").focus();
     } catch (error) { formError("connection-error", error.message); }
     finally { submit.disabled = false; }
   });
